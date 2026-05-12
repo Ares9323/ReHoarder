@@ -1,0 +1,50 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Build output
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# Electron packaging
+release/
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.snap
+*.flatpak
+
+# Local caches and user data
+.cache/
+.local-data/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Test / coverage
+coverage/
+.nyc_output/
