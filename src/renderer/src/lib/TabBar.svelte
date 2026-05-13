@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onMount, onDestroy } from 'svelte'
   import type { TabKey } from './tabs'
 
   interface TabDef {
@@ -14,6 +15,46 @@
 
   let { active, onChange, onSignOut }: Props = $props()
 
+  // Live count of queued+running downloads, surfaced as a chip next to the
+  // Downloads tab so the user sees the queue moving even when they're not on
+  // that tab. Updated by the `downloads:state-changed` broadcast.
+  let activeDownloads = $state(0)
+  let unsubDownloads: (() => void) | null = null
+
+  async function refreshActiveCount(): Promise<void> {
+    try {
+      const r = await window.api.downloads.list()
+      activeDownloads = r.rows.filter(
+        (d) => d.status === 'queued' || d.status === 'running'
+      ).length
+    } catch {
+      activeDownloads = 0
+    }
+  }
+
+  onMount(() => {
+    void refreshActiveCount()
+    unsubDownloads = window.api.downloads.onStateChanged((rows) => {
+      activeDownloads = rows.filter(
+        (d) => d.status === 'queued' || d.status === 'running'
+      ).length
+    })
+  })
+
+  onDestroy(() => {
+    unsubDownloads?.()
+  })
+
+  /**
+   * Track our own rendered height so other sticky elements (the Assets filter
+   * row) can align flush below us without hardcoding a magic offset that drifts
+   * when fonts/padding change. Published as a CSS variable on `<html>`.
+   */
+  let height = $state(0)
+  $effect(() => {
+    document.documentElement.style.setProperty('--tab-bar-height', `${height}px`)
+  })
+
   const tabs: TabDef[] = [
     { key: 'assets', label: 'Assets' },
     { key: 'engines', label: 'Engines' },
@@ -24,7 +65,7 @@
   ]
 </script>
 
-<nav class="tab-bar">
+<nav class="tab-bar" bind:clientHeight={height}>
   <div class="brand">ReHoarder</div>
   <div class="tabs">
     {#each tabs as t (t.key)}
@@ -35,6 +76,11 @@
         onclick={() => onChange(t.key)}
       >
         {t.label}
+        {#if t.key === 'downloads' && activeDownloads > 0}
+          <span class="badge" title="{activeDownloads} download{activeDownloads === 1 ? '' : 's'} in progress">
+            {activeDownloads}
+          </span>
+        {/if}
       </button>
     {/each}
   </div>
@@ -59,7 +105,7 @@
   .brand {
     align-self: center;
     font-weight: 700;
-    font-size: 0.95rem;
+    font-size: 1.25rem;
     background: linear-gradient(135deg, #c084fc, #f472b6);
     -webkit-background-clip: text;
     background-clip: text;
@@ -92,6 +138,23 @@
   .tab.active {
     color: #fff;
     border-bottom-color: #c084fc;
+  }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.4rem;
+    margin-left: 0.45rem;
+    border-radius: 999px;
+    background: linear-gradient(135deg, #c084fc, #f472b6);
+    color: white;
+    font-size: 0.7rem;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
   }
 
   .signout {

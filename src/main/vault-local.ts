@@ -4,6 +4,8 @@ import * as path from 'node:path'
 export interface LocalVaultEntry {
   /** Sub-directory name (= sanitized artifactId from `downloadAsset()`). */
   name: string
+  /** Human-readable title of the asset, looked up via the `downloads` table. `null` when no matching done-download row exists (e.g. legacy entries written before we tracked them, or copied in by hand). */
+  friendlyName: string | null
   /** Absolute path of the asset directory (the one containing `data/`). */
   path: string
   /** The configured root path the entry was discovered under. */
@@ -67,6 +69,10 @@ export async function listLocalVault(vaultDirs: string[]): Promise<LocalVaultEnt
       }
       entries.push({
         name,
+        // `friendlyName` is filled in by the IPC layer (where we have access to
+        // the downloads repo). Keep `null` here so the on-disk scanner stays
+        // self-contained and easy to test without a DB.
+        friendlyName: null,
         path: entryPath,
         rootPath: vaultDir,
         totalBytes: walked.totalBytes,

@@ -18,6 +18,12 @@ export interface DownloadRow {
   currentFile: string | null
   /** Absolute path of `<vault>/<assetSubdir>/`, set once the download starts. */
   destDir: string | null
+  /** Short engine version slug the user picked (e.g. `5.4`). `null` = "first available". */
+  engineVersion: string | null
+  /** Absolute destination override; when set, overrides settings.vaultPaths[0]. Used for "install in engine X". */
+  installTargetPath: string | null
+  /** `Manifest.meta.buildVersion` of the binary that was unpacked. Used to detect "update available". */
+  buildVersion: string | null
   error: string | null
   createdAt: number
   startedAt: number | null
@@ -36,6 +42,9 @@ interface DownloadRowDb {
   files_total: number
   current_file: string | null
   dest_dir: string | null
+  engine_version: string | null
+  install_target_path: string | null
+  build_version: string | null
   error: string | null
   created_at: number
   started_at: number | null
@@ -55,6 +64,9 @@ function fromDb(r: DownloadRowDb): DownloadRow {
     filesTotal: r.files_total,
     currentFile: r.current_file,
     destDir: r.dest_dir,
+    engineVersion: r.engine_version,
+    installTargetPath: r.install_target_path,
+    buildVersion: r.build_version,
     error: r.error,
     createdAt: r.created_at,
     startedAt: r.started_at,
@@ -65,14 +77,20 @@ function fromDb(r: DownloadRowDb): DownloadRow {
 export class DownloadsRepo {
   constructor(public readonly db: Database.Database) {}
 
-  insert(row: Omit<DownloadRow, 'startedAt' | 'finishedAt' | 'error' | 'currentFile' | 'destDir'>): DownloadRow {
+  insert(
+    row: Omit<
+      DownloadRow,
+      'startedAt' | 'finishedAt' | 'error' | 'currentFile' | 'destDir' | 'buildVersion'
+    >
+  ): DownloadRow {
     this.db
       .prepare(
         `INSERT INTO downloads
            (id, source, source_id, title, status,
             bytes_done, bytes_total, files_done, files_total,
-            current_file, dest_dir, error, created_at, started_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, NULL, NULL)`
+            current_file, dest_dir, engine_version, install_target_path,
+            build_version, error, created_at, started_at, finished_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL, ?, NULL, NULL)`
       )
       .run(
         row.id,
@@ -84,6 +102,8 @@ export class DownloadsRepo {
         row.bytesTotal,
         row.filesDone,
         row.filesTotal,
+        row.engineVersion,
+        row.installTargetPath,
         row.createdAt
       )
     return this.findById(row.id)!

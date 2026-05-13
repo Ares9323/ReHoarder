@@ -149,6 +149,7 @@ export interface SettingsApi {
 
 export interface LocalVaultEntry {
   name: string
+  friendlyName: string | null
   path: string
   rootPath: string
   totalBytes: number
@@ -255,6 +256,23 @@ export interface EnginePluginsResult {
   plugins?: EnginePluginInfo[]
 }
 
+export interface InstallFromVaultRequest {
+  source: string
+  sourceId: string
+  engineVersion: string | null
+  targetPath: string
+  kind: 'engine' | 'project'
+}
+
+export interface InstallFromVaultResult {
+  ok: boolean
+  error?: string
+  destPath?: string
+  filesCopied?: number
+  bytesCopied?: number
+  sourceVaultPath?: string
+}
+
 export interface ProjectsApi {
   list(): Promise<ProjectsListResult>
   openInExplorer(absolutePath: string): Promise<ProjectsOpenResult>
@@ -263,6 +281,7 @@ export interface ProjectsApi {
   readDescriptor(uprojectPath: string): Promise<ProjectDescriptorResult>
   writeDescriptor(uprojectPath: string, content: unknown): Promise<ProjectDescriptorWriteResult>
   listEnginePlugins(engineRootPath: string): Promise<EnginePluginsResult>
+  installFromVault(req: InstallFromVaultRequest): Promise<InstallFromVaultResult>
 }
 
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
@@ -279,10 +298,18 @@ export interface DownloadRow {
   filesTotal: number
   currentFile: string | null
   destDir: string | null
+  engineVersion: string | null
+  installTargetPath: string | null
+  buildVersion: string | null
   error: string | null
   createdAt: number
   startedAt: number | null
   finishedAt: number | null
+}
+
+export interface DownloadEnqueueOptions {
+  engineVersion?: string
+  installTargetPath?: string
 }
 
 export interface DownloadsListResult {
@@ -302,7 +329,12 @@ export interface DownloadsActionResult {
 
 export interface DownloadsApi {
   list(): Promise<DownloadsListResult>
-  enqueue(source: string, sourceId: string, title: string): Promise<DownloadsEnqueueResult>
+  enqueue(
+    source: string,
+    sourceId: string,
+    title: string,
+    opts?: DownloadEnqueueOptions
+  ): Promise<DownloadsEnqueueResult>
   cancel(id: string): Promise<DownloadsActionResult>
   retry(id: string): Promise<DownloadsActionResult>
   remove(id: string): Promise<DownloadsActionResult>

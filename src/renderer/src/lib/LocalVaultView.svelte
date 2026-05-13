@@ -3,6 +3,7 @@
 
   interface LocalVaultEntry {
     name: string
+    friendlyName: string | null
     path: string
     rootPath: string
     totalBytes: number
@@ -139,8 +140,9 @@
       {#each rows as e (e.path)}
         <tr class:incomplete={!e.hasData}>
           <td class="name">
-            <span class="entry-name">{e.name}</span>
+            <span class="entry-name">{e.friendlyName ?? e.name}</span>
             {#if !e.hasData}<span class="badge">no data/</span>{/if}
+            {#if e.friendlyName}<span class="folder-hint">{e.name}</span>{/if}
             <span class="path-hint">{e.path}</span>
           </td>
           <td class="num">{e.fileCount}</td>
@@ -323,6 +325,12 @@
   .entry-name {
     color: #e0e0e0;
     word-break: break-all;
+  }
+  .folder-hint {
+    margin-left: 0.5rem;
+    color: #777;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.7rem;
   }
   .path-hint {
     display: block;

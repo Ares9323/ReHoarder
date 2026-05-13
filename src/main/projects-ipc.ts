@@ -10,6 +10,8 @@ import {
   listEnginePlugins,
   type EnginePluginInfo
 } from './projects-descriptor'
+import { installFromVault, type InstallFromVaultResult } from './projects-install'
+import type { DownloadsRepo } from './db/downloads-repo'
 import type { SettingsStore } from './settings'
 
 export interface ProjectsListResult {
@@ -71,7 +73,10 @@ function guardProjectPath(uprojectPath: string, roots: string[]): string | null 
   return resolved
 }
 
-export function registerProjectsIpc(settings: SettingsStore): void {
+export function registerProjectsIpc(
+  settings: SettingsStore,
+  downloadsRepo: DownloadsRepo
+): void {
   ipcMain.handle('projects:list', async (): Promise<ProjectsListResult> => {
     try {
       const cfg = settings.load()
@@ -214,6 +219,35 @@ export function registerProjectsIpc(settings: SettingsStore): void {
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
+    }
+  )
+
+  ipcMain.handle(
+    'projects:install-from-vault',
+    async (
+      _e,
+      req: {
+        source: string
+        sourceId: string
+        engineVersion: string | null
+        targetPath: string
+        kind: 'engine' | 'project'
+      }
+    ): Promise<InstallFromVaultResult> => {
+      const cfg = settings.load()
+      const resolved = path.resolve(req.targetPath)
+      const allowedRoots =
+        req.kind === 'engine' ? cfg.enginePaths : cfg.projectPaths
+      const allowed = allowedRoots.some((root) =>
+        resolved.startsWith(path.resolve(root))
+      )
+      if (!allowed) {
+        return {
+          ok: false,
+          error: `Target path is outside the configured ${req.kind} roots`
+        }
+      }
+      return await installFromVault(downloadsRepo, { ...req, targetPath: resolved })
     }
   )
 

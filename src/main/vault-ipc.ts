@@ -1,6 +1,7 @@
 import { ipcMain, shell } from 'electron'
 import * as path from 'node:path'
 import { listLocalVault, type LocalVaultEntry } from './vault-local'
+import type { DownloadsRepo } from './db/downloads-repo'
 import type { SettingsStore } from './settings'
 
 export interface VaultListResult {
@@ -22,11 +23,27 @@ export interface VaultOpenResult {
  * Reads `settings.vaultPaths` live on every call so adding/removing paths
  * in Settings reflects without restart.
  */
-export function registerVaultIpc(settings: SettingsStore): void {
+export function registerVaultIpc(
+  settings: SettingsStore,
+  downloadsRepo: DownloadsRepo
+): void {
   ipcMain.handle('vault:list', async (): Promise<VaultListResult> => {
     try {
       const cfg = settings.load()
       const entries = await listLocalVault(cfg.vaultPaths)
+      // Build a `dest_dir → title` lookup from completed download rows and
+      // splice the friendly title into each vault entry. Fab's sanitised
+      // artifactId (`Werewolf3b893edcfd9cV1`) is gibberish without this map.
+      const titleByPath = new Map<string, string>()
+      for (const row of downloadsRepo.listAll()) {
+        if (row.status !== 'done' || !row.destDir) continue
+        const key = path.resolve(row.destDir).toLowerCase()
+        if (!titleByPath.has(key)) titleByPath.set(key, row.title)
+      }
+      for (const e of entries) {
+        const key = path.resolve(e.path).toLowerCase()
+        e.friendlyName = titleByPath.get(key) ?? null
+      }
       return { ok: true, vaultDirs: cfg.vaultPaths, entries }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

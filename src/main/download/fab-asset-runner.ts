@@ -23,8 +23,14 @@ export interface FabRunnerDeps {
 
 export interface FabRunnerOptions {
   vaultDir: string
-  /** Folder name under `vaultDir`. Defaults to artifactId from the manifest locator. */
+  /** Folder name under `vaultDir`. Defaults to artifactId from the manifest locator. Pass `''` to write straight under `vaultDir`. */
   assetSubdir?: string
+  /** Short engine version slug (`5.4`); picks the matching `projectVersions[]` entry by matching `engineVersions[*]` (case-insensitive, with `UE_` prefix stripped). When unset, the first projectVersions entry is used. */
+  engineVersion?: string
+  /** See `DownloadOptions.pathStripPrefix`. */
+  pathStripPrefix?: string
+  /** See `DownloadOptions.noWrapDataDir`. */
+  noWrapDataDir?: boolean
   /** Forwarded to the orchestrator: cumulative progress callback. */
   onProgress?: (p: DownloadProgress) => void
   /** Forwarded to the orchestrator: per-step log line. */
@@ -32,8 +38,33 @@ export interface FabRunnerOptions {
   signal?: AbortSignal
 }
 
+/**
+ * Match a `projectVersions[]` entry by short engine version slug. Fab UE
+ * stores entries like `engineVersions: ["UE_5.4", "UE_5.5"]`; we accept
+ * `5.4`-style input and strip the `UE_` prefix when comparing.
+ *
+ * When `targetVersion` is unset, the first entry wins (legacy behaviour).
+ */
+function pickProjectVersion(
+  versions: Array<{ artifactId?: string; engineVersions?: string[] }> | undefined,
+  targetVersion: string | undefined
+): { artifactId?: string; engineVersions?: string[] } | undefined {
+  if (!versions || versions.length === 0) return undefined
+  if (!targetVersion) return versions[0]
+  const target = targetVersion.toLowerCase()
+  return versions.find((pv) =>
+    (pv.engineVersions ?? []).some(
+      (v) => v.replace(/^UE_/i, '').toLowerCase() === target
+    )
+  )
+}
+
 export interface FabRunnerStartResult {
   artifactId: string
+  /** `Manifest.meta.buildVersion` of the binary being assembled. Surface this so
+   *  the caller can persist it and later detect "update available" by comparing
+   *  with the asset's current `projectVersions[].buildVersion`. */
+  buildVersion: string
   /** Sum of `fileSize` across the manifest's files — known before any chunk is fetched. */
   bytesTotal: number
   filesTotal: number
@@ -59,7 +90,7 @@ export async function runFabAssetDownload(
   assetId: string,
   opts: FabRunnerOptions,
   onStart?: (info: FabRunnerStartResult) => void
-): Promise<DownloadResult & { artifactId: string }> {
+): Promise<DownloadResult & { artifactId: string; buildVersion: string }> {
   const accessToken = deps.session.getAccessToken()
   if (!accessToken) {
     throw new Error('Not authenticated — log in and run a sync first.')
@@ -70,15 +101,21 @@ export async function runFabAssetDownload(
   }
   const raw = JSON.parse(asset.raw) as {
     assetNamespace?: string
-    projectVersions?: Array<{ artifactId?: string }>
+    projectVersions?: Array<{ artifactId?: string; engineVersions?: string[] }>
   }
-  const artifactId = raw.projectVersions?.[0]?.artifactId
   const namespace = raw.assetNamespace
-  if (!artifactId || !namespace) {
+  if (!namespace) {
+    throw new Error(`Asset "${assetId}" raw JSON is missing assetNamespace.`)
+  }
+  const projectVersion = pickProjectVersion(raw.projectVersions, opts.engineVersion)
+  if (!projectVersion?.artifactId) {
     throw new Error(
-      `Asset "${assetId}" raw JSON is missing projectVersions[0].artifactId or assetNamespace.`
+      `Asset "${assetId}" has no projectVersion${
+        opts.engineVersion ? ` for engine ${opts.engineVersion}` : ''
+      }.`
     )
   }
+  const artifactId = projectVersion.artifactId
 
   const onLog = opts.onLog ?? (() => {})
   onLog('establishing Fab session…')
@@ -105,7 +142,8 @@ export async function runFabAssetDownload(
   const filesTotal = manifest.files.length
   const subdir = opts.assetSubdir ?? artifactId
   const assetDir = path.join(opts.vaultDir, subdir.replace(/[/\\:*?"<>|]/g, '_'))
-  onStart?.({ artifactId, bytesTotal, filesTotal, assetDir })
+  const buildVersion = manifest.meta.buildVersion
+  onStart?.({ artifactId, buildVersion, bytesTotal, filesTotal, assetDir })
 
   const result = await downloadAsset(
     { manifest, baseUris, chunkQueryStrings, locator },
@@ -117,11 +155,13 @@ export async function runFabAssetDownload(
         Authorization: `bearer ${accessToken}`,
         'User-Agent': EPIC_USER_AGENT
       },
+      pathStripPrefix: opts.pathStripPrefix,
+      noWrapDataDir: opts.noWrapDataDir,
       onLog: opts.onLog,
       onProgress: opts.onProgress,
       signal: opts.signal
     }
   )
 
-  return { ...result, artifactId }
+  return { ...result, artifactId, buildVersion }
 }

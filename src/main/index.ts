@@ -91,11 +91,10 @@ app.whenReady().then(async () => {
   })
   const settingsStore = new SettingsStore(db.kv)
   registerSettingsIpc(settingsStore)
-  registerVaultIpc(settingsStore)
   registerEnginesIpc(settingsStore)
-  registerProjectsIpc(settingsStore)
-
   const downloadsRepo = new DownloadsRepo(db.raw)
+  registerVaultIpc(settingsStore, downloadsRepo)
+  registerProjectsIpc(settingsStore, downloadsRepo)
   const downloadsManager = new DownloadsManager({
     repo: downloadsRepo,
     settings: settingsStore,

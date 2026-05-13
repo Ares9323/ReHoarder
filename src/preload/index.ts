@@ -86,6 +86,7 @@ export interface AppSettings {
 
 export interface LocalVaultEntry {
   name: string
+  friendlyName: string | null
   path: string
   rootPath: string
   totalBytes: number
@@ -182,6 +183,23 @@ export interface EnginePluginsResult {
   plugins?: EnginePluginInfo[]
 }
 
+export interface InstallFromVaultResult {
+  ok: boolean
+  error?: string
+  destPath?: string
+  filesCopied?: number
+  bytesCopied?: number
+  sourceVaultPath?: string
+}
+
+export interface InstallFromVaultRequest {
+  source: string
+  sourceId: string
+  engineVersion: string | null
+  targetPath: string
+  kind: 'engine' | 'project'
+}
+
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
 export interface DownloadRow {
@@ -196,10 +214,18 @@ export interface DownloadRow {
   filesTotal: number
   currentFile: string | null
   destDir: string | null
+  engineVersion: string | null
+  installTargetPath: string | null
+  buildVersion: string | null
   error: string | null
   createdAt: number
   startedAt: number | null
   finishedAt: number | null
+}
+
+export interface DownloadEnqueueOptions {
+  engineVersion?: string
+  installTargetPath?: string
 }
 
 export interface DownloadsListResult {
@@ -318,12 +344,19 @@ const api = {
     ): Promise<ProjectDescriptorWriteResult> =>
       ipcRenderer.invoke('projects:write-descriptor', uprojectPath, content),
     listEnginePlugins: (engineRootPath: string): Promise<EnginePluginsResult> =>
-      ipcRenderer.invoke('projects:list-engine-plugins', engineRootPath)
+      ipcRenderer.invoke('projects:list-engine-plugins', engineRootPath),
+    installFromVault: (req: InstallFromVaultRequest): Promise<InstallFromVaultResult> =>
+      ipcRenderer.invoke('projects:install-from-vault', req)
   },
   downloads: {
     list: (): Promise<DownloadsListResult> => ipcRenderer.invoke('downloads:list'),
-    enqueue: (source: string, sourceId: string, title: string): Promise<DownloadsEnqueueResult> =>
-      ipcRenderer.invoke('downloads:enqueue', source, sourceId, title),
+    enqueue: (
+      source: string,
+      sourceId: string,
+      title: string,
+      opts?: DownloadEnqueueOptions
+    ): Promise<DownloadsEnqueueResult> =>
+      ipcRenderer.invoke('downloads:enqueue', source, sourceId, title, opts ?? {}),
     cancel: (id: string): Promise<DownloadsActionResult> =>
       ipcRenderer.invoke('downloads:cancel', id),
     retry: (id: string): Promise<DownloadsActionResult> =>

@@ -25,9 +25,15 @@ export function registerDownloadsIpc(
 
   ipcMain.handle(
     'downloads:enqueue',
-    (_e, source: string, sourceId: string, title: string): DownloadsEnqueueResult => {
+    (
+      _e,
+      source: string,
+      sourceId: string,
+      title: string,
+      opts: { engineVersion?: string; installTargetPath?: string } = {}
+    ): DownloadsEnqueueResult => {
       try {
-        const row = manager.enqueue(source, sourceId, title)
+        const row = manager.enqueue(source, sourceId, title, opts)
         return { ok: true, id: row.id }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }

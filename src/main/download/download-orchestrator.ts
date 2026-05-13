@@ -12,6 +12,20 @@ function sanitizeSubdir(s: string): string {
 }
 
 /**
+ * Remove `prefix` from the start of `filePath` if present, else return it
+ * unchanged. Match is `\\`-and-`/`-tolerant so it doesn't matter whether the
+ * manifest uses forward or back slashes; the prefix itself is taken verbatim.
+ */
+function stripPrefix(filePath: string, prefix: string | undefined): string {
+  if (!prefix) return filePath
+  // Normalise both sides to forward slashes for the comparison only.
+  const norm = filePath.replace(/\\/g, '/')
+  const pref = prefix.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') + '/'
+  if (norm.startsWith(pref)) return filePath.slice(pref.length)
+  return filePath
+}
+
+/**
  * Bridges the assembler (which has only `chunkGuid` on each `ChunkPart`) and
  * the `ChunkSource` (which needs the full `ChunkInfo` with rollingHash + sha1
  * to validate cache hits). The orchestrator owns this map; the assembler
@@ -54,9 +68,13 @@ export async function downloadAsset(
     throw new Error('Cannot download a file-data manifest (bIsFileData=true) in v0c')
   }
   const startedAt = Date.now()
-  const subdir = sanitizeSubdir(opts.assetSubdir ?? bundle.locator.artifactId)
-  const assetDir = path.join(opts.vaultDir, subdir)
-  const dataDir = path.join(assetDir, 'data')
+  const rawSubdir = opts.assetSubdir ?? bundle.locator.artifactId
+  const subdir = rawSubdir === '' ? '' : sanitizeSubdir(rawSubdir)
+  const assetDir = subdir === '' ? opts.vaultDir : path.join(opts.vaultDir, subdir)
+  // `noWrapDataDir` writes files straight under `assetDir` instead of a `data/`
+  // sub-folder. Engine / project plugin installs want the latter — the manifest's
+  // file paths are already the layout the engine expects.
+  const dataDir = opts.noWrapDataDir ? assetDir : path.join(assetDir, 'data')
   const cacheDir = path.join(assetDir, 'cache')
   await fsp.mkdir(dataDir, { recursive: true })
   await fsp.mkdir(cacheDir, { recursive: true })
@@ -82,15 +100,16 @@ export async function downloadAsset(
 
   for (const entry of bundle.manifest.files) {
     opts.signal?.throwIfAborted()
-    onLog(`assembling ${entry.filename} (${entry.fileSize} bytes)`)
+    const relPath = stripPrefix(entry.filename, opts.pathStripPrefix)
+    onLog(`assembling ${relPath} (${entry.fileSize} bytes)`)
     onProgress?.({
       bytesDone,
       bytesTotal,
       filesDone,
       filesTotal,
-      currentFile: entry.filename
+      currentFile: relPath
     })
-    const destPath = path.join(dataDir, entry.filename)
+    const destPath = path.join(dataDir, relPath)
     const result = await assembleFile(entry, provider, destPath)
     summaries.push({ filename: entry.filename, fileSize: entry.fileSize, skipped: result.skipped })
     if (!result.skipped) bytesWritten += entry.fileSize

@@ -91,7 +91,6 @@
           onSyncNow={() => library.startSync()}
           onToggleHidden={(a) => library.setHidden(a, !a.hidden)}
           onToggleBookmark={(a) => library.setBookmarked(a, !a.bookmarked)}
-          onSignOut={() => auth.logout()}
         />
       {/if}
     {:else if activeTab === 'engines'}

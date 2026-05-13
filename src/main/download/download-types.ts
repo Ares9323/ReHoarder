@@ -15,6 +15,23 @@ export interface DownloadOptions {
   signal?: AbortSignal
   /** Headers sent on every chunk GET. Use this to pass `Authorization: bearer …` and a Launcher-style `User-Agent` (the Epic CDN requires both for chunk fetches). */
   chunkHeaders?: Record<string, string>
+  /**
+   * Strip this prefix from every file path in the manifest before writing.
+   * Plugin manifests ship engine-relative paths like
+   * `Engine/Plugins/Marketplace/MyPlugin/MyPlugin.uplugin`; when installing into
+   * a project's `Plugins/` we want the file to land at `MyPlugin/MyPlugin.uplugin`
+   * instead, so the stripper removes that prefix per-entry. Paths that don't
+   * start with the prefix are written unchanged.
+   */
+  pathStripPrefix?: string
+  /**
+   * When `true`, write files directly under `<vaultDir>/<assetSubdir>/`
+   * instead of `<vaultDir>/<assetSubdir>/data/`. The wrapping is useful for
+   * vault-style downloads (cache + data side-by-side), but actively wrong
+   * for engine/project installs where the file tree is already its own
+   * containment unit.
+   */
+  noWrapDataDir?: boolean
 }
 
 export interface DownloadProgress {
