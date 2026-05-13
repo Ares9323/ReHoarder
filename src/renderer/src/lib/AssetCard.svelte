@@ -103,7 +103,7 @@
           disabled={downloadState.kind === 'busy'}
           title={downloadState.kind === 'done' ? `Saved to ${downloadState.dataDir}` : downloadState.kind === 'error' ? downloadState.message : 'Download this asset'}
         >
-          {#if downloadState.kind === 'idle'}↓ Download{/if}
+          {#if downloadState.kind === 'idle'}Download{/if}
           {#if downloadState.kind === 'busy'}Downloading…{/if}
           {#if downloadState.kind === 'done'}✓ {downloadState.fileCount} files, {formatBytes(downloadState.bytesWritten)}{/if}
           {#if downloadState.kind === 'error'}✕ Failed (hover){/if}
