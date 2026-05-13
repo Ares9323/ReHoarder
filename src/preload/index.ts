@@ -55,6 +55,27 @@ export interface SyncProgress {
   error?: string
 }
 
+export interface LocalVaultEntry {
+  name: string
+  path: string
+  totalBytes: number
+  fileCount: number
+  lastModified: number
+  hasData: boolean
+}
+
+export interface VaultListResult {
+  ok: boolean
+  error?: string
+  vaultDir?: string
+  entries?: LocalVaultEntry[]
+}
+
+export interface VaultOpenResult {
+  ok: boolean
+  error?: string
+}
+
 export interface DebugClearLibraryResult {
   ok: boolean
   error?: string
@@ -127,6 +148,11 @@ const api = {
     ): Promise<DebugClearLibraryResult> => ipcRenderer.invoke('debug:clear-library', opts),
     downloadSampleAsset: (assetId: string): Promise<DebugDownloadSampleAssetResult> =>
       ipcRenderer.invoke('debug:download-sample-asset', assetId)
+  },
+  vault: {
+    list: (): Promise<VaultListResult> => ipcRenderer.invoke('vault:list'),
+    openInExplorer: (absolutePath: string): Promise<VaultOpenResult> =>
+      ipcRenderer.invoke('vault:open-in-explorer', absolutePath)
   }
 }
 

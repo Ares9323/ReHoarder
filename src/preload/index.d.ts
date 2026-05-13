@@ -112,6 +112,32 @@ export interface DebugApi {
   downloadSampleAsset(assetId: string): Promise<DebugDownloadSampleAssetResult>
 }
 
+export interface LocalVaultEntry {
+  name: string
+  path: string
+  totalBytes: number
+  fileCount: number
+  lastModified: number
+  hasData: boolean
+}
+
+export interface VaultListResult {
+  ok: boolean
+  error?: string
+  vaultDir?: string
+  entries?: LocalVaultEntry[]
+}
+
+export interface VaultOpenResult {
+  ok: boolean
+  error?: string
+}
+
+export interface VaultApi {
+  list(): Promise<VaultListResult>
+  openInExplorer(absolutePath: string): Promise<VaultOpenResult>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -119,6 +145,7 @@ declare global {
       auth: AuthApi
       library: LibraryApi
       debug: DebugApi
+      vault: VaultApi
     }
   }
 }

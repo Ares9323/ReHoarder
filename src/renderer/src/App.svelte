@@ -8,6 +8,7 @@
   import LoadingLibraryView from './lib/LoadingLibraryView.svelte'
   import TabBar from './lib/TabBar.svelte'
   import type { TabKey } from './lib/tabs'
+  import LocalVaultView from './lib/LocalVaultView.svelte'
   import PlaceholderView from './lib/PlaceholderView.svelte'
 
   const auth = createAuthStore()
@@ -109,17 +110,7 @@
         ]}
       />
     {:else if activeTab === 'vault'}
-      <PlaceholderView
-        title="Vault (local files)"
-        blurb="Browse what's already on disk in your configured VaultCache."
-        planned={[
-          'Default vault path; multi-path support with drive-letter routing',
-          'Show downloaded assets with size and last-modified timestamp',
-          'Reverse-link to the matching library entry',
-          'Right-click → reveal in file manager, delete, recompute SHA1 to detect corruption',
-          'Show pending downloads (chunks in `cache/`) for in-progress assets'
-        ]}
-      />
+      <LocalVaultView />
     {:else if activeTab === 'settings'}
       <PlaceholderView
         title="Settings"

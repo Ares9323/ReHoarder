@@ -16,6 +16,7 @@ import { FabClient } from './fab/fab-client'
 import { Sync } from './sync/sync'
 import { registerLibraryIpc } from './sync/ipc'
 import { registerDebugIpc } from './download/debug-ipc'
+import { registerVaultIpc } from './vault-ipc'
 
 let db: AppDb | null = null
 let mainWindow: BrowserWindow | null = null
@@ -77,6 +78,7 @@ app.whenReady().then(async () => {
     fabFetch,
     debugDir: app.getPath('userData')
   })
+  registerVaultIpc()
 
   await session.init()
   console.warn(`[auth] initial state: ${session.getState().status}`)
