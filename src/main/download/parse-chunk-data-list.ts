@@ -8,7 +8,7 @@ export function parseChunkDataList(r: BinaryReader): ChunkInfo[] {
   const count = r.readInt32LE()
   const guids: string[] = []
   for (let i = 0; i < count; i++) {
-    guids.push(r.readBytes(16).toString('hex').toUpperCase())
+    guids.push(r.readFGuid())
   }
   const rollingHashes: string[] = []
   for (let i = 0; i < count; i++) {

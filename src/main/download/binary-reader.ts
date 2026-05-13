@@ -83,6 +83,29 @@ export class BinaryReader {
     return v
   }
 
+  /**
+   * Read an Unreal `FGuid` (16 bytes = 4 × uint32 LE) and return its
+   * canonical 32-char uppercase hex form. The four uint32s are emitted in
+   * declaration order; this matches how Unreal serializes `FGuid` and how
+   * Epic manifests reference chunks (e.g. `ChunkHashList` keys, the file
+   * portion of a chunk URL, the GUID field in `FChunkPart`).
+   *
+   * Do NOT use `readBytes(16).toString('hex')` for GUIDs — that yields the
+   * raw byte order, which reverses each uint32 vs. the canonical form.
+   */
+  readFGuid(): string {
+    const a = this.readUInt32LE()
+    const b = this.readUInt32LE()
+    const c = this.readUInt32LE()
+    const d = this.readUInt32LE()
+    return (
+      a.toString(16).toUpperCase().padStart(8, '0') +
+      b.toString(16).toUpperCase().padStart(8, '0') +
+      c.toString(16).toUpperCase().padStart(8, '0') +
+      d.toString(16).toUpperCase().padStart(8, '0')
+    )
+  }
+
   readBytes(n: number): Buffer {
     this.require(n)
     const slice = Buffer.alloc(n)

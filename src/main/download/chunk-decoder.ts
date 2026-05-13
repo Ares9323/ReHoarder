@@ -50,7 +50,7 @@ export function decodeChunk(buf: Buffer, expected: ChunkExpectation): Buffer {
   const version = r.readUInt32LE()
   const headerSize = r.readUInt32LE()
   const dataSizeCompressed = r.readUInt32LE()
-  const guid = r.readBytes(16).toString('hex').toUpperCase()
+  const guid = r.readFGuid()
   const rollingHashHeader = r.readUInt64LE()
   const storedAs = r.readUInt8()
 

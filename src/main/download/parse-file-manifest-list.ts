@@ -7,7 +7,7 @@ const VERSION_SHA256_HASH = 2
 function parseChunkPart(r: BinaryReader): ChunkPart {
   const start = r.position
   const partSize = r.readUInt32LE()
-  const guid = r.readBytes(16).toString('hex').toUpperCase()
+  const guid = r.readFGuid()
   const offset = r.readUInt32LE()
   const size = r.readUInt32LE()
   r.seek(start + partSize)

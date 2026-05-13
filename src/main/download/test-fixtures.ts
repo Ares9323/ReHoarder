@@ -72,8 +72,19 @@ export function sha1Hex(hex40: string): Buffer {
 /** 16-byte FGuid as four uint32 LE. `hex32` is 32 hex chars. */
 export function guidHex(hex32: string): Buffer {
   if (hex32.length !== 32) throw new Error(`guidHex needs 32 chars, got ${hex32.length}`)
-  // Epic FGuid is 4 uint32 LE in original byte order.
-  return Buffer.from(hex32, 'hex')
+  // Epic FGuid is serialized as 4 × uint32 LE. To convert the canonical
+  // 32-char hex (4 uint32s in declaration order) into the on-wire byte
+  // sequence, reverse each 4-byte group: the parser side reads with
+  // `readFGuid()` which undoes this.
+  const raw = Buffer.from(hex32, 'hex')
+  const out = Buffer.alloc(16)
+  for (let i = 0; i < 16; i += 4) {
+    out[i] = raw[i + 3]
+    out[i + 1] = raw[i + 2]
+    out[i + 2] = raw[i + 1]
+    out[i + 3] = raw[i]
+  }
+  return out
 }
 
 /** Concatenate any number of byte chunks. */
