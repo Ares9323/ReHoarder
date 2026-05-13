@@ -120,6 +120,9 @@
       source={a.source}
       hidden={a.hidden}
       onToggleHidden={() => onToggleHidden(a)}
+      onDownload={a.source === 'fab'
+        ? () => window.api.debug.downloadSampleAsset(a.sourceId)
+        : undefined}
     />
   {/each}
 </div>

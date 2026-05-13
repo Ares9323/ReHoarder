@@ -1,6 +1,15 @@
 <script lang="ts">
   type AssetSource = 'vault' | 'fab' | 'legacy'
 
+  interface DownloadResult {
+    ok: boolean
+    error?: string
+    fileCount?: number
+    bytesWritten?: number
+    durationMs?: number
+    dataDir?: string
+  }
+
   interface Props {
     title: string
     description: string | null
@@ -9,14 +18,60 @@
     source: AssetSource
     hidden: boolean
     onToggleHidden: () => void
+    onDownload?: () => Promise<DownloadResult>
   }
 
-  let { title, description, imageUrl, productUrl, source, hidden, onToggleHidden }: Props = $props()
+  let {
+    title,
+    description,
+    imageUrl,
+    productUrl,
+    source,
+    hidden,
+    onToggleHidden,
+    onDownload
+  }: Props = $props()
 
   const sourceLabel: Record<AssetSource, string> = {
     vault: 'Vault',
     fab: 'Fab',
     legacy: 'Legacy'
+  }
+
+  type DownloadState =
+    | { kind: 'idle' }
+    | { kind: 'busy' }
+    | { kind: 'done'; fileCount: number; bytesWritten: number; durationMs: number; dataDir: string }
+    | { kind: 'error'; message: string }
+
+  let downloadState = $state<DownloadState>({ kind: 'idle' })
+
+  async function handleDownload(): Promise<void> {
+    if (!onDownload || downloadState.kind === 'busy') return
+    downloadState = { kind: 'busy' }
+    try {
+      const r = await onDownload()
+      if (r.ok) {
+        downloadState = {
+          kind: 'done',
+          fileCount: r.fileCount ?? 0,
+          bytesWritten: r.bytesWritten ?? 0,
+          durationMs: r.durationMs ?? 0,
+          dataDir: r.dataDir ?? ''
+        }
+      } else {
+        downloadState = { kind: 'error', message: r.error ?? 'Download failed' }
+      }
+    } catch (err) {
+      downloadState = { kind: 'error', message: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
+  function formatBytes(n: number): string {
+    if (n < 1024) return n + ' B'
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+    if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB'
+    return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
   }
 </script>
 
@@ -39,9 +94,25 @@
     {#if productUrl}
       <a href={productUrl} target="_blank" rel="noreferrer">View</a>
     {/if}
-    <button type="button" onclick={onToggleHidden}>
-      {hidden ? 'Show in library' : 'Hide'}
-    </button>
+    <div class="right-actions">
+      {#if onDownload}
+        <button
+          type="button"
+          class="download-btn"
+          onclick={handleDownload}
+          disabled={downloadState.kind === 'busy'}
+          title={downloadState.kind === 'done' ? `Saved to ${downloadState.dataDir}` : downloadState.kind === 'error' ? downloadState.message : 'Download this asset'}
+        >
+          {#if downloadState.kind === 'idle'}↓ Download{/if}
+          {#if downloadState.kind === 'busy'}Downloading…{/if}
+          {#if downloadState.kind === 'done'}✓ {downloadState.fileCount} files, {formatBytes(downloadState.bytesWritten)}{/if}
+          {#if downloadState.kind === 'error'}✕ Failed (hover){/if}
+        </button>
+      {/if}
+      <button type="button" onclick={onToggleHidden}>
+        {hidden ? 'Show in library' : 'Hide'}
+      </button>
+    </div>
   </div>
 </article>
 
@@ -139,6 +210,30 @@
     align-items: center;
     padding: 0.5rem 0.9rem 0.75rem;
     font-size: 0.8rem;
+    gap: 0.5rem;
+  }
+
+  .right-actions {
+    display: flex;
+    gap: 0.4rem;
+    align-items: center;
+  }
+
+  .download-btn {
+    background: linear-gradient(135deg, rgba(192, 132, 252, 0.15), rgba(244, 114, 182, 0.15));
+    color: #d8b4fe;
+    border-color: rgba(192, 132, 252, 0.5);
+  }
+
+  .download-btn:hover:not(:disabled) {
+    background: linear-gradient(135deg, rgba(192, 132, 252, 0.25), rgba(244, 114, 182, 0.25));
+    color: #fff;
+    border-color: #c084fc;
+  }
+
+  .download-btn:disabled {
+    opacity: 0.6;
+    cursor: progress;
   }
 
   a {
