@@ -4,6 +4,7 @@ import * as path from 'node:path'
 import { listLocalVault, type LocalVaultEntry } from './vault-local'
 import { broadcastDownloads } from './downloads-ipc'
 import type { DownloadsRepo } from './db/downloads-repo'
+import type { AssetsRepo, AssetSource } from './db/assets-repo'
 import type { SettingsStore } from './settings'
 
 export interface VaultListResult {
@@ -34,24 +35,39 @@ export interface VaultDeleteResult {
  */
 export function registerVaultIpc(
   settings: SettingsStore,
-  downloadsRepo: DownloadsRepo
+  downloadsRepo: DownloadsRepo,
+  assetsRepo: AssetsRepo
 ): void {
   ipcMain.handle('vault:list', async (): Promise<VaultListResult> => {
     try {
       const cfg = settings.load()
       const entries = await listLocalVault(cfg.vaultPaths)
-      // Build a `dest_dir → title` lookup from completed download rows and
-      // splice the friendly title into each vault entry. Fab's sanitised
-      // artifactId (`Werewolf3b893edcfd9cV1`) is gibberish without this map.
-      const titleByPath = new Map<string, string>()
+      // Build a `dest_dir → { title, source, sourceId }` lookup once from the
+      // completed downloads, then splice friendlyName + thumbnail into each
+      // entry. Two-step: title is direct off the row, thumbnail needs an
+      // assets-table lookup keyed by (source, sourceId).
+      const downloadInfoByPath = new Map<
+        string,
+        { title: string; source: AssetSource; sourceId: string }
+      >()
       for (const row of downloadsRepo.listAll()) {
         if (row.status !== 'done' || !row.destDir) continue
         const key = path.resolve(row.destDir).toLowerCase()
-        if (!titleByPath.has(key)) titleByPath.set(key, row.title)
+        if (!downloadInfoByPath.has(key)) {
+          downloadInfoByPath.set(key, {
+            title: row.title,
+            source: row.source as AssetSource,
+            sourceId: row.sourceId
+          })
+        }
       }
       for (const e of entries) {
         const key = path.resolve(e.path).toLowerCase()
-        e.friendlyName = titleByPath.get(key) ?? null
+        const info = downloadInfoByPath.get(key)
+        if (!info) continue
+        e.friendlyName = info.title
+        const asset = assetsRepo.findById(info.source, info.sourceId)
+        e.imageUrl = asset?.imageUrl ?? null
       }
       return { ok: true, vaultDirs: cfg.vaultPaths, entries }
     } catch (err) {

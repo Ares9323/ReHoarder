@@ -1,5 +1,6 @@
 <script lang="ts">
   import CreateProjectDialog from './CreateProjectDialog.svelte'
+  import AddToProjectDialog from './AddToProjectDialog.svelte'
 
   interface EngineLite {
     name: string
@@ -56,6 +57,7 @@
   }: Props = $props()
 
   let createDialogOpen = $state(false)
+  let addToProjectDialogOpen = $state(false)
 
   /** Effective kind, with the legacy `isPlugin` boolean as fallback for older callers. */
   const kind = $derived<'plugin' | 'project' | 'pack' | 'other'>(
@@ -305,13 +307,25 @@
       <section>
         <h3>Add to project</h3>
         <p class="hint">
-          Asset packs need to be merged into a project's <code>Content/</code> folder.
-          Coming soon — for now use <em>Open downloaded folder</em> and drop the
-          contents into your project's Content directory.
+          Merge the asset pack's <code>Content/</code> tree into one of your projects.
+          Existing files are kept (skip) by default — switch to overwrite in the dialog
+          if you want to replace them. Requires the asset to be in the local vault.
         </p>
-        <button type="button" class="row-btn" disabled>
+        <button
+          type="button"
+          class="row-btn"
+          disabled={actionBusy || !isAlreadyInVault(requestedVersion) || knownProjects.length === 0}
+          title={!isAlreadyInVault(requestedVersion)
+            ? 'Asset is not in the local vault yet — download it first.'
+            : knownProjects.length === 0
+              ? 'No projects detected.'
+              : 'Pick a project and merge the asset into its Content folder'}
+          onclick={() => (addToProjectDialogOpen = true)}
+        >
           <span class="row-main">Add to project</span>
-          <span class="row-meta">soon</span>
+          {#if !isAlreadyInVault(requestedVersion)}
+            <span class="row-meta">download first</span>
+          {/if}
         </button>
       </section>
     {/if}
@@ -420,6 +434,19 @@
     {projectPaths}
     onClose={() => (createDialogOpen = false)}
     onCreated={() => onClose()}
+  />
+{/if}
+
+{#if addToProjectDialogOpen}
+  <AddToProjectDialog
+    {assetTitle}
+    {assetSource}
+    {assetSourceId}
+    {requestedVersion}
+    {availableVersions}
+    {knownProjects}
+    onClose={() => (addToProjectDialogOpen = false)}
+    onAdded={() => onClose()}
   />
 {/if}
 

@@ -93,7 +93,7 @@ app.whenReady().then(async () => {
   registerSettingsIpc(settingsStore)
   registerEnginesIpc(settingsStore)
   const downloadsRepo = new DownloadsRepo(db.raw)
-  registerVaultIpc(settingsStore, downloadsRepo)
+  registerVaultIpc(settingsStore, downloadsRepo, assetsRepo)
   registerProjectsIpc(settingsStore, downloadsRepo)
   const downloadsManager = new DownloadsManager({
     repo: downloadsRepo,

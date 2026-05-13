@@ -12,6 +12,11 @@ import {
 } from './projects-descriptor'
 import { installFromVault, type InstallFromVaultResult } from './projects-install'
 import { createProjectFromVault, type CreateProjectResult } from './projects-create'
+import {
+  addToProject,
+  type AddToProjectConflict,
+  type AddToProjectResult
+} from './projects-add-to'
 import type { DownloadsRepo } from './db/downloads-repo'
 import type { SettingsStore } from './settings'
 
@@ -292,6 +297,35 @@ export function registerProjectsIpc(
         name: safeName,
         parentDir: resolvedParent
       })
+    }
+  )
+
+  ipcMain.handle(
+    'projects:add-to-project',
+    async (
+      _e,
+      req: {
+        source: string
+        sourceId: string
+        engineVersion: string | null
+        projectDir: string
+        conflict: AddToProjectConflict
+      }
+    ): Promise<AddToProjectResult> => {
+      const cfg = settings.load()
+      const resolved = path.resolve(req.projectDir)
+      const allowed = cfg.projectPaths.some(
+        (root) =>
+          resolved === path.resolve(root) ||
+          resolved.startsWith(path.resolve(root) + path.sep)
+      )
+      if (!allowed) {
+        return { ok: false, error: 'Project directory is outside the configured project roots' }
+      }
+      if (req.conflict !== 'skip' && req.conflict !== 'overwrite') {
+        return { ok: false, error: `Unknown conflict mode: ${req.conflict}` }
+      }
+      return await addToProject(downloadsRepo, { ...req, projectDir: resolved })
     }
   )
 

@@ -4,6 +4,7 @@
   interface LocalVaultEntry {
     name: string
     friendlyName: string | null
+    imageUrl: string | null
     path: string
     rootPath: string
     totalBytes: number
@@ -15,14 +16,75 @@
   let entries = $state<LocalVaultEntry[]>([])
   let vaultDirs = $state<string[]>([])
   let separateByPath = $state(false)
+  let showThumbnails = $state(true)
   let loading = $state(true)
   let error = $state<string | null>(null)
+
+  type SortKey = 'name' | 'size' | 'lastModified'
+  type SortDir = 'asc' | 'desc'
+  let sortBy = $state<SortKey>('lastModified')
+  let sortDir = $state<SortDir>('desc')
+
+  /**
+   * Sort the entries by the active column, in the active direction. We
+   * `[...entries].sort()` (no in-place mutation) so the derived doesn't
+   * trip Svelte's "you mutated reactive state inside a derived" check.
+   * When `separateByPath` is on, the same comparator runs per root group.
+   */
+  function sortEntries(rows: LocalVaultEntry[]): LocalVaultEntry[] {
+    const list = [...rows]
+    const dir = sortDir === 'asc' ? 1 : -1
+    list.sort((a, b) => {
+      switch (sortBy) {
+        case 'name': {
+          // Friendly name when present (matches what the user actually sees),
+          // fall back to the folder name otherwise.
+          const an = (a.friendlyName ?? a.name).toLowerCase()
+          const bn = (b.friendlyName ?? b.name).toLowerCase()
+          return an.localeCompare(bn, undefined, { numeric: true }) * dir
+        }
+        case 'size':
+          return (a.totalBytes - b.totalBytes) * dir
+        case 'lastModified':
+        default:
+          return (a.lastModified - b.lastModified) * dir
+      }
+    })
+    return list
+  }
+  const sortedEntries = $derived(sortEntries(entries))
+  const sortedEntriesByRoot = $derived.by(() => {
+    const map = new Map<string, LocalVaultEntry[]>()
+    for (const root of vaultDirs) map.set(root, [])
+    for (const e of sortedEntries) {
+      if (!map.has(e.rootPath)) map.set(e.rootPath, [])
+      map.get(e.rootPath)!.push(e)
+    }
+    return map
+  })
+
+  function setSort(key: SortKey): void {
+    if (sortBy === key) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc'
+      return
+    }
+    sortBy = key
+    // Sensible defaults: text → asc, numeric → desc (biggest first feels right
+    // for Size and Last modified)
+    sortDir = key === 'name' ? 'asc' : 'desc'
+  }
+
+  function sortGlyph(key: SortKey): string {
+    if (sortBy !== key) return ''
+    return sortDir === 'asc' ? ' ▲' : ' ▼'
+  }
 
   async function load(): Promise<void> {
     loading = true
     error = null
     const [r, s] = await Promise.all([window.api.vault.list(), window.api.settings.get()])
     separateByPath = s.separateVaultsByPath
+    showThumbnails = s.showVaultThumbnails
     if (r.ok) {
       entries = r.entries ?? []
       vaultDirs = r.vaultDirs ?? []
@@ -95,16 +157,6 @@
     }
   }
 
-  /** Group entries by `rootPath` preserving the configured roots order. */
-  const entriesByRoot = $derived(() => {
-    const map = new Map<string, LocalVaultEntry[]>()
-    for (const root of vaultDirs) map.set(root, [])
-    for (const e of entries) {
-      if (!map.has(e.rootPath)) map.set(e.rootPath, [])
-      map.get(e.rootPath)!.push(e)
-    }
-    return map
-  })
 </script>
 
 <section>
@@ -142,7 +194,7 @@
       Nothing downloaded yet. Hit "Download" on a Fab asset card and it will appear here.
     </div>
   {:else if separateByPath}
-    {#each [...entriesByRoot()] as [root, rows] (root)}
+    {#each [...sortedEntriesByRoot] as [root, rows] (root)}
       {#if rows.length > 0}
         <div class="group-block">
           <h3 class="group-title">
@@ -154,7 +206,7 @@
       {/if}
     {/each}
   {:else}
-    {@render tableFor(entries)}
+    {@render tableFor(sortedEntries)}
   {/if}
 </section>
 
@@ -200,10 +252,16 @@
   <table>
     <thead>
       <tr>
-        <th class="name">Name</th>
+        <th class="name sortable" onclick={() => setSort('name')}>
+          Name<span class="glyph">{sortGlyph('name')}</span>
+        </th>
         <th class="num">Files</th>
-        <th class="num">Size</th>
-        <th class="date">Last modified</th>
+        <th class="num sortable" onclick={() => setSort('size')}>
+          Size<span class="glyph">{sortGlyph('size')}</span>
+        </th>
+        <th class="date sortable" onclick={() => setSort('lastModified')}>
+          Last modified<span class="glyph">{sortGlyph('lastModified')}</span>
+        </th>
         <th class="actions"></th>
       </tr>
     </thead>
@@ -211,10 +269,23 @@
       {#each rows as e (e.path)}
         <tr class:incomplete={!e.hasData}>
           <td class="name">
-            <span class="entry-name">{e.friendlyName ?? e.name}</span>
-            {#if !e.hasData}<span class="badge">no data/</span>{/if}
-            {#if e.friendlyName}<span class="folder-hint">{e.name}</span>{/if}
-            <span class="path-hint">{e.path}</span>
+            <div class="name-row">
+              {#if showThumbnails}
+                <div class="thumb">
+                  {#if e.imageUrl}
+                    <img src={e.imageUrl} alt="" loading="lazy" />
+                  {:else}
+                    <div class="thumb-placeholder">?</div>
+                  {/if}
+                </div>
+              {/if}
+              <div class="name-text">
+                <span class="entry-name">{e.friendlyName ?? e.name}</span>
+                {#if !e.hasData}<span class="badge">no data/</span>{/if}
+                {#if e.friendlyName}<span class="folder-hint">{e.name}</span>{/if}
+                <span class="path-hint">{e.path}</span>
+              </div>
+            </div>
           </td>
           <td class="num">{e.fileCount}</td>
           <td class="num">{formatBytes(e.totalBytes)}</td>
@@ -365,6 +436,18 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
+  th.sortable {
+    cursor: pointer;
+    user-select: none;
+  }
+  th.sortable:hover {
+    color: #c084fc;
+  }
+  .glyph {
+    color: #c084fc;
+    font-size: 0.65rem;
+    margin-left: 0.15rem;
+  }
   tr:last-child td {
     border-bottom: none;
   }
@@ -498,6 +581,38 @@
   .confirm-actions button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+  }
+  .thumb {
+    flex: 0 0 auto;
+    width: 56px;
+    height: 32px;
+    border-radius: 4px;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .thumb-placeholder {
+    color: #444;
+    font-size: 0.85rem;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  .name-text {
+    min-width: 0;
+    flex: 1;
   }
   .entry-name {
     color: #e0e0e0;

@@ -139,6 +139,7 @@ export interface AppSettings {
   vaultPaths: string[]
   separateProjectsByPath: boolean
   separateVaultsByPath: boolean
+  showVaultThumbnails: boolean
   gameLaunchParams: string[]
 }
 
@@ -150,6 +151,7 @@ export interface SettingsApi {
 export interface LocalVaultEntry {
   name: string
   friendlyName: string | null
+  imageUrl: string | null
   path: string
   rootPath: string
   totalBytes: number
@@ -297,6 +299,26 @@ export interface CreateProjectResult {
   bytesCopied?: number
 }
 
+export type AddToProjectConflict = 'skip' | 'overwrite'
+
+export interface AddToProjectRequest {
+  source: string
+  sourceId: string
+  engineVersion: string | null
+  projectDir: string
+  conflict: AddToProjectConflict
+}
+
+export interface AddToProjectResult {
+  ok: boolean
+  error?: string
+  sourceContentDir?: string
+  destContentDir?: string
+  filesCopied?: number
+  filesSkipped?: number
+  bytesCopied?: number
+}
+
 export interface ProjectsApi {
   list(): Promise<ProjectsListResult>
   openInExplorer(absolutePath: string): Promise<ProjectsOpenResult>
@@ -307,6 +329,7 @@ export interface ProjectsApi {
   listEnginePlugins(engineRootPath: string): Promise<EnginePluginsResult>
   installFromVault(req: InstallFromVaultRequest): Promise<InstallFromVaultResult>
   createFromVault(req: CreateProjectRequest): Promise<CreateProjectResult>
+  addToProject(req: AddToProjectRequest): Promise<AddToProjectResult>
 }
 
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'

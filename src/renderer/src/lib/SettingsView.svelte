@@ -16,6 +16,7 @@
     vaultPaths: string[]
     separateProjectsByPath: boolean
     separateVaultsByPath: boolean
+    showVaultThumbnails: boolean
     gameLaunchParams: string[]
   }
 
@@ -268,6 +269,15 @@
           />
           Separate by path
           <span class="hint">(render one table per root path on the Vault tab)</span>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            bind:checked={settings.showVaultThumbnails}
+            onchange={markDirty}
+          />
+          Show thumbnails
+          <span class="hint">(display the asset image next to each entry — slightly heavier on big vaults)</span>
         </label>
       </div>
     </div>

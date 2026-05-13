@@ -30,6 +30,8 @@ export interface AppSettings {
   separateProjectsByPath: boolean
   /** Render the Vault tab with one table per configured root path instead of a single combined table. */
   separateVaultsByPath: boolean
+  /** Show the asset thumbnail (from Fab) next to each Vault entry. Off makes the list more compact / faster on big vaults. */
+  showVaultThumbnails: boolean
   /** Extra args appended after `-game` when the user clicks "Run" on a project. `-game` is always added implicitly. */
   gameLaunchParams: string[]
 }
@@ -77,6 +79,7 @@ export function defaultSettings(): AppSettings {
     vaultPaths: defaultVaultPaths(),
     separateProjectsByPath: false,
     separateVaultsByPath: false,
+    showVaultThumbnails: true,
     gameLaunchParams: ['-log', '-windowed', '-ResX=1280', '-ResY=720']
   }
 }
@@ -137,6 +140,10 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
       typeof partial.separateVaultsByPath === 'boolean'
         ? partial.separateVaultsByPath
         : d.separateVaultsByPath,
+    showVaultThumbnails:
+      typeof partial.showVaultThumbnails === 'boolean'
+        ? partial.showVaultThumbnails
+        : d.showVaultThumbnails,
     gameLaunchParams: partial.gameLaunchParams
       ? sanitizePaths(partial.gameLaunchParams)
       : d.gameLaunchParams

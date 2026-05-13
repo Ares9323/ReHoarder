@@ -81,12 +81,15 @@ export interface AppSettings {
   vaultPaths: string[]
   separateProjectsByPath: boolean
   separateVaultsByPath: boolean
+  showVaultThumbnails: boolean
   gameLaunchParams: string[]
 }
 
 export interface LocalVaultEntry {
   name: string
   friendlyName: string | null
+  /** Thumbnail URL, looked up via the corresponding `assets` row when there's a download record. `null` when no match (legacy folder, hand-copied content). */
+  imageUrl: string | null
   path: string
   rootPath: string
   totalBytes: number
@@ -220,6 +223,26 @@ export interface CreateProjectResult {
   projectDir?: string
   uprojectPath?: string
   filesCopied?: number
+  bytesCopied?: number
+}
+
+export type AddToProjectConflict = 'skip' | 'overwrite'
+
+export interface AddToProjectRequest {
+  source: string
+  sourceId: string
+  engineVersion: string | null
+  projectDir: string
+  conflict: AddToProjectConflict
+}
+
+export interface AddToProjectResult {
+  ok: boolean
+  error?: string
+  sourceContentDir?: string
+  destContentDir?: string
+  filesCopied?: number
+  filesSkipped?: number
   bytesCopied?: number
 }
 
@@ -373,7 +396,9 @@ const api = {
     installFromVault: (req: InstallFromVaultRequest): Promise<InstallFromVaultResult> =>
       ipcRenderer.invoke('projects:install-from-vault', req),
     createFromVault: (req: CreateProjectRequest): Promise<CreateProjectResult> =>
-      ipcRenderer.invoke('projects:create-from-vault', req)
+      ipcRenderer.invoke('projects:create-from-vault', req),
+    addToProject: (req: AddToProjectRequest): Promise<AddToProjectResult> =>
+      ipcRenderer.invoke('projects:add-to-project', req)
   },
   downloads: {
     list: (): Promise<DownloadsListResult> => ipcRenderer.invoke('downloads:list'),
