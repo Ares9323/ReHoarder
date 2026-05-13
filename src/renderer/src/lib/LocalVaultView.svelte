@@ -62,6 +62,39 @@
     await window.api.vault.openInExplorer(target)
   }
 
+  /** Confirm-dialog state. Holds the entry the user wants to delete; null = closed. */
+  let pendingDelete = $state<LocalVaultEntry | null>(null)
+  let deleting = $state(false)
+  let deleteError = $state<string | null>(null)
+
+  function askDelete(entry: LocalVaultEntry): void {
+    pendingDelete = entry
+    deleteError = null
+  }
+  function cancelDelete(): void {
+    if (deleting) return
+    pendingDelete = null
+    deleteError = null
+  }
+  async function confirmDelete(): Promise<void> {
+    if (!pendingDelete) return
+    deleting = true
+    deleteError = null
+    try {
+      const r = await window.api.vault.deleteEntry(pendingDelete.path)
+      if (!r.ok) {
+        deleteError = r.error ?? 'Delete failed'
+        return
+      }
+      pendingDelete = null
+      await load()
+    } catch (err) {
+      deleteError = err instanceof Error ? err.message : String(err)
+    } finally {
+      deleting = false
+    }
+  }
+
   /** Group entries by `rootPath` preserving the configured roots order. */
   const entriesByRoot = $derived(() => {
     const map = new Map<string, LocalVaultEntry[]>()
@@ -125,6 +158,44 @@
   {/if}
 </section>
 
+{#if pendingDelete}
+  {@const target = pendingDelete}
+  <div
+    class="confirm-backdrop"
+    role="presentation"
+    onclick={(e) => {
+      if ((e.target as HTMLElement).classList.contains('confirm-backdrop')) cancelDelete()
+    }}
+  >
+    <div class="confirm-popup" role="dialog" aria-modal="true" aria-label="Delete vault entry">
+      <h3>Delete from vault?</h3>
+      <p>
+        This will permanently remove the folder
+        <code>{target.path}</code>
+        ({formatBytes(target.totalBytes)}, {target.fileCount} files) from disk.
+        The corresponding download record will be cleared so the asset is no
+        longer marked as <em>downloaded</em> on the Assets tab.
+      </p>
+      {#if deleteError}
+        <div class="confirm-error">{deleteError}</div>
+      {/if}
+      <div class="confirm-actions">
+        <button type="button" class="ghost" onclick={cancelDelete} disabled={deleting}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="danger-primary"
+          onclick={confirmDelete}
+          disabled={deleting}
+        >
+          {deleting ? 'Deleting…' : 'Delete'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#snippet tableFor(rows: LocalVaultEntry[])}
   <table>
     <thead>
@@ -150,6 +221,15 @@
           <td class="date">{formatDate(e.lastModified)}</td>
           <td class="actions">
             <button type="button" onclick={() => reveal(e)}>Open</button>
+            <button
+              type="button"
+              class="danger icon-btn"
+              onclick={() => askDelete(e)}
+              aria-label="Delete from vault"
+              title="Delete from vault"
+            >
+              🗑
+            </button>
           </td>
         </tr>
       {/each}
@@ -308,6 +388,7 @@
   .actions {
     width: 1%;
     text-align: right;
+    white-space: nowrap;
   }
   .actions button {
     background: transparent;
@@ -317,10 +398,106 @@
     padding: 0.2rem 0.6rem;
     font-size: 0.72rem;
     cursor: pointer;
+    font-family: inherit;
+  }
+  .actions button + button {
+    margin-left: 0.3rem;
   }
   .actions button:hover {
     color: #fff;
     border-color: #555;
+  }
+  .actions button.danger {
+    color: #fca5a5;
+    border-color: #5a2727;
+  }
+  .actions button.danger:hover {
+    color: #fff;
+    background: #3a1f1f;
+    border-color: #7a3838;
+  }
+  .actions button.icon-btn {
+    padding: 0.2rem 0.45rem;
+    font-size: 0.9rem;
+    line-height: 1;
+  }
+
+  .confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 250;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .confirm-popup {
+    background: #1a1a1a;
+    border: 1px solid #5a2727;
+    border-radius: 10px;
+    padding: 1.2rem 1.3rem;
+    max-width: 480px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  }
+  .confirm-popup h3 {
+    margin: 0 0 0.6rem;
+    color: #fca5a5;
+    font-size: 0.95rem;
+  }
+  .confirm-popup p {
+    margin: 0 0 0.85rem;
+    color: #c0c0c0;
+    font-size: 0.82rem;
+    line-height: 1.5;
+  }
+  .confirm-popup code {
+    color: #d0d0d0;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.75rem;
+    word-break: break-all;
+  }
+  .confirm-error {
+    background: #3a1f1f;
+    border: 1px solid #5a2727;
+    color: #fca5a5;
+    border-radius: 4px;
+    padding: 0.4rem 0.7rem;
+    font-size: 0.78rem;
+    margin-bottom: 0.7rem;
+  }
+  .confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+  .confirm-actions button {
+    border: none;
+    border-radius: 5px;
+    padding: 0.45rem 1.1rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .confirm-actions .ghost {
+    background: transparent;
+    color: #c0c0c0;
+    border: 1px solid #444;
+  }
+  .confirm-actions .ghost:hover:not(:disabled) {
+    color: #fff;
+    border-color: #666;
+  }
+  .confirm-actions .danger-primary {
+    background: linear-gradient(135deg, #fca5a5, #ef4444);
+    color: #1a1a1a;
+    font-weight: 600;
+  }
+  .confirm-actions .danger-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+  .confirm-actions button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .entry-name {
     color: #e0e0e0;

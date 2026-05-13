@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CreateProjectDialog from './CreateProjectDialog.svelte'
+
   interface EngineLite {
     name: string
     path: string
@@ -31,6 +33,8 @@
     knownProjects: ProjectLite[]
     /** What Fab thinks this is. Drives whether install-in-engine/project is offered or whether we suggest project-pack / project-creation workflows. */
     assetKind?: 'plugin' | 'project' | 'pack' | 'other'
+    /** Configured project root folders (Settings → Project paths). Drives the Create-project parent-dir selector. */
+    projectPaths?: string[]
     /** @deprecated kept for backward-compat; same info is encoded in assetKind === 'plugin'. */
     isPlugin: boolean
     onClose: () => void
@@ -46,9 +50,12 @@
     installedEngines,
     knownProjects,
     assetKind,
+    projectPaths = [],
     isPlugin,
     onClose
   }: Props = $props()
+
+  let createDialogOpen = $state(false)
 
   /** Effective kind, with the legacy `isPlugin` boolean as fallback for older callers. */
   const kind = $derived<'plugin' | 'project' | 'pack' | 'other'>(
@@ -271,13 +278,25 @@
       <section>
         <h3>Create project</h3>
         <p class="hint">
-          Full Unreal projects need to be unpacked into a new project folder under one
-          of your <strong>Project paths</strong>. Coming soon — for now use
-          <em>Open downloaded folder</em> and copy the contents by hand.
+          Copy this build into a fresh project folder under one of your
+          <strong>Project paths</strong> and rename the <code>.uproject</code> to a name you choose.
+          Requires the asset to be in the local vault.
         </p>
-        <button type="button" class="row-btn" disabled>
+        <button
+          type="button"
+          class="row-btn"
+          disabled={actionBusy || !isAlreadyInVault(requestedVersion) || projectPaths.length === 0}
+          title={!isAlreadyInVault(requestedVersion)
+            ? 'Asset is not in the local vault yet — download it first.'
+            : projectPaths.length === 0
+              ? 'No project paths configured.'
+              : 'Pick name + parent and create a new project from this build'}
+          onclick={() => (createDialogOpen = true)}
+        >
           <span class="row-main">Create project from this build</span>
-          <span class="row-meta">soon</span>
+          {#if !isAlreadyInVault(requestedVersion)}
+            <span class="row-meta">download first</span>
+          {/if}
         </button>
       </section>
     {/if}
@@ -391,6 +410,18 @@
     </section>
   </div>
 </div>
+
+{#if createDialogOpen}
+  <CreateProjectDialog
+    {assetTitle}
+    {assetSource}
+    {assetSourceId}
+    engineVersion={requestedVersion ?? null}
+    {projectPaths}
+    onClose={() => (createDialogOpen = false)}
+    onCreated={() => onClose()}
+  />
+{/if}
 
 <style>
   .backdrop {

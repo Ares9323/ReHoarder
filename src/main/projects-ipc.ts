@@ -11,6 +11,7 @@ import {
   type EnginePluginInfo
 } from './projects-descriptor'
 import { installFromVault, type InstallFromVaultResult } from './projects-install'
+import { createProjectFromVault, type CreateProjectResult } from './projects-create'
 import type { DownloadsRepo } from './db/downloads-repo'
 import type { SettingsStore } from './settings'
 
@@ -248,6 +249,49 @@ export function registerProjectsIpc(
         }
       }
       return await installFromVault(downloadsRepo, { ...req, targetPath: resolved })
+    }
+  )
+
+  ipcMain.handle(
+    'projects:create-from-vault',
+    async (
+      _e,
+      req: {
+        source: string
+        sourceId: string
+        engineVersion: string | null
+        name: string
+        parentDir: string
+      }
+    ): Promise<CreateProjectResult> => {
+      const cfg = settings.load()
+      const resolvedParent = path.resolve(req.parentDir)
+      const allowed = cfg.projectPaths.some((root) =>
+        resolvedParent === path.resolve(root) ||
+        resolvedParent.startsWith(path.resolve(root) + path.sep)
+      )
+      if (!allowed) {
+        return { ok: false, error: 'Parent path is outside the configured project roots' }
+      }
+      // Defence: enforce a safe folder name so the user can't path-traverse out.
+      const safeName = req.name.replace(/[/\\:*?"<>|]/g, '_').trim()
+      if (!safeName) {
+        return { ok: false, error: 'Project name is empty after sanitisation' }
+      }
+      if (/^\d/.test(safeName)) {
+        // Unreal generates C++ identifiers from the project name; identifiers
+        // can't start with a digit. Catch this here too even though the dialog
+        // already blocks it.
+        return {
+          ok: false,
+          error: 'Project name cannot start with a digit (Unreal C++ identifier rules).'
+        }
+      }
+      return await createProjectFromVault(downloadsRepo, {
+        ...req,
+        name: safeName,
+        parentDir: resolvedParent
+      })
     }
   )
 

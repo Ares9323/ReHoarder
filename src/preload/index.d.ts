@@ -170,9 +170,16 @@ export interface VaultOpenResult {
   error?: string
 }
 
+export interface VaultDeleteResult {
+  ok: boolean
+  error?: string
+  downloadRowsRemoved?: number
+}
+
 export interface VaultApi {
   list(): Promise<VaultListResult>
   openInExplorer(absolutePath: string): Promise<VaultOpenResult>
+  deleteEntry(absolutePath: string): Promise<VaultDeleteResult>
 }
 
 export interface EngineInfo {
@@ -273,6 +280,23 @@ export interface InstallFromVaultResult {
   sourceVaultPath?: string
 }
 
+export interface CreateProjectRequest {
+  source: string
+  sourceId: string
+  engineVersion: string | null
+  name: string
+  parentDir: string
+}
+
+export interface CreateProjectResult {
+  ok: boolean
+  error?: string
+  projectDir?: string
+  uprojectPath?: string
+  filesCopied?: number
+  bytesCopied?: number
+}
+
 export interface ProjectsApi {
   list(): Promise<ProjectsListResult>
   openInExplorer(absolutePath: string): Promise<ProjectsOpenResult>
@@ -282,6 +306,7 @@ export interface ProjectsApi {
   writeDescriptor(uprojectPath: string, content: unknown): Promise<ProjectDescriptorWriteResult>
   listEnginePlugins(engineRootPath: string): Promise<EnginePluginsResult>
   installFromVault(req: InstallFromVaultRequest): Promise<InstallFromVaultResult>
+  createFromVault(req: CreateProjectRequest): Promise<CreateProjectResult>
 }
 
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'

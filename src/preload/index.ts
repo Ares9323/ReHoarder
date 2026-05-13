@@ -107,6 +107,12 @@ export interface VaultOpenResult {
   error?: string
 }
 
+export interface VaultDeleteResult {
+  ok: boolean
+  error?: string
+  downloadRowsRemoved?: number
+}
+
 export interface EngineInfo {
   name: string
   path: string
@@ -198,6 +204,23 @@ export interface InstallFromVaultRequest {
   engineVersion: string | null
   targetPath: string
   kind: 'engine' | 'project'
+}
+
+export interface CreateProjectRequest {
+  source: string
+  sourceId: string
+  engineVersion: string | null
+  name: string
+  parentDir: string
+}
+
+export interface CreateProjectResult {
+  ok: boolean
+  error?: string
+  projectDir?: string
+  uprojectPath?: string
+  filesCopied?: number
+  bytesCopied?: number
 }
 
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
@@ -321,7 +344,9 @@ const api = {
   vault: {
     list: (): Promise<VaultListResult> => ipcRenderer.invoke('vault:list'),
     openInExplorer: (absolutePath: string): Promise<VaultOpenResult> =>
-      ipcRenderer.invoke('vault:open-in-explorer', absolutePath)
+      ipcRenderer.invoke('vault:open-in-explorer', absolutePath),
+    deleteEntry: (absolutePath: string): Promise<VaultDeleteResult> =>
+      ipcRenderer.invoke('vault:delete', absolutePath)
   },
   engines: {
     list: (): Promise<EnginesListResult> => ipcRenderer.invoke('engines:list'),
@@ -346,7 +371,9 @@ const api = {
     listEnginePlugins: (engineRootPath: string): Promise<EnginePluginsResult> =>
       ipcRenderer.invoke('projects:list-engine-plugins', engineRootPath),
     installFromVault: (req: InstallFromVaultRequest): Promise<InstallFromVaultResult> =>
-      ipcRenderer.invoke('projects:install-from-vault', req)
+      ipcRenderer.invoke('projects:install-from-vault', req),
+    createFromVault: (req: CreateProjectRequest): Promise<CreateProjectResult> =>
+      ipcRenderer.invoke('projects:create-from-vault', req)
   },
   downloads: {
     list: (): Promise<DownloadsListResult> => ipcRenderer.invoke('downloads:list'),

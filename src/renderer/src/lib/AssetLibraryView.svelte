@@ -94,6 +94,8 @@
   }
   let installedEngines = $state<EngineLite[]>([])
   let knownProjects = $state<ProjectLite[]>([])
+  /** Configured `projectPaths` from settings — passed into Custom Install for the Create-project flow. */
+  let projectPaths = $state<string[]>([])
 
   async function loadInstallTargets(): Promise<void> {
     try {
@@ -121,6 +123,7 @@
           projectDir: p.projectDir,
           engineAssociation: p.engineAssociation
         }))
+        projectPaths = pRes.scannedPaths ?? []
       }
     } catch {
       // Best-effort; the UI degrades to "always show Custom" if engines aren't known.
@@ -173,51 +176,96 @@
    * Re-fetched on mount and on every `downloads:state-changed` broadcast, so
    * a brand-new "done" row reflects in the cards without an explicit reload.
    */
-  let downloadedByAsset = $state<Map<string, Set<string>>>(new Map())
+  // Raw `downloads.list()` snapshot kept in state so we can derive multiple
+  // views off it: completed (downloaded chips), in-flight progress, build
+  // versions for update detection. `onStateChanged` replaces the whole array;
+  // `onProgress` patches one row in place to keep progress smooth.
+  type DLRow = Awaited<ReturnType<typeof window.api.downloads.list>>['rows'][number]
+  let allDownloads = $state<DLRow[]>([])
+  async function loadAllDownloads(): Promise<void> {
+    try {
+      const r = await window.api.downloads.list()
+      allDownloads = r.rows
+    } catch {
+      // best-effort; chips fall back to "no download status" styling
+    }
+  }
+  onMount(() => {
+    void loadAllDownloads()
+    const offState = window.api.downloads.onStateChanged((rows) => {
+      allDownloads = rows
+    })
+    const offProgress = window.api.downloads.onProgress((row) => {
+      const idx = allDownloads.findIndex((r) => r.id === row.id)
+      if (idx >= 0) {
+        const next = allDownloads.slice()
+        next[idx] = row
+        allDownloads = next
+      }
+    })
+    return () => {
+      offState()
+      offProgress()
+    }
+  })
+
+  /** `<source>:<sourceId>` → set of completed engine version slugs (`'*'` for generic / Fab Other). */
+  const downloadedByAsset = $derived.by(() => {
+    const map = new Map<string, Set<string>>()
+    for (const row of allDownloads) {
+      if (row.status !== 'done') continue
+      const key = `${row.source}:${row.sourceId}`
+      let bucket = map.get(key)
+      if (!bucket) {
+        bucket = new Set<string>()
+        map.set(key, bucket)
+      }
+      bucket.add(row.engineVersion ?? '*')
+    }
+    return map
+  })
+
   /**
    * Map `<source>:<sourceId>` → map of engine version slug → `buildVersion`
    * of the binary that was unpacked. Lets us detect "update available" by
    * comparing with `projectVersions[i].buildVersion` in the current raw asset.
-   * Keyed by the same sentinel `'*'` as `downloadedByAsset` for non-versioned
-   * downloads (Fab Other).
    */
-  let downloadedBuildVersions = $state<Map<string, Map<string, string>>>(new Map())
-  async function loadDownloadedMap(): Promise<void> {
-    try {
-      const r = await window.api.downloads.list()
-      const versionMap = new Map<string, Set<string>>()
-      const buildMap = new Map<string, Map<string, string>>()
-      for (const row of r.rows) {
-        if (row.status !== 'done') continue
-        const key = `${row.source}:${row.sourceId}`
-        const verSlug = row.engineVersion ?? '*'
-        let versions = versionMap.get(key)
-        if (!versions) {
-          versions = new Set<string>()
-          versionMap.set(key, versions)
-        }
-        versions.add(verSlug)
-        if (row.buildVersion) {
-          let builds = buildMap.get(key)
-          if (!builds) {
-            builds = new Map<string, string>()
-            buildMap.set(key, builds)
-          }
-          builds.set(verSlug, row.buildVersion)
-        }
+  const downloadedBuildVersions = $derived.by(() => {
+    const map = new Map<string, Map<string, string>>()
+    for (const row of allDownloads) {
+      if (row.status !== 'done' || !row.buildVersion) continue
+      const key = `${row.source}:${row.sourceId}`
+      let builds = map.get(key)
+      if (!builds) {
+        builds = new Map<string, string>()
+        map.set(key, builds)
       }
-      downloadedByAsset = versionMap
-      downloadedBuildVersions = buildMap
-    } catch {
-      // best-effort; the chips just fall back to "no download status" styling
+      builds.set(row.engineVersion ?? '*', row.buildVersion)
     }
-  }
-  onMount(() => {
-    void loadDownloadedMap()
-    const off = window.api.downloads.onStateChanged(() => {
-      void loadDownloadedMap()
-    })
-    return off
+    return map
+  })
+
+  /** In-flight downloads keyed by `<source>:<sourceId>`. Drives the per-card progress bar. */
+  const activeProgressByAsset = $derived.by(() => {
+    const map = new Map<string, { bytesDone: number; bytesTotal: number; status: string }>()
+    for (const row of allDownloads) {
+      if (row.status !== 'running' && row.status !== 'queued') continue
+      const key = `${row.source}:${row.sourceId}`
+      // Prefer the row with the highest progress (most recent for that asset).
+      const cur = map.get(key)
+      if (
+        !cur ||
+        (row.status === 'running' && cur.status !== 'running') ||
+        row.bytesDone > cur.bytesDone
+      ) {
+        map.set(key, {
+          bytesDone: row.bytesDone,
+          bytesTotal: row.bytesTotal,
+          status: row.status
+        })
+      }
+    }
+    return map
   })
 
   /**
@@ -254,6 +302,12 @@
       ),
       buildVersion: typeof pv.buildVersion === 'string' ? pv.buildVersion : null
     }))
+  }
+
+  function downloadProgressFor(
+    asset: AssetRow
+  ): { bytesDone: number; bytesTotal: number; status: string } | null {
+    return activeProgressByAsset.get(`${asset.source}:${asset.sourceId}`) ?? null
   }
 
   function downloadedVersionsFor(asset: AssetRow): string[] {
@@ -436,6 +490,7 @@
       installedEngineVersions={installedEngineVersions}
       downloadedVersions={downloadedVersionsFor(a)}
       updatableVersions={updatableVersionsFor(a)}
+      downloadProgress={downloadProgressFor(a)}
       assetKind={assetKindFor(a)}
       isPlugin={plugin}
       onToggleHidden={() => onToggleHidden(a)}
@@ -466,6 +521,7 @@
     downloadedVersions={downloadedVersionsFor(customMenuAsset)}
     installedEngines={installedEngines}
     knownProjects={knownProjects}
+    projectPaths={projectPaths}
     assetKind={assetKindFor(customMenuAsset)}
     isPlugin={isPlugin(customMenuAsset)}
     onClose={closeCustomInstall}

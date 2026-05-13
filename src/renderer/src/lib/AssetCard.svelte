@@ -26,6 +26,8 @@
     updatableVersions?: string[]
     /** What Fab calls the asset — drives the tooltip wording on already-downloaded chips. */
     assetKind?: 'plugin' | 'project' | 'pack' | 'other'
+    /** Live download status (running/queued); when set, renders a progress strip along the bottom of the card. */
+    downloadProgress?: { bytesDone: number; bytesTotal: number; status: string } | null
     /** When true, plugin auto-install logic kicks in (clicks on installed versions go through the engine plugin path). */
     isPlugin?: boolean
     onToggleHidden: () => void
@@ -51,6 +53,7 @@
     downloadedVersions = [],
     updatableVersions = [],
     assetKind = 'other',
+    downloadProgress = null,
     isPlugin = false,
     onToggleHidden,
     onToggleBookmark,
@@ -130,6 +133,33 @@
   function setVersionState(v: string, s: DownloadState): void {
     versionStates = { ...versionStates, [v]: s }
   }
+
+  /**
+   * When a download we kicked off ends up in `downloadedVersions` (= the
+   * library store's done-set), reset the local chip state back to `idle`.
+   * Without this the chip stays in its `queued`/`busy` style forever — the
+   * `ev-downloaded` class is gated on `st.kind === 'idle'`, so the sibling
+   * versions of the same projectVersion would flip green while the chip
+   * the user actually clicked remained "queued".
+   */
+  $effect(() => {
+    for (const v of downloadedVersions) {
+      const cur = versionStates[v]
+      if (cur && (cur.kind === 'queued' || cur.kind === 'busy')) {
+        setVersionState(v, { kind: 'idle' })
+      }
+    }
+  })
+
+  /** Same idea but for the single Download chip (no per-version split). */
+  $effect(() => {
+    if (
+      downloadedVersions.includes('*') &&
+      (downloadState.kind === 'queued' || downloadState.kind === 'busy')
+    ) {
+      downloadState = { kind: 'idle' }
+    }
+  })
 
   let downloadState = $state<DownloadState>({ kind: 'idle' })
 
@@ -222,6 +252,11 @@
       default:
         return `Already in vault — click to re-download (engine ${version})`
     }
+  }
+
+  function formatPct(p: { bytesDone: number; bytesTotal: number }): string {
+    if (p.bytesTotal <= 0) return '0%'
+    return Math.min(100, Math.round((p.bytesDone / p.bytesTotal) * 100)) + '%'
   }
 
   function downloadedTooltipGeneric(): string {
@@ -331,12 +366,28 @@
           type="button"
           class="gear-chip clickable"
           title="Custom install (choose engine, project, or download only)"
-          onclick={onCustomInstall}
+          onclick={() => onCustomInstall?.()}
           aria-label="Custom install"
         >⚙</button>
       {/if}
     </div>
   </div>
+  {#if downloadProgress && (downloadProgress.status === 'running' || downloadProgress.status === 'queued')}
+    <div
+      class="dl-progress"
+      class:queued={downloadProgress.status === 'queued'}
+      title={downloadProgress.status === 'queued'
+        ? 'Queued for download'
+        : `Downloading… ${formatPct(downloadProgress)}`}
+    >
+      {#if downloadProgress.status === 'running' && downloadProgress.bytesTotal > 0}
+        <div
+          class="dl-progress-fill"
+          style:width="{Math.min(100, (downloadProgress.bytesDone / downloadProgress.bytesTotal) * 100)}%"
+        ></div>
+      {/if}
+    </div>
+  {/if}
 </article>
 
 {#if menuOpen}
@@ -363,6 +414,41 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    position: relative;
+  }
+
+  /* Progress strip anchored at the bottom of the card while a download for
+     this asset is queued or running. The fill tracks `bytesDone/bytesTotal`;
+     `queued` state shows an indeterminate pulsing bar instead, since we don't
+     have a byte total yet. */
+  .dl-progress {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 3px;
+    background: rgba(192, 132, 252, 0.18);
+    overflow: hidden;
+  }
+  .dl-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #c084fc, #f472b6);
+    transition: width 0.25s ease;
+  }
+  .dl-progress.queued::after {
+    content: '';
+    display: block;
+    position: absolute;
+    top: 0;
+    left: -40%;
+    width: 40%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, #c084fc, transparent);
+    animation: dl-indeterminate 1.2s linear infinite;
+  }
+  @keyframes dl-indeterminate {
+    0% { left: -40%; }
+    100% { left: 100%; }
   }
 
   article.hidden-card {
