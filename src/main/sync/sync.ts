@@ -7,7 +7,9 @@ import {
   normalizeVaultAsset,
   normalizeFabAsset,
   normalizeFabOtherAsset,
-  isUnrealEngineListing
+  isUnrealEngineListing,
+  extractFabUeCategories,
+  extractFabOtherCategories
 } from './normalize'
 
 export interface SyncSourceResult {
@@ -188,6 +190,7 @@ export class Sync {
           }
           if (!knownFabIds.has(item.assetId)) pageNew += 1
           this.repo.upsert(normalizeFabAsset(item, now))
+          this.repo.replaceTags('fab', item.assetId, extractFabUeCategories(item))
           result.fab.persisted += 1
         }
         onLog(
@@ -224,6 +227,7 @@ export class Sync {
           pageProcessable += 1
           if (!knownFabIds.has(listing.uid)) pageNew += 1
           this.repo.upsert(normalizeFabOtherAsset(listing, now))
+          this.repo.replaceTags('fab', listing.uid, extractFabOtherCategories(listing))
           result.fab.persisted += 1
         }
         onLog(

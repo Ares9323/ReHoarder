@@ -76,12 +76,18 @@
           lastSync={library.lastSync}
           search={library.search}
           sourceFilter={library.sourceFilter}
+          listingTypeFilter={library.listingTypeFilter}
+          availableListingTypes={library.availableListingTypes}
+          categoryFilter={library.categoryFilter}
+          availableCategories={library.availableCategories}
           syncBusy={library.syncBusy}
           progressText={progressText()}
           syncError={library.syncError}
           syncLog={library.syncLog}
           onSearch={(s) => library.setSearch(s)}
           onSourceFilter={(f) => library.setSourceFilter(f)}
+          onListingTypeFilter={(t) => library.setListingTypeFilter(t)}
+          onCategoryFilter={(c) => library.setCategoryFilter(c)}
           onSyncNow={() => library.startSync()}
           onToggleHidden={(a) => library.setHidden(a, !a.hidden)}
           onToggleBookmark={(a) => library.setBookmarked(a, !a.bookmarked)}

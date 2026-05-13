@@ -25,6 +25,7 @@ export interface AssetRow {
   source: AssetSource
   sourceId: string
   subSource: AssetSubSource
+  listingType: string | null
   title: string
   description: string | null
   imageUrl: string | null
@@ -39,6 +40,8 @@ export interface AssetRow {
 export interface LibraryQuery {
   source?: AssetSource
   subSource?: 'fab-ue' | 'fab-other'
+  listingType?: string
+  category?: string
   search?: string
   includeHidden?: boolean
   onlyHidden?: boolean
@@ -48,6 +51,8 @@ export interface LibraryQuery {
 export interface LibraryListResult {
   assets: AssetRow[]
   countsBySource: Record<string, number>
+  availableListingTypes: string[]
+  availableCategories: string[]
   lastSync: Record<string, { at: number; status: string; error: string | null }>
 }
 

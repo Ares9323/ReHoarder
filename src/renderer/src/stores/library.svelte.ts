@@ -20,6 +20,7 @@ interface AssetRow {
   source: AssetSource
   sourceId: string
   subSource: AssetSubSource
+  listingType: string | null
   title: string
   description: string | null
   imageUrl: string | null
@@ -34,6 +35,8 @@ interface AssetRow {
 interface LibraryListResult {
   assets: AssetRow[]
   countsBySource: Record<string, number>
+  availableListingTypes: string[]
+  availableCategories: string[]
   lastSync: Record<string, { at: number; status: string; error: string | null }>
 }
 
@@ -50,9 +53,15 @@ interface SyncProgress {
 export interface LibraryStore {
   readonly assets: AssetRow[]
   readonly countsBySource: Record<string, number>
+  readonly availableListingTypes: string[]
+  readonly availableCategories: string[]
   readonly lastSync: Record<string, { at: number; status: string; error: string | null }>
   readonly search: string
   readonly sourceFilter: SourceFilter
+  /** `''` = no filter; otherwise a slug like `'3d-model'`. */
+  readonly listingTypeFilter: string
+  /** `''` = no filter; otherwise a category slug from `availableCategories`. */
+  readonly categoryFilter: string
   readonly syncBusy: boolean
   readonly syncProgress: SyncProgress | null
   readonly syncError: string | null
@@ -63,6 +72,8 @@ export interface LibraryStore {
   readonly initialLoading: boolean
   setSearch(s: string): void
   setSourceFilter(f: SourceFilter): void
+  setListingTypeFilter(t: string): void
+  setCategoryFilter(c: string): void
   refresh(): Promise<void>
   setHidden(asset: AssetRow, hidden: boolean): Promise<void>
   setBookmarked(asset: AssetRow, bookmarked: boolean): Promise<void>
@@ -73,9 +84,13 @@ export interface LibraryStore {
 export function createLibraryStore(): LibraryStore {
   let assets = $state<AssetRow[]>([])
   let countsBySource = $state<Record<string, number>>({})
+  let availableListingTypes = $state<string[]>([])
+  let availableCategories = $state<string[]>([])
   let lastSync = $state<Record<string, { at: number; status: string; error: string | null }>>({})
   let search = $state('')
   let sourceFilter = $state<SourceFilter>('all')
+  let listingTypeFilter = $state('')
+  let categoryFilter = $state('')
   let syncBusy = $state(false)
   let syncProgress = $state<SyncProgress | null>(null)
   let syncError = $state<string | null>(null)
@@ -102,12 +117,20 @@ export function createLibraryStore(): LibraryStore {
   function buildQuery(): {
     source?: AssetSource
     subSource?: 'fab-ue' | 'fab-other'
+    listingType?: string
+    category?: string
     search?: string
     includeHidden?: boolean
     onlyHidden?: boolean
     onlyBookmarked?: boolean
   } {
-    const base = { search: search.trim() === '' ? undefined : search }
+    const base: {
+      search?: string
+      listingType?: string
+      category?: string
+    } = { search: search.trim() === '' ? undefined : search }
+    if (listingTypeFilter !== '') base.listingType = listingTypeFilter
+    if (categoryFilter !== '') base.category = categoryFilter
     switch (sourceFilter) {
       case 'all':
         return { ...base }
@@ -129,6 +152,8 @@ export function createLibraryStore(): LibraryStore {
       const result: LibraryListResult = await window.api.library.list(buildQuery())
       assets = result.assets
       countsBySource = result.countsBySource
+      availableListingTypes = result.availableListingTypes
+      availableCategories = result.availableCategories
       lastSync = result.lastSync
     } finally {
       initialLoading = false
@@ -142,6 +167,12 @@ export function createLibraryStore(): LibraryStore {
     get countsBySource() {
       return countsBySource
     },
+    get availableListingTypes() {
+      return availableListingTypes
+    },
+    get availableCategories() {
+      return availableCategories
+    },
     get lastSync() {
       return lastSync
     },
@@ -150,6 +181,12 @@ export function createLibraryStore(): LibraryStore {
     },
     get sourceFilter() {
       return sourceFilter
+    },
+    get listingTypeFilter() {
+      return listingTypeFilter
+    },
+    get categoryFilter() {
+      return categoryFilter
     },
     get syncBusy() {
       return syncBusy
@@ -178,6 +215,14 @@ export function createLibraryStore(): LibraryStore {
     },
     setSourceFilter(f) {
       sourceFilter = f
+      void refresh()
+    },
+    setListingTypeFilter(t) {
+      listingTypeFilter = t
+      void refresh()
+    },
+    setCategoryFilter(c) {
+      categoryFilter = c
       void refresh()
     },
     refresh,

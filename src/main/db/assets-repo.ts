@@ -8,6 +8,8 @@ export interface AssetRow {
   source: AssetSource
   sourceId: string
   subSource: AssetSubSource
+  /** Fab "listing type" slug (`3d-model`, `animation`, …) — null for Vault. */
+  listingType: string | null
   title: string
   description: string | null
   imageUrl: string | null
@@ -23,6 +25,10 @@ export interface ListFilters {
   source?: AssetSource
   /** When set, narrows `fab` to either `fab-ue` or `fab-other`. Ignored for other sources. */
   subSource?: 'fab-ue' | 'fab-other'
+  /** Fab listing-type slug (e.g. `3d-model`). When set, rows without that listing_type are excluded. */
+  listingType?: string
+  /** Fab category slug (e.g. `abandoned`). When set, only assets with that category in `asset_tags` are returned. */
+  category?: string
   search?: string
   /** If `true`, hidden rows are included in the result. Default `false`. */
   includeHidden?: boolean
@@ -36,6 +42,7 @@ interface AssetRowDb {
   source: string
   source_id: string
   sub_source: string | null
+  listing_type: string | null
   title: string
   description: string | null
   image_url: string | null
@@ -54,6 +61,7 @@ function fromDb(r: AssetRowDb): AssetRow {
     source: r.source as AssetSource,
     sourceId: r.source_id,
     subSource: sub,
+    listingType: r.listing_type,
     title: r.title,
     description: r.description,
     imageUrl: r.image_url,
@@ -85,10 +93,11 @@ export class AssetsRepo {
     // `sub_source` IS refreshed: sync derives it from the raw payload and
     // overwriting keeps it consistent with the source endpoint the row came from.
     this.upsertStmt = db.prepare(`
-      INSERT INTO assets (source, source_id, sub_source, title, description, image_url, product_url, owned_at, hidden, bookmarked, raw, synced_at)
-      VALUES (@source, @source_id, @sub_source, @title, @description, @image_url, @product_url, @owned_at, @hidden, @bookmarked, @raw, @synced_at)
+      INSERT INTO assets (source, source_id, sub_source, listing_type, title, description, image_url, product_url, owned_at, hidden, bookmarked, raw, synced_at)
+      VALUES (@source, @source_id, @sub_source, @listing_type, @title, @description, @image_url, @product_url, @owned_at, @hidden, @bookmarked, @raw, @synced_at)
       ON CONFLICT(source, source_id) DO UPDATE SET
         sub_source = excluded.sub_source,
+        listing_type = excluded.listing_type,
         title = excluded.title,
         description = excluded.description,
         image_url = excluded.image_url,
@@ -125,6 +134,7 @@ export class AssetsRepo {
       source: asset.source,
       source_id: asset.sourceId,
       sub_source: asset.subSource,
+      listing_type: asset.listingType,
       title: asset.title,
       description: asset.description,
       image_url: asset.imageUrl,
@@ -162,6 +172,21 @@ export class AssetsRepo {
       clauses.push('sub_source = ?')
       params.push(filters.subSource)
     }
+    if (filters.listingType) {
+      clauses.push('listing_type = ?')
+      params.push(filters.listingType)
+    }
+    if (filters.category) {
+      clauses.push(
+        `EXISTS (
+           SELECT 1 FROM asset_tags AS t
+            WHERE t.source = assets.source
+              AND t.source_id = assets.source_id
+              AND t.tag = ?
+         )`
+      )
+      params.push(filters.category)
+    }
     if (filters.search && filters.search.trim().length > 0) {
       clauses.push("(LOWER(title) LIKE ? OR LOWER(IFNULL(description, '')) LIKE ?)")
       const like = `%${filters.search.trim().toLowerCase()}%`
@@ -184,6 +209,57 @@ export class AssetsRepo {
 
   countAll(): number {
     return (this.countAllStmt.get() as { n: number }).n
+  }
+
+  /** Distinct, non-null `listing_type` values currently present in `assets`, sorted alphabetically. */
+  availableListingTypes(): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT listing_type AS t
+           FROM assets
+          WHERE listing_type IS NOT NULL
+          ORDER BY t ASC`
+      )
+      .all() as Array<{ t: string }>
+    return rows.map((r) => r.t)
+  }
+
+  /**
+   * Distinct category tags currently present in `asset_tags`, EXCLUDING the
+   * canonical Fab listing-type slugs (which live in their own dropdown). Sorted
+   * alphabetically — populates the third filter dropdown in the renderer.
+   */
+  availableCategories(): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT tag
+           FROM asset_tags
+          WHERE tag NOT IN (
+            '3d-model','animation','audio','game-system','game-template',
+            'material','tool-and-plugin','tutorials-examples','ui','vfx'
+          )
+          ORDER BY tag ASC`
+      )
+      .all() as Array<{ tag: string }>
+    return rows.map((r) => r.tag)
+  }
+
+  /**
+   * Replace the full tag set of one asset in a single transaction. Used by the
+   * sync layer after every `upsert()` so tags stay in lockstep with the raw
+   * payload — categories added or removed upstream are mirrored exactly.
+   */
+  replaceTags(source: AssetSource, sourceId: string, tags: string[]): void {
+    const txn = this.db.transaction(() => {
+      this.db
+        .prepare('DELETE FROM asset_tags WHERE source = ? AND source_id = ?')
+        .run(source, sourceId)
+      for (const tag of tags) {
+        if (!tag) continue
+        this.addTagStmt.run(source, sourceId, tag.toLowerCase())
+      }
+    })
+    txn()
   }
 
   countBySource(): Record<string, number> {

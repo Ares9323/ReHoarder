@@ -6,6 +6,8 @@ import type { Session } from '../auth/session'
 export interface LibraryQuery {
   source?: AssetSource
   subSource?: 'fab-ue' | 'fab-other'
+  listingType?: string
+  category?: string
   search?: string
   includeHidden?: boolean
   onlyHidden?: boolean
@@ -15,6 +17,10 @@ export interface LibraryQuery {
 export interface LibraryListResult {
   assets: ReturnType<AssetsRepo['list']>
   countsBySource: Record<string, number>
+  /** Distinct listing-type slugs available in the DB right now, for populating the UI dropdown. */
+  availableListingTypes: string[]
+  /** Distinct category tags (Fab Categories), excluding listing-type slugs. */
+  availableCategories: string[]
   lastSync: Record<string, { at: number; status: string; error: string | null }>
 }
 
@@ -28,6 +34,8 @@ export function registerLibraryIpc(
     return {
       assets: repo.list(query),
       countsBySource: repo.countBySource(),
+      availableListingTypes: repo.availableListingTypes(),
+      availableCategories: repo.availableCategories(),
       lastSync: sync.getLastSyncState()
     }
   })

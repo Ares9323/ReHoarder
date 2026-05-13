@@ -10,6 +10,7 @@
     source: AssetSource
     sourceId: string
     subSource: AssetSubSource
+    listingType: string | null
     title: string
     description: string | null
     imageUrl: string | null
@@ -27,12 +28,18 @@
     lastSync: Record<string, { at: number; status: string; error: string | null }>
     search: string
     sourceFilter: SourceFilter
+    listingTypeFilter: string
+    availableListingTypes: string[]
+    categoryFilter: string
+    availableCategories: string[]
     syncBusy: boolean
     progressText: string | null
     syncError: string | null
     syncLog: string[]
     onSearch: (s: string) => void
     onSourceFilter: (f: SourceFilter) => void
+    onListingTypeFilter: (t: string) => void
+    onCategoryFilter: (c: string) => void
     onSyncNow: () => void
     onToggleHidden: (asset: AssetRow) => void
     onToggleBookmark: (asset: AssetRow) => void
@@ -45,17 +52,40 @@
     lastSync,
     search,
     sourceFilter,
+    listingTypeFilter,
+    availableListingTypes,
+    categoryFilter,
+    availableCategories,
     syncBusy,
     progressText,
     syncError,
     syncLog,
     onSearch,
     onSourceFilter,
+    onListingTypeFilter,
+    onCategoryFilter,
     onSyncNow,
     onToggleHidden,
     onToggleBookmark,
     onSignOut
   }: Props = $props()
+
+  function formatListingType(slug: string): string {
+    // `3d-model` → `3D Model`, `tool-and-plugin` → `Tool & Plugin`, etc.
+    return slug
+      .split('-')
+      .map((p) => {
+        if (p === 'and') return '&'
+        if (/^\d/.test(p)) return p.toUpperCase()
+        return p.charAt(0).toUpperCase() + p.slice(1)
+      })
+      .join(' ')
+  }
+
+  /** Re-uses listing-type formatter — same kebab→title-case convention. */
+  function formatCategory(slug: string): string {
+    return formatListingType(slug)
+  }
 
   function formatLastSync(): string {
     const times = Object.values(lastSync)
@@ -128,6 +158,28 @@
       <option value="fab-other">Only Fab Other</option>
       <option value="bookmarks">Only Bookmarks</option>
       <option value="hidden">Only Hidden</option>
+    </select>
+    <select
+      value={listingTypeFilter}
+      onchange={(e) => onListingTypeFilter((e.currentTarget as HTMLSelectElement).value)}
+      disabled={availableListingTypes.length === 0}
+      title="Filter by Fab listing type"
+    >
+      <option value="">All listing types</option>
+      {#each availableListingTypes as t (t)}
+        <option value={t}>{formatListingType(t)}</option>
+      {/each}
+    </select>
+    <select
+      value={categoryFilter}
+      onchange={(e) => onCategoryFilter((e.currentTarget as HTMLSelectElement).value)}
+      disabled={availableCategories.length === 0}
+      title="Filter by Fab category"
+    >
+      <option value="">All categories</option>
+      {#each availableCategories as c (c)}
+        <option value={c}>{formatCategory(c)}</option>
+      {/each}
     </select>
   </div>
 </div>

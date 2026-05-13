@@ -23,6 +23,7 @@ const sampleAsset = (over: Partial<AssetRow> = {}): AssetRow => ({
   hidden: false,
   bookmarked: false,
   subSource: null,
+  listingType: null,
   raw: '{}',
   syncedAt: 1_700_000_000_000,
   ...over
