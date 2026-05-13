@@ -4,7 +4,7 @@
 
   type AssetSource = 'vault' | 'fab' | 'legacy'
   type AssetSubSource = 'fab-ue' | 'fab-other' | null
-  type SourceFilter = 'all' | 'vault' | 'fab-ue' | 'fab-other' | 'bookmarks' | 'hidden'
+  type SourceFilter = 'all' | 'fab-ue' | 'fab-other' | 'bookmarks' | 'hidden'
 
   interface AssetRow {
     source: AssetSource
@@ -127,8 +127,7 @@
     <div class="title">
       <strong>ReHoarder</strong>
       <span class="counts">
-        {(countsBySource.vault ?? 0) + (countsBySource.fab ?? 0) + (countsBySource.legacy ?? 0)} assets
-        ({countsBySource.vault ?? 0} Vault · {countsBySource.fab ?? 0} Fab)
+        {countsBySource.fab ?? 0} Fab assets
       </span>
       <span class="sync-time">Last synced {formatLastSync()}</span>
     </div>
@@ -153,7 +152,6 @@
         onSourceFilter((e.currentTarget as HTMLSelectElement).value as SourceFilter)}
     >
       <option value="all">All sources</option>
-      <option value="vault">Only Unreal Marketplace</option>
       <option value="fab-ue">Only Fab UE</option>
       <option value="fab-other">Only Fab Other</option>
       <option value="bookmarks">Only Bookmarks</option>

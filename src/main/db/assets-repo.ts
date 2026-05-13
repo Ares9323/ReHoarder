@@ -167,6 +167,13 @@ export class AssetsRepo {
     if (filters.source) {
       clauses.push('source = ?')
       params.push(filters.source)
+    } else {
+      // Vault assets aren't downloadable: Epic shut down the legacy Marketplace
+      // CDN scope (`launcher:download:Live-Windows:<appName>` is no longer
+      // granted to public clients). Sync still indexes them so they're around
+      // if Epic ever reopens that path, but the UI hides them by default —
+      // an explicit `source = 'vault'` filter is the only way to surface them.
+      clauses.push("source != 'vault'")
     }
     if (filters.subSource) {
       clauses.push('sub_source = ?')

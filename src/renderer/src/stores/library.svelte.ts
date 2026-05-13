@@ -10,7 +10,6 @@ type AssetSubSource = 'fab-ue' | 'fab-other' | null
  */
 type SourceFilter =
   | 'all'
-  | 'vault'
   | 'fab-ue'
   | 'fab-other'
   | 'bookmarks'
@@ -134,8 +133,6 @@ export function createLibraryStore(): LibraryStore {
     switch (sourceFilter) {
       case 'all':
         return { ...base }
-      case 'vault':
-        return { ...base, source: 'vault' }
       case 'fab-ue':
         return { ...base, source: 'fab', subSource: 'fab-ue' }
       case 'fab-other':
