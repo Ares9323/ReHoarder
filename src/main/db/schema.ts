@@ -1,4 +1,10 @@
 import type Database from 'better-sqlite3'
+import {
+  FAB_DISTRIBUTION_TO_LISTING_TYPE,
+  FAB_LISTING_TYPE_IDS,
+  FAB_UE_PATH_TO_LISTING_TYPE,
+  slugifyCategory
+} from '../category-slug'
 
 export function applySchema(db: Database.Database): void {
   applyMigrations(db)
@@ -73,7 +79,8 @@ function applyMigrations(db: Database.Database): void {
   tryAddColumn(db, 'assets', 'listing_type', 'TEXT')
   backfillFabSubSource(db)
   backfillListingType(db)
-  backfillCategories(db)
+  migrateCategoriesToSluggedNames(db)
+  migrateFabUePathListingTypes(db)
 }
 
 /**
@@ -144,32 +151,174 @@ function backfillListingType(db: Database.Database): void {
 }
 
 /**
- * Backfill `asset_tags` from `assets.raw.categories[].id` for every Fab row.
+ * Categories migration: drop any tag we may have written under the old
+ * "use raw categories[].id" strategy and re-populate `asset_tags` from the
+ * `name` field instead, slugified. Tracked by `PRAGMA user_version` so it
+ * only runs once per database — incremental sync maintains tags from there
+ * onwards via `replaceTags()`.
  *
- * Skipped on re-runs: if `asset_tags` already contains any `fab`-sourced row
- * we assume the backfill ran in a previous startup. New sync runs maintain
- * tags incrementally via `replaceTags()` per asset, so this only needs to
- * fire once after migrating to the categories-aware schema.
+ * v0 → v1: categories[] derived tag set.
  */
-function backfillCategories(db: Database.Database): void {
+function migrateCategoriesToSluggedNames(db: Database.Database): void {
+  let v: number
   try {
-    const existing = db
-      .prepare(`SELECT COUNT(*) AS n FROM asset_tags WHERE source = 'fab'`)
-      .get() as { n: number }
-    if (existing.n > 0) return
-    db.exec(`
-      INSERT OR IGNORE INTO asset_tags (source, source_id, tag)
-      SELECT a.source,
-             a.source_id,
-             LOWER(json_extract(c.value, '$.id'))
-        FROM assets AS a, json_each(json_extract(a.raw, '$.categories')) AS c
-       WHERE a.source = 'fab'
-         AND json_extract(a.raw, '$.categories') IS NOT NULL
-         AND json_extract(c.value, '$.id') IS NOT NULL
-    `)
-  } catch (err) {
-    console.warn('[schema] categories backfill skipped:', err)
+    v = db.pragma('user_version', { simple: true }) as number
+  } catch {
+    v = 0
   }
+  if (v >= 1) return
+  try {
+    db.exec(`DELETE FROM asset_tags WHERE source = 'fab'`)
+    const rows = db
+      .prepare(`SELECT source_id, raw FROM assets WHERE source = 'fab' AND raw IS NOT NULL`)
+      .all() as Array<{ source_id: string; raw: string }>
+    const insertStmt = db.prepare(
+      `INSERT OR IGNORE INTO asset_tags (source, source_id, tag) VALUES ('fab', ?, ?)`
+    )
+    const tx = db.transaction((items: Array<{ source_id: string; raw: string }>) => {
+      for (const row of items) {
+        const slugs = extractCategorySlugsFromRaw(row.raw)
+        for (const slug of slugs) insertStmt.run(row.source_id, slug)
+      }
+    })
+    tx(rows)
+    db.pragma('user_version = 1')
+    console.warn(
+      `[schema] re-tagged ${rows.length} fab assets from raw.categories[].name (user_version → 1)`
+    )
+  } catch (err) {
+    console.warn('[schema] categories migration skipped:', err)
+  }
+}
+
+/**
+ * Read a fab asset's raw JSON and return its slugified category tags. Mirrors
+ * `extractFabUeCategories()` / `extractFabOtherCategories()` but works without
+ * pulling in the typed parsing layer.
+ */
+function extractCategorySlugsFromRaw(rawJson: string): string[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawJson)
+  } catch {
+    return []
+  }
+  const obj = parsed as { categories?: unknown; tags?: unknown }
+  const set = new Set<string>()
+  for (const candidate of [obj.categories, obj.tags]) {
+    if (!Array.isArray(candidate)) continue
+    for (const entry of candidate) {
+      if (typeof entry === 'string') {
+        const slug = slugifyCategory(entry)
+        if (slug) set.add(slug)
+      } else if (entry && typeof entry === 'object') {
+        const c = entry as { id?: unknown; name?: unknown }
+        const id = typeof c.id === 'string' ? c.id.toLowerCase() : ''
+        if (FAB_LISTING_TYPE_IDS.has(id)) continue
+        if (FAB_UE_PATH_TO_LISTING_TYPE[id]) continue
+        if (typeof c.name === 'string') {
+          const slug = slugifyCategory(c.name)
+          if (slug) set.add(slug)
+        }
+      }
+    }
+  }
+  return [...set]
+}
+
+/**
+ * Migration v1 → v2: re-derive `listing_type` for Fab UE rows that are still
+ * NULL. The first-pass SQL backfill only matched canonical slugs in
+ * `categories[].id`, but most UE assets ship path-shaped ids
+ * (`Assets/animations`, …) instead. We replay the full derivation chain
+ * (canonical slug → path map → distributionMethod fallback) in TS, since
+ * doing it in pure SQL would need a verbose CASE WHEN ladder.
+ *
+ * Also rewrites tag rows whose `tag` happens to match a path/listing-type slug,
+ * so previously-collected "Animations" / "Characters" tags stop showing up in
+ * the Categories dropdown. Tracked by `PRAGMA user_version` so it runs once.
+ */
+function migrateFabUePathListingTypes(db: Database.Database): void {
+  let v: number
+  try {
+    v = db.pragma('user_version', { simple: true }) as number
+  } catch {
+    v = 0
+  }
+  if (v >= 2) return
+  try {
+    const rows = db
+      .prepare(
+        `SELECT source_id, raw FROM assets
+          WHERE source = 'fab'
+            AND sub_source = 'fab-ue'
+            AND listing_type IS NULL
+            AND raw IS NOT NULL`
+      )
+      .all() as Array<{ source_id: string; raw: string }>
+    const updateStmt = db.prepare(
+      `UPDATE assets SET listing_type = ? WHERE source = 'fab' AND source_id = ?`
+    )
+    const tx = db.transaction((items: Array<{ source_id: string; raw: string }>) => {
+      for (const row of items) {
+        const lt = deriveListingTypeFromRaw(row.raw)
+        if (lt) updateStmt.run(lt, row.source_id)
+      }
+    })
+    tx(rows)
+
+    // Re-derive tags so any leftover path-style entries get dropped from the
+    // Categories dropdown (no-op for users whose v1 migration already filtered).
+    db.exec(`DELETE FROM asset_tags WHERE source = 'fab'`)
+    const allFab = db
+      .prepare(`SELECT source_id, raw FROM assets WHERE source = 'fab' AND raw IS NOT NULL`)
+      .all() as Array<{ source_id: string; raw: string }>
+    const insertStmt = db.prepare(
+      `INSERT OR IGNORE INTO asset_tags (source, source_id, tag) VALUES ('fab', ?, ?)`
+    )
+    const tagTx = db.transaction((items: Array<{ source_id: string; raw: string }>) => {
+      for (const row of items) {
+        for (const slug of extractCategorySlugsFromRaw(row.raw)) {
+          insertStmt.run(row.source_id, slug)
+        }
+      }
+    })
+    tagTx(allFab)
+
+    db.pragma('user_version = 2')
+    console.warn(
+      `[schema] migrated ${rows.length} fab-ue listing_type values and re-tagged ${allFab.length} assets (user_version → 2)`
+    )
+  } catch (err) {
+    console.warn('[schema] listing_type/categories v2 migration skipped:', err)
+  }
+}
+
+/** TS-side mirror of `deriveFabUeListingType` from `normalize.ts`. */
+function deriveListingTypeFromRaw(rawJson: string): string | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawJson)
+  } catch {
+    return null
+  }
+  const obj = parsed as {
+    categories?: Array<{ id?: unknown }>
+    distributionMethod?: unknown
+  }
+  if (Array.isArray(obj.categories)) {
+    for (const cat of obj.categories) {
+      const id = typeof cat?.id === 'string' ? cat.id.toLowerCase() : ''
+      if (FAB_LISTING_TYPE_IDS.has(id)) return id
+    }
+    for (const cat of obj.categories) {
+      const id = typeof cat?.id === 'string' ? cat.id.toLowerCase() : ''
+      const mapped = FAB_UE_PATH_TO_LISTING_TYPE[id]
+      if (mapped) return mapped
+    }
+  }
+  const dm = typeof obj.distributionMethod === 'string' ? obj.distributionMethod.toUpperCase() : ''
+  return FAB_DISTRIBUTION_TO_LISTING_TYPE[dm] ?? null
 }
 
 function tryAddColumn(

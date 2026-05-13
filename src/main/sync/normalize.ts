@@ -1,6 +1,12 @@
 import type { AssetRow } from '../db/assets-repo'
 import type { CatalogItem, VaultAssetSummary } from '../vault/vault-client'
 import type { FabLibraryItem, FabOtherListing } from '../fab/fab-client'
+import {
+  FAB_DISTRIBUTION_TO_LISTING_TYPE,
+  FAB_LISTING_TYPE_IDS,
+  FAB_UE_PATH_TO_LISTING_TYPE,
+  slugifyCategory
+} from '../category-slug'
 
 export function normalizeVaultAsset(
   summary: VaultAssetSummary,
@@ -29,42 +35,46 @@ export function normalizeVaultAsset(
   }
 }
 
-/** Canonical Fab listing-type slugs (see AMS dropdown). Matches the values
- *  used both by `FabOtherListing.listingType` and by the `categories[].id` we
- *  pick from for Fab UE assets. */
-const FAB_LISTING_TYPES = new Set<string>([
-  '3d-model',
-  'animation',
-  'audio',
-  'game-system',
-  'game-template',
-  'material',
-  'tool-and-plugin',
-  'tutorials-examples',
-  'ui',
-  'vfx'
-])
-
 function deriveFabUeListingType(item: FabLibraryItem): string | null {
-  if (!item.categories) return null
-  for (const cat of item.categories) {
-    const id = (cat.id ?? '').toLowerCase()
-    if (FAB_LISTING_TYPES.has(id)) return id
+  if (item.categories) {
+    // First pass: direct canonical slug (rare in UE — only CODE_PLUGIN-style assets).
+    for (const cat of item.categories) {
+      const id = (cat.id ?? '').toLowerCase()
+      if (FAB_LISTING_TYPE_IDS.has(id)) return id
+    }
+    // Second pass: UE path-shaped ids (`Assets/animations` → `animation`, …).
+    for (const cat of item.categories) {
+      const id = (cat.id ?? '').toLowerCase()
+      const mapped = FAB_UE_PATH_TO_LISTING_TYPE[id]
+      if (mapped) return mapped
+    }
   }
-  return null
+  // Third pass: distributionMethod fallback (CODE_PLUGIN ⇒ tool-and-plugin, etc.).
+  const dm = (item.distributionMethod ?? '').toUpperCase()
+  return FAB_DISTRIBUTION_TO_LISTING_TYPE[dm] ?? null
 }
 
 /**
- * Collect every `categories[].id` slug (lower-cased, deduplicated). Used by
- * the sync layer to populate `asset_tags`. Includes the listing-type slug too
- * — the dedicated dropdown filters it out via `availableCategories()`.
+ * Slugified category names for an UE listing. We deliberately use `name`
+ * rather than `id`: Fab's `id` is sometimes a slug, sometimes a path like
+ * `Assets/2d`, sometimes a raw GUID. The user-facing display name (`name`)
+ * is the only field that's always human-readable. Entries whose `id` matches
+ * a canonical listing-type slug are skipped — they belong to the dedicated
+ * listing-type column, not to the Categories dropdown.
  */
 export function extractFabUeCategories(item: FabLibraryItem): string[] {
   if (!item.categories) return []
   const set = new Set<string>()
   for (const cat of item.categories) {
-    const id = (cat.id ?? '').trim().toLowerCase()
-    if (id) set.add(id)
+    const id = (cat.id ?? '').toLowerCase()
+    if (FAB_LISTING_TYPE_IDS.has(id)) continue
+    // Skip UE path-style entries too — they're folded into listing_type, not the
+    // user-facing Categories dropdown (otherwise "Animations" would duplicate
+    // the `animation` listing-type filter).
+    if (FAB_UE_PATH_TO_LISTING_TYPE[id]) continue
+    const name = cat.name ?? ''
+    const slug = slugifyCategory(name)
+    if (slug) set.add(slug)
   }
   return [...set]
 }
@@ -72,10 +82,9 @@ export function extractFabUeCategories(item: FabLibraryItem): string[] {
 /**
  * Best-effort extraction for Fab Other listings. The exact field name is not
  * statically typed in `FabOtherListing` (the API ships an open shape), so we
- * probe a couple of likely paths and accept either `id` or `slug`.
+ * probe a couple of likely paths. Names are slugified to match UE assets.
  */
 export function extractFabOtherCategories(listing: FabOtherListing): string[] {
-  // `listing.categories` is the most common location; some payloads use `tags`.
   const candidates = [
     (listing as { categories?: unknown }).categories,
     (listing as { tags?: unknown }).tags
@@ -85,14 +94,14 @@ export function extractFabOtherCategories(listing: FabOtherListing): string[] {
     if (!Array.isArray(raw)) continue
     for (const entry of raw) {
       if (typeof entry === 'string') {
-        const s = entry.trim().toLowerCase()
-        if (s) set.add(s)
+        const slug = slugifyCategory(entry)
+        if (slug) set.add(slug)
       } else if (entry && typeof entry === 'object') {
-        const obj = entry as { id?: unknown; slug?: unknown; name?: unknown }
-        const id = (typeof obj.id === 'string' ? obj.id : typeof obj.slug === 'string' ? obj.slug : '')
-          .trim()
-          .toLowerCase()
-        if (id) set.add(id)
+        const obj = entry as { name?: unknown }
+        if (typeof obj.name === 'string') {
+          const slug = slugifyCategory(obj.name)
+          if (slug) set.add(slug)
+        }
       }
     }
   }
