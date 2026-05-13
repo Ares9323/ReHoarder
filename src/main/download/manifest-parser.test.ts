@@ -103,6 +103,74 @@ function buildManifest(compress: boolean): Buffer {
   return Buffer.concat([header, dataCompressed])
 }
 
+describe('parseManifest — JSON format (legacy UE 4.x manifests)', () => {
+  it('parses a minimal JSON manifest with one chunk and one file', () => {
+    const chunkGuid = 'FD156BB04F91124065EEC28717FD1C4B'
+    const rollingDec = '010001000000000000000000' // uint64 LE = 0x010A
+    const dgDec = '005'
+    const chunkSizeDec = '000064000000000000000000' // uint64 LE = 16384
+    const sizeDec = '100000000000' // uint32 LE = 100
+    const fileSha1Dec = '187'.repeat(20) // 20 bytes of 0xBB
+
+    const json = {
+      ManifestFileVersion: '013000000000',
+      bIsFileData: false,
+      AppID: '000000000000',
+      AppNameString: 'TestAsset',
+      BuildVersionString: '1.0.0',
+      LaunchExeString: '',
+      LaunchCommand: '',
+      PrereqIds: [],
+      PrereqName: '',
+      PrereqPath: '',
+      PrereqArgs: '',
+      FileManifestList: [
+        {
+          Filename: 'Content/Foo.uasset',
+          FileHash: fileSha1Dec,
+          FileChunkParts: [{ Guid: chunkGuid, Offset: '000000000000', Size: sizeDec }]
+        }
+      ],
+      ChunkHashList: { [chunkGuid]: rollingDec },
+      ChunkShaList: { [chunkGuid]: 'AABBCCDDEEFF00112233445566778899AABBCCDD' },
+      DataGroupList: { [chunkGuid]: dgDec },
+      ChunkFilesizeList: { [chunkGuid]: chunkSizeDec },
+      CustomFields: { foo: 'bar' }
+    }
+    const m = parseManifest(Buffer.from(JSON.stringify(json)))
+
+    expect(m.meta.featureLevel).toBe(13)
+    expect(m.meta.appName).toBe('TestAsset')
+    expect(m.chunks).toHaveLength(1)
+    expect(m.chunks[0].guid).toBe(chunkGuid)
+    expect(m.chunks[0].rollingHash).toBe('000000000000010A')
+    expect(m.chunks[0].sha1).toBe('AABBCCDDEEFF00112233445566778899AABBCCDD')
+    expect(m.chunks[0].groupNumber).toBe(5)
+    expect(m.chunks[0].fileSize).toBe(16384)
+    expect(m.files).toHaveLength(1)
+    expect(m.files[0].filename).toBe('Content/Foo.uasset')
+    expect(m.files[0].sha1).toBe('BB'.repeat(20))
+    expect(m.files[0].chunkParts[0]).toEqual({ chunkGuid, offset: 0, size: 100 })
+    expect(m.customFields).toEqual({ foo: 'bar' })
+  })
+
+  it('throws when JSON manifest has bIsFileData=true', () => {
+    const json = {
+      ManifestFileVersion: '013000000000',
+      bIsFileData: true,
+      AppID: '000000000000',
+      AppNameString: '',
+      BuildVersionString: '',
+      FileManifestList: [],
+      ChunkHashList: {},
+      ChunkShaList: {},
+      DataGroupList: {},
+      ChunkFilesizeList: {}
+    }
+    expect(() => parseManifest(Buffer.from(JSON.stringify(json)))).toThrow(/bIsFileData/)
+  })
+})
+
 describe('parseManifest (integration)', () => {
   it('parses a complete uncompressed manifest blob', () => {
     const buf = buildManifest(false)
