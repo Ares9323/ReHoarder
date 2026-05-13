@@ -16,19 +16,25 @@ function rotl64(v: bigint, n: bigint): bigint {
 }
 
 /**
- * 256-entry lookup table: HashTable[b] = poly64 * b expanded via shift-and-xor.
+ * 256-entry lookup table built with Epic BuildPatchTool's algorithm. For each
+ * starting byte `b`, iterate 8 times: shift right by 1, and if the LSB
+ * BEFORE shifting was set, XOR the shifted value with `POLY`. The result is
+ * `table[b]`.
+ *
  * Computed once at module load; the loop in `poly64Hash` is then a single
- * XOR + rotate per byte.
+ * XOR + rotate-left per input byte.
  */
 const HASH_TABLE: BigUint64Array = (() => {
   const tab = new BigUint64Array(256)
   for (let b = 0; b < 256; b++) {
-    let v = 0n
-    let bits = BigInt(b)
+    let v = BigInt(b)
     for (let i = 0; i < 8; i++) {
-      if ((bits & 1n) === 1n) v ^= POLY
-      bits >>= 1n
-      v = rotl64(v, 1n)
+      if ((v & 1n) === 1n) {
+        v >>= 1n
+        v ^= POLY
+      } else {
+        v >>= 1n
+      }
     }
     tab[b] = v
   }
