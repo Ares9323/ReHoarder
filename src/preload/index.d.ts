@@ -232,11 +232,37 @@ export interface ProjectsLaunchResult {
   engineName?: string
 }
 
+export interface ProjectDescriptorResult {
+  ok: boolean
+  error?: string
+  json?: unknown
+  mtime?: number
+}
+
+export interface ProjectDescriptorWriteResult extends ProjectDescriptorResult {
+  backupPath?: string
+}
+
+export interface EnginePluginInfo {
+  name: string
+  upluginPath: string
+  bucket: string
+}
+
+export interface EnginePluginsResult {
+  ok: boolean
+  error?: string
+  plugins?: EnginePluginInfo[]
+}
+
 export interface ProjectsApi {
   list(): Promise<ProjectsListResult>
   openInExplorer(absolutePath: string): Promise<ProjectsOpenResult>
   launchEditor(uprojectPath: string): Promise<ProjectsLaunchResult>
   runGame(uprojectPath: string): Promise<ProjectsLaunchResult>
+  readDescriptor(uprojectPath: string): Promise<ProjectDescriptorResult>
+  writeDescriptor(uprojectPath: string, content: unknown): Promise<ProjectDescriptorWriteResult>
+  listEnginePlugins(engineRootPath: string): Promise<EnginePluginsResult>
 }
 
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'

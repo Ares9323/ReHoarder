@@ -159,6 +159,29 @@ export interface ProjectsLaunchResult {
   engineName?: string
 }
 
+export interface ProjectDescriptorResult {
+  ok: boolean
+  error?: string
+  json?: unknown
+  mtime?: number
+}
+
+export interface ProjectDescriptorWriteResult extends ProjectDescriptorResult {
+  backupPath?: string
+}
+
+export interface EnginePluginInfo {
+  name: string
+  upluginPath: string
+  bucket: string
+}
+
+export interface EnginePluginsResult {
+  ok: boolean
+  error?: string
+  plugins?: EnginePluginInfo[]
+}
+
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
 export interface DownloadRow {
@@ -286,7 +309,16 @@ const api = {
     launchEditor: (uprojectPath: string): Promise<ProjectsLaunchResult> =>
       ipcRenderer.invoke('projects:launch-editor', uprojectPath),
     runGame: (uprojectPath: string): Promise<ProjectsLaunchResult> =>
-      ipcRenderer.invoke('projects:run-game', uprojectPath)
+      ipcRenderer.invoke('projects:run-game', uprojectPath),
+    readDescriptor: (uprojectPath: string): Promise<ProjectDescriptorResult> =>
+      ipcRenderer.invoke('projects:read-descriptor', uprojectPath),
+    writeDescriptor: (
+      uprojectPath: string,
+      content: unknown
+    ): Promise<ProjectDescriptorWriteResult> =>
+      ipcRenderer.invoke('projects:write-descriptor', uprojectPath, content),
+    listEnginePlugins: (engineRootPath: string): Promise<EnginePluginsResult> =>
+      ipcRenderer.invoke('projects:list-engine-plugins', engineRootPath)
   },
   downloads: {
     list: (): Promise<DownloadsListResult> => ipcRenderer.invoke('downloads:list'),

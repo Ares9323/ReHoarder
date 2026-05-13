@@ -4,6 +4,12 @@ import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 import { scanProjects, type ProjectInfo } from './projects-local'
 import { scanEngines } from './engines-local'
+import {
+  readDescriptor,
+  writeDescriptor,
+  listEnginePlugins,
+  type EnginePluginInfo
+} from './projects-descriptor'
 import type { SettingsStore } from './settings'
 
 export interface ProjectsListResult {
@@ -23,6 +29,26 @@ export interface ProjectsLaunchResult {
   error?: string
   /** Friendly name of the engine actually used (only set on Run, when we resolve it ourselves). */
   engineName?: string
+}
+
+export interface ProjectDescriptorResult {
+  ok: boolean
+  error?: string
+  /** Parsed `.uproject` JSON, exactly as it lives on disk. */
+  json?: unknown
+  /** Last-modified ms; the renderer can re-check before writing to detect outside changes. */
+  mtime?: number
+}
+
+export interface ProjectDescriptorWriteResult extends ProjectDescriptorResult {
+  /** Absolute path of the `.uproject.bak` file that was created before the write (if any). */
+  backupPath?: string
+}
+
+export interface EnginePluginsResult {
+  ok: boolean
+  error?: string
+  plugins?: EnginePluginInfo[]
 }
 
 /** Parse the `.uproject` to read its `EngineAssociation` (`"5.7"` / `"4.27"` / `"{GUID}"` / `""`). */
@@ -148,6 +174,65 @@ export function registerProjectsIpc(settings: SettingsStore): void {
         )
         proc.unref()
         return { ok: true, engineName: engine.name }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'projects:read-descriptor',
+    async (_e, uprojectPath: string): Promise<ProjectDescriptorResult> => {
+      const cfg = settings.load()
+      const resolved = guardProjectPath(uprojectPath, cfg.projectPaths)
+      if (!resolved) return { ok: false, error: 'Path is outside the configured project roots' }
+      try {
+        const r = await readDescriptor(resolved)
+        return { ok: true, json: r.json, mtime: r.mtime }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'projects:write-descriptor',
+    async (
+      _e,
+      uprojectPath: string,
+      content: unknown
+    ): Promise<ProjectDescriptorWriteResult> => {
+      const cfg = settings.load()
+      const resolved = guardProjectPath(uprojectPath, cfg.projectPaths)
+      if (!resolved) return { ok: false, error: 'Path is outside the configured project roots' }
+      if (!content || typeof content !== 'object') {
+        return { ok: false, error: 'Descriptor payload must be a JSON object' }
+      }
+      try {
+        const r = await writeDescriptor(resolved, content)
+        return { ok: true, json: r.json, mtime: r.mtime, backupPath: r.backupPath }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'projects:list-engine-plugins',
+    async (_e, engineRootPath: string): Promise<EnginePluginsResult> => {
+      // Defense: only scan inside the configured engine roots — the renderer
+      // never gets to walk arbitrary disk locations.
+      const cfg = settings.load()
+      const resolved = path.resolve(engineRootPath)
+      const allowed = cfg.enginePaths.some((root) =>
+        resolved.startsWith(path.resolve(root))
+      )
+      if (!allowed) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      try {
+        const plugins = await listEnginePlugins(resolved)
+        return { ok: true, plugins }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }

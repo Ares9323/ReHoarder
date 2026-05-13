@@ -1,5 +1,6 @@
 <script lang="ts">
   import { settingsVersion } from '../stores/settings-events.svelte'
+  import UProjectEditorPanel from './UProjectEditorPanel.svelte'
 
   interface ProjectInfo {
     name: string
@@ -179,6 +180,20 @@
     await window.api.projects.openInExplorer(p.projectDir)
   }
 
+  // Side-panel editor state. Keyed by uprojectPath so when the panel closes we
+  // can re-fetch the project's metadata (description/category may have changed).
+  let editingPath = $state<string | null>(null)
+
+  function startEditing(p: ProjectInfo): void {
+    editingPath = p.uprojectPath
+  }
+
+  function stopEditing(): void {
+    editingPath = null
+    // Re-scan in case Description/Category changed — they show in the table.
+    void load()
+  }
+
   // Per-row transient action state: shows a busy indicator on the button that
   // was just clicked, and the IPC error if the launch failed (the error sits
   // next to the row buttons until the next action is taken).
@@ -307,6 +322,10 @@
   {/if}
 </section>
 
+{#if editingPath}
+  <UProjectEditorPanel uprojectPath={editingPath} onClose={stopEditing} />
+{/if}
+
 {#snippet tableFor(rows: ProjectInfo[])}
   <table>
     <thead>
@@ -364,6 +383,9 @@
               title="Launch in -game mode with the configured run params"
             >
               {st.busyAction === 'run' ? '…' : 'Run'}
+            </button>
+            <button type="button" onclick={() => startEditing(p)} title="Edit .uproject descriptor">
+              Edit
             </button>
             <button type="button" onclick={() => reveal(p)}>Open</button>
           </td>
