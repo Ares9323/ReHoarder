@@ -1,0 +1,43 @@
+appId: studio.rehoarder.app
+productName: ReHoarder
+copyright: Copyright (c) 2026 Ares9323
+
+directories:
+  buildResources: resources
+  output: release/${version}
+
+files:
+  - 'out/**/*'
+  - 'package.json'
+  - '!**/.DS_Store'
+  - '!**/Thumbs.db'
+
+asarUnpack:
+  - '**/*.node'
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ReHoarder-${version}-setup-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
+  artifactName: ReHoarder-${version}-${arch}.${ext}
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  artifactName: ReHoarder-${version}-${arch}.${ext}

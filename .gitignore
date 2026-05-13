@@ -48,3 +48,6 @@ desktop.ini
 # Test / coverage
 coverage/
 .nyc_output/
+
+# Private working notes / research (not for public repo)
+docs/
