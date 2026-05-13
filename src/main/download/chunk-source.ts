@@ -17,6 +17,13 @@ export interface ChunkSourceOptions {
    * gates chunk access behind `Authorization: bearer <accessToken>` + a Launcher-style
    * User-Agent in recent Fab releases; without them every chunk returns HTTP 403. */
   defaultHeaders?: Record<string, string>
+  /**
+   * Query string (including the leading `?`, or `''`) appended to every
+   * chunk URL. Matches whatever was attached to the source `manifestUrl`
+   * — the Epic CDN signs the whole `CloudDir/` tree with the same token,
+   * so chunks 403 unless the same signature is replayed.
+   */
+  queryString?: string
 }
 
 function chunkSubdir(featureLevel: number): string {
@@ -32,7 +39,8 @@ function buildChunkFilename(chunk: ChunkInfo): string {
 
 function buildChunkUrl(opts: ChunkSourceOptions, chunk: ChunkInfo): string {
   const dg2 = String(chunk.groupNumber).padStart(2, '0')
-  return `${opts.baseUri}${chunkSubdir(opts.manifestFeatureLevel)}/${dg2}/${buildChunkFilename(chunk)}`
+  const path = `${opts.baseUri}${chunkSubdir(opts.manifestFeatureLevel)}/${dg2}/${buildChunkFilename(chunk)}`
+  return path + (opts.queryString ?? '')
 }
 
 /**

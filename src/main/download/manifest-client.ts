@@ -19,6 +19,20 @@ const CLOUD_DIR_SEGMENT = 'CloudDir'
  * layout we don't support.
  */
 export function extractCloudDirBase(url: string): string {
+  return extractCloudDirInfo(url).baseUri
+}
+
+/**
+ * Like {@link extractCloudDirBase} but also returns the query string of the
+ * source manifest URL (including the leading `?`, or `''` if none). The Epic
+ * CDN signs `manifestUrl` with time-limited query params; those same params
+ * are required to access the chunks under the same `CloudDir/` tree, so the
+ * chunk client appends this string to every chunk URL.
+ */
+export function extractCloudDirInfo(url: string): {
+  baseUri: string
+  queryString: string
+} {
   const idx = url.indexOf(CLOUD_DIR_SEGMENT)
   if (idx < 0) {
     throw new ManifestClientError(
@@ -26,7 +40,10 @@ export function extractCloudDirBase(url: string): string {
       `Manifest URL has no "${CLOUD_DIR_SEGMENT}" segment: ${url}`
     )
   }
-  return url.slice(0, idx + CLOUD_DIR_SEGMENT.length + 1) // include trailing slash
+  const baseUri = url.slice(0, idx + CLOUD_DIR_SEGMENT.length + 1) // include trailing slash
+  const queryIdx = url.indexOf('?')
+  const queryString = queryIdx > 0 ? url.slice(queryIdx) : ''
+  return { baseUri, queryString }
 }
 
 interface RawDistributionPoint {
@@ -186,6 +203,8 @@ export async function requestManifest(
   const locator = await fetchManifestLocator(fetchImpl, req)
   const blob = await downloadManifestBlob(fetchImpl, locator)
   const manifest = parseManifest(blob)
-  const baseUris = locator.distributionPoints.map((p) => extractCloudDirBase(p.url))
-  return { manifest, baseUris, locator }
+  const infos = locator.distributionPoints.map((p) => extractCloudDirInfo(p.url))
+  const baseUris = infos.map((i) => i.baseUri)
+  const chunkQueryStrings = infos.map((i) => i.queryString)
+  return { manifest, baseUris, chunkQueryStrings, locator }
 }

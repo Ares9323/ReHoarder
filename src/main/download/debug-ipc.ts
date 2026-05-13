@@ -10,7 +10,8 @@ import { EPIC_USER_AGENT } from '../vault/user-agent'
 import {
   fetchManifestLocator,
   downloadManifestBlob,
-  extractCloudDirBase
+  extractCloudDirBase,
+  extractCloudDirInfo
 } from './manifest-client'
 import { parseManifest } from './manifest-parser'
 
@@ -215,12 +216,17 @@ async function runDebugDownload(
   const blobPath = path.join(debugDir, `${safeId}.download-manifest.bin`)
   fs.writeFileSync(blobPath, blob)
   console.warn(`[debug] saved raw manifest blob → ${blobPath} (${blob.length} bytes)`)
+  for (const [i, p] of locator.distributionPoints.entries()) {
+    console.warn(`[debug] distribution[${i}] full URL: ${p.url}`)
+  }
   const manifest = parseManifest(blob)
-  const baseUris = locator.distributionPoints.map((p) => extractCloudDirBase(p.url))
+  const infos = locator.distributionPoints.map((p) => extractCloudDirInfo(p.url))
+  const baseUris = infos.map((i) => i.baseUri)
+  const chunkQueryStrings = infos.map((i) => i.queryString)
 
   const vaultDir = path.join(app.getPath('userData'), 'debug-downloads')
   const result = await downloadAsset(
-    { manifest, baseUris, locator },
+    { manifest, baseUris, chunkQueryStrings, locator },
     {
       vaultDir,
       fetchImpl: deps.fabFetch,

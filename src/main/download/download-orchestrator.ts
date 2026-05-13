@@ -66,7 +66,8 @@ export async function downloadAsset(
     baseUri: bundle.baseUris[0],
     cacheDir,
     manifestFeatureLevel: bundle.manifest.meta.featureLevel,
-    defaultHeaders: opts.chunkHeaders
+    defaultHeaders: opts.chunkHeaders,
+    queryString: bundle.chunkQueryStrings?.[0] ?? ''
   })
   const provider = buildChunkResolver(source, bundle.manifest.chunks)
 

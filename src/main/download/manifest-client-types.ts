@@ -50,6 +50,13 @@ export interface ManifestLocator {
 export interface ManifestBundle {
   manifest: Manifest
   baseUris: string[]
+  /**
+   * One entry per distribution point: the query string of the source
+   * `manifestUrl` (including the leading `?`, or `''` if none). The chunk
+   * client appends this to every chunk URL it builds, because the Epic CDN
+   * signs the whole `CloudDir/` tree with the same time-limited token.
+   */
+  chunkQueryStrings: string[]
   locator: ManifestLocator
 }
 

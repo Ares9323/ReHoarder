@@ -109,6 +109,7 @@ function buildBundle(manifest: Manifest): ManifestBundle {
   return {
     manifest,
     baseUris: ['https://cdn.example/foo/CloudDir/'],
+    chunkQueryStrings: [''],
     locator: {
       artifactId: 'TestAsset/build-1',
       manifestHash: '0'.repeat(40),
