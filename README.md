@@ -35,10 +35,11 @@ It connects to your Epic Games account, indexes everything you've ever acquired 
 - ✅ **Search + source filter** in the asset grid.
 - ✅ **Epic Chunked Manifest parser** (v0a) — full binary parser for Epic's `0x44BEC00C` format. Pure TypeScript, no new deps. 35 unit tests.
 - ✅ **Fab manifest client** (v0b) — POST `/e/artifacts/{artifactId}/manifest`, CDN blob download with SHA1 verify across distribution points, hands off to the parser. 17 unit tests.
+- ✅ **Chunk download + file assembly** (v0c) — fetch each `.chunk` from the CDN, verify Poly64 + SHA1, decompress (zlib), assemble files atomically on disk with file-level SHA1 verification. Persistent chunk cache + in-flight URL dedup. 29 unit tests. Real downloads work end-to-end via the debug IPC; the per-asset "Download" button in the UI lands in v0d.
 
 ### What's next
 
-- 🚧 **Chunk download + file assembly** (v0c) — parallel chunk fetch + decompress + reassemble files. Then a real "Download" button appears.
+- 🚧 **Download UI** (v0d) — "Download" button per asset + Downloads tab with progress per item. The orchestrator is ready; just needs the wiring.
 - 📋 **Plugin install + UBT compile** (v0d-e) — copy plugin into engine, optionally `RunUAT BuildPlugin`.
 - 📋 **Auto-update detection** — flag assets when `modifiedDate` changes server-side.
 - 📋 **Selective engine components** — per-component checkboxes (Source / Android / iOS / etc.) at download time.
@@ -134,6 +135,14 @@ list.assets.slice(0, 5).map(a => ({ id: a.sourceId, title: a.title }))
 // %APPDATA%/ReHoarder/debug/ on Windows (or the equivalent userData dir).
 await window.api.debug.fetchSampleManifest('<assetId>')
 // → { ok, fileCount, chunkCount, totalFileSize, baseUris, savedBlobPath, savedJsonPath, ... }
+
+// Full end-to-end download of a real asset into
+// <userData>/debug-downloads/<artifactId>/data/. Fetches the manifest,
+// downloads every chunk from the CDN, verifies Poly64 + SHA1 on each
+// chunk and on every assembled file, writes the files atomically. Pick a
+// SMALL asset first (under ~50 MB) for the initial test.
+await window.api.debug.downloadSampleAsset('<assetId>')
+// → { ok, fileCount, bytesWritten, durationMs, dataDir, firstFiles, ... }
 
 // Wipe the local library + sync_state so the next sync runs as a full sync.
 // Useful when re-testing the sync pipeline end-to-end.
