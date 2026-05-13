@@ -13,6 +13,8 @@ export interface DownloadOptions {
   onLog?: (line: string) => void
   /** AbortSignal — when fired, in-progress chunk downloads finish their HTTP call but no new chunks are started; throws `DownloadCancelledError` from `downloadAsset`. */
   signal?: AbortSignal
+  /** Headers sent on every chunk GET. Use this to pass `Authorization: bearer …` and a Launcher-style `User-Agent` (the Epic CDN requires both for chunk fetches). */
+  chunkHeaders?: Record<string, string>
 }
 
 export interface DownloadProgress {

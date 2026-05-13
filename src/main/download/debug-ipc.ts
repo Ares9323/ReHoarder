@@ -6,6 +6,7 @@ import type { Session } from '../auth/session'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
 import type { FabSessionClient } from '../fab/fab-session'
 import { downloadAsset } from './download-orchestrator'
+import { EPIC_USER_AGENT } from '../vault/user-agent'
 import {
   fetchManifestLocator,
   downloadManifestBlob,
@@ -223,6 +224,10 @@ async function runDebugDownload(
     {
       vaultDir,
       fetchImpl: deps.fabFetch,
+      chunkHeaders: {
+        Authorization: `bearer ${accessToken}`,
+        'User-Agent': EPIC_USER_AGENT
+      },
       onLog: (m) => console.warn('[debug]', m),
       onProgress: (p) => {
         if (p.currentFile) console.warn(`[debug] ${p.bytesDone}/${p.bytesTotal} — ${p.currentFile}`)

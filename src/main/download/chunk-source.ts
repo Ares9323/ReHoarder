@@ -13,6 +13,10 @@ export interface ChunkSourceOptions {
   cacheDir: string
   /** `manifest.meta.featureLevel` — picks the chunk subdir (`Chunks` / `V2` / `V3` / `V4`). */
   manifestFeatureLevel: number
+  /** Optional headers sent on every chunk GET. The Epic CDN (`download.epicgames.com`)
+   * gates chunk access behind `Authorization: bearer <accessToken>` + a Launcher-style
+   * User-Agent in recent Fab releases; without them every chunk returns HTTP 403. */
+  defaultHeaders?: Record<string, string>
 }
 
 function chunkSubdir(featureLevel: number): string {
@@ -96,7 +100,10 @@ export class ChunkSource {
     chunk: ChunkInfo,
     cachePath: string
   ): Promise<Buffer> {
-    const response = await this.opts.fetchImpl(url, { method: 'GET' })
+    const response = await this.opts.fetchImpl(url, {
+      method: 'GET',
+      headers: this.opts.defaultHeaders
+    })
     if (!response.ok) {
       throw new Error(`Chunk ${chunk.guid} fetch returned ${response.status} (${url})`)
     }
