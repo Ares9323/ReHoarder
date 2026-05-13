@@ -205,6 +205,15 @@ async function runDebugDownload(
     accessToken
   })
   const blob = await downloadManifestBlob(deps.fabFetch, locator)
+  // Save the raw manifest blob FIRST, so if parseManifest() throws we still
+  // have the bytes to inspect (e.g. legacy JSON manifests that the v0c parser
+  // doesn't yet recognize).
+  const debugDir = path.join(app.getPath('userData'), 'debug')
+  fs.mkdirSync(debugDir, { recursive: true })
+  const safeId = assetId.replace(/[^A-Za-z0-9._-]/g, '_')
+  const blobPath = path.join(debugDir, `${safeId}.download-manifest.bin`)
+  fs.writeFileSync(blobPath, blob)
+  console.warn(`[debug] saved raw manifest blob → ${blobPath} (${blob.length} bytes)`)
   const manifest = parseManifest(blob)
   const baseUris = locator.distributionPoints.map((p) => extractCloudDirBase(p.url))
 
