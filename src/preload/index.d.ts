@@ -112,6 +112,26 @@ export interface DebugApi {
   downloadSampleAsset(assetId: string): Promise<DebugDownloadSampleAssetResult>
 }
 
+export type ImageSize = 'small' | 'medium' | 'large'
+
+export interface AppSettings {
+  loginAtStartup: boolean
+  checkVersionAtStartup: boolean
+  exitOnLaunchUnreal: boolean
+  compilePluginsOnInstall: boolean
+  deleteExtraVaultPlatforms: boolean
+  downloadThreads: number
+  imageSize: ImageSize
+  projectPaths: string[]
+  enginePaths: string[]
+  vaultPaths: string[]
+}
+
+export interface SettingsApi {
+  get(): Promise<AppSettings>
+  set(partial: Partial<AppSettings>): Promise<AppSettings>
+}
+
 export interface LocalVaultEntry {
   name: string
   path: string
@@ -146,6 +166,7 @@ declare global {
       library: LibraryApi
       debug: DebugApi
       vault: VaultApi
+      settings: SettingsApi
     }
   }
 }

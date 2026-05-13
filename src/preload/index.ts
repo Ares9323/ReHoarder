@@ -55,6 +55,21 @@ export interface SyncProgress {
   error?: string
 }
 
+export type ImageSize = 'small' | 'medium' | 'large'
+
+export interface AppSettings {
+  loginAtStartup: boolean
+  checkVersionAtStartup: boolean
+  exitOnLaunchUnreal: boolean
+  compilePluginsOnInstall: boolean
+  deleteExtraVaultPlatforms: boolean
+  downloadThreads: number
+  imageSize: ImageSize
+  projectPaths: string[]
+  enginePaths: string[]
+  vaultPaths: string[]
+}
+
 export interface LocalVaultEntry {
   name: string
   path: string
@@ -153,6 +168,11 @@ const api = {
     list: (): Promise<VaultListResult> => ipcRenderer.invoke('vault:list'),
     openInExplorer: (absolutePath: string): Promise<VaultOpenResult> =>
       ipcRenderer.invoke('vault:open-in-explorer', absolutePath)
+  },
+  settings: {
+    get: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
+    set: (partial: Partial<AppSettings>): Promise<AppSettings> =>
+      ipcRenderer.invoke('settings:set', partial)
   }
 }
 

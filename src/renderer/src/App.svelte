@@ -9,6 +9,7 @@
   import TabBar from './lib/TabBar.svelte'
   import type { TabKey } from './lib/tabs'
   import LocalVaultView from './lib/LocalVaultView.svelte'
+  import SettingsView from './lib/SettingsView.svelte'
   import PlaceholderView from './lib/PlaceholderView.svelte'
 
   const auth = createAuthStore()
@@ -112,19 +113,7 @@
     {:else if activeTab === 'vault'}
       <LocalVaultView />
     {:else if activeTab === 'settings'}
-      <PlaceholderView
-        title="Settings"
-        blurb="Tune sync, downloads, and integrations."
-        planned={[
-          'Vault paths + UE install paths',
-          'Concurrent downloads (asset-level and chunk-level)',
-          'Compile plugins on install (Linux default on, Win/Mac off)',
-          'Skip platform binaries for non-current platforms',
-          'Auto-patch .uplugin PlatformAllowList',
-          'Behavior on UBT compile failure (Keep / Remove / Ask)',
-          'Optional CF warmup skip when cf_clearance is still fresh'
-        ]}
-      />
+      <SettingsView />
     {:else if activeTab === 'downloads'}
       <PlaceholderView
         title="Downloads"
