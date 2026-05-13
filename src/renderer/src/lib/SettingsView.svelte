@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { bumpSettingsVersion } from '../stores/settings-events.svelte'
 
   type ImageSize = 'small' | 'medium' | 'large'
   interface AppSettings {
@@ -13,6 +14,8 @@
     projectPaths: string[]
     enginePaths: string[]
     vaultPaths: string[]
+    separateProjectsByPath: boolean
+    gameLaunchParams: string[]
   }
 
   let settings = $state<AppSettings | null>(null)
@@ -21,6 +24,7 @@
   let projectPathsText = $state('')
   let enginePathsText = $state('')
   let vaultPathsText = $state('')
+  let gameLaunchParamsText = $state('')
 
   let loading = $state(true)
   let saving = $state(false)
@@ -37,6 +41,15 @@
       .map((s) => s.trim())
       .filter((s) => s.length > 0)
   }
+  function fromArgs(arr: string[]): string {
+    return arr.join(' ')
+  }
+  function toArgs(text: string): string[] {
+    return text
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)
+  }
 
   async function load(): Promise<void> {
     loading = true
@@ -47,6 +60,7 @@
       projectPathsText = fromArray(s.projectPaths)
       enginePathsText = fromArray(s.enginePaths)
       vaultPathsText = fromArray(s.vaultPaths)
+      gameLaunchParamsText = fromArgs(s.gameLaunchParams)
       dirty = false
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
@@ -64,16 +78,19 @@
         ...settings,
         projectPaths: toArray(projectPathsText),
         enginePaths: toArray(enginePathsText),
-        vaultPaths: toArray(vaultPathsText)
+        vaultPaths: toArray(vaultPathsText),
+        gameLaunchParams: toArgs(gameLaunchParamsText)
       }
       const saved = await window.api.settings.set(payload)
       settings = saved
       projectPathsText = fromArray(saved.projectPaths)
       enginePathsText = fromArray(saved.enginePaths)
       vaultPathsText = fromArray(saved.vaultPaths)
+      gameLaunchParamsText = fromArgs(saved.gameLaunchParams)
       dirty = false
       savedFlash = true
       window.setTimeout(() => (savedFlash = false), 1500)
+      bumpSettingsVersion()
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     } finally {
@@ -184,7 +201,7 @@
       <div class="group full">
         <h3>Project paths</h3>
         <p class="explain">
-          Folders scanned for <code>*.uproject</code>. One path per line.
+          Folders scanned recursively for <code>*.uproject</code>. One path per line.
         </p>
         <textarea
           rows="3"
@@ -192,6 +209,30 @@
           oninput={markDirty}
           spellcheck="false"
         ></textarea>
+        <label>
+          <input
+            type="checkbox"
+            bind:checked={settings.separateProjectsByPath}
+            onchange={markDirty}
+          />
+          Separate by path
+          <span class="hint">(render one table per root path on the Projects tab)</span>
+        </label>
+        <label class="stack">
+          <span class="lbl-block">Run params</span>
+          <input
+            type="text"
+            class="text-input"
+            placeholder="-log -windowed -ResX=1280 -ResY=720"
+            bind:value={gameLaunchParamsText}
+            oninput={markDirty}
+            spellcheck="false"
+          />
+          <span class="hint">
+            Extra args appended after <code>-game</code> when clicking <strong>Run</strong>.
+            Space-separated. <code>-game</code> is added automatically.
+          </span>
+        </label>
       </div>
 
       <div class="group full">
@@ -340,6 +381,30 @@
     color: #e0e0e0;
     padding: 0.25rem 0.45rem;
     font-family: inherit;
+    font-size: 0.85rem;
+  }
+  .text-input {
+    background: #1a1a1a;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #e0e0e0;
+    padding: 0.3rem 0.55rem;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.8rem;
+    box-sizing: border-box;
+    width: 100%;
+  }
+  .text-input::placeholder {
+    color: #555;
+  }
+  label.stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    align-items: stretch;
+  }
+  .lbl-block {
+    color: #b0b0b0;
     font-size: 0.85rem;
   }
   select {

@@ -68,6 +68,7 @@ export interface AppSettings {
   projectPaths: string[]
   enginePaths: string[]
   vaultPaths: string[]
+  separateProjectsByPath: boolean
 }
 
 export interface LocalVaultEntry {
@@ -89,6 +90,59 @@ export interface VaultListResult {
 export interface VaultOpenResult {
   ok: boolean
   error?: string
+}
+
+export interface EngineInfo {
+  name: string
+  path: string
+  version: string
+  majorVersion: number
+  changelist: number
+  branchName: string
+  editorExePath: string | null
+  hasEditor: boolean
+}
+
+export interface EnginesListResult {
+  ok: boolean
+  error?: string
+  scannedPaths?: string[]
+  engines?: EngineInfo[]
+}
+
+export interface EnginesOpenResult {
+  ok: boolean
+  error?: string
+}
+
+export interface ProjectInfo {
+  name: string
+  uprojectPath: string
+  projectDir: string
+  rootPath: string
+  engineAssociation: string
+  description: string
+  category: string
+  hasCode: boolean
+  lastModified: number
+}
+
+export interface ProjectsListResult {
+  ok: boolean
+  error?: string
+  scannedPaths?: string[]
+  projects?: ProjectInfo[]
+}
+
+export interface ProjectsOpenResult {
+  ok: boolean
+  error?: string
+}
+
+export interface ProjectsLaunchResult {
+  ok: boolean
+  error?: string
+  engineName?: string
 }
 
 export interface DebugClearLibraryResult {
@@ -168,6 +222,20 @@ const api = {
     list: (): Promise<VaultListResult> => ipcRenderer.invoke('vault:list'),
     openInExplorer: (absolutePath: string): Promise<VaultOpenResult> =>
       ipcRenderer.invoke('vault:open-in-explorer', absolutePath)
+  },
+  engines: {
+    list: (): Promise<EnginesListResult> => ipcRenderer.invoke('engines:list'),
+    openInExplorer: (absolutePath: string): Promise<EnginesOpenResult> =>
+      ipcRenderer.invoke('engines:open-in-explorer', absolutePath)
+  },
+  projects: {
+    list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),
+    openInExplorer: (absolutePath: string): Promise<ProjectsOpenResult> =>
+      ipcRenderer.invoke('projects:open-in-explorer', absolutePath),
+    launchEditor: (uprojectPath: string): Promise<ProjectsLaunchResult> =>
+      ipcRenderer.invoke('projects:launch-editor', uprojectPath),
+    runGame: (uprojectPath: string): Promise<ProjectsLaunchResult> =>
+      ipcRenderer.invoke('projects:run-game', uprojectPath)
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),

@@ -19,6 +19,8 @@ import { registerDebugIpc } from './download/debug-ipc'
 import { registerVaultIpc } from './vault-ipc'
 import { SettingsStore } from './settings'
 import { registerSettingsIpc } from './settings-ipc'
+import { registerEnginesIpc } from './engines-ipc'
+import { registerProjectsIpc } from './projects-ipc'
 
 let db: AppDb | null = null
 let mainWindow: BrowserWindow | null = null
@@ -83,6 +85,8 @@ app.whenReady().then(async () => {
   registerVaultIpc()
   const settingsStore = new SettingsStore(db.kv)
   registerSettingsIpc(settingsStore)
+  registerEnginesIpc(settingsStore)
+  registerProjectsIpc(settingsStore)
 
   await session.init()
   console.warn(`[auth] initial state: ${session.getState().status}`)

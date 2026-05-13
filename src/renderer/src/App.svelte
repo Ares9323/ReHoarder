@@ -9,6 +9,8 @@
   import TabBar from './lib/TabBar.svelte'
   import type { TabKey } from './lib/tabs'
   import LocalVaultView from './lib/LocalVaultView.svelte'
+  import EnginesView from './lib/EnginesView.svelte'
+  import ProjectsView from './lib/ProjectsView.svelte'
   import SettingsView from './lib/SettingsView.svelte'
   import PlaceholderView from './lib/PlaceholderView.svelte'
 
@@ -88,28 +90,9 @@
         />
       {/if}
     {:else if activeTab === 'engines'}
-      <PlaceholderView
-        title="Engines"
-        blurb="Detect, list, and launch your local Unreal Engine installs."
-        planned={[
-          'Scan configured paths (default: C:\\Program Files\\Epic Games\\) for UE_*/Engine/Build/Build.version',
-          'Show installed version, build path, and last-launched timestamp',
-          'Launch UE Editor from the app and auto-exit ReHoarder to free RAM',
-          'Pick the target engine when installing a plugin'
-        ]}
-      />
+      <EnginesView />
     {:else if activeTab === 'projects'}
-      <PlaceholderView
-        title="Projects"
-        blurb="Index local Unreal projects and act on them in bulk."
-        planned={[
-          'Scan configured paths for *.uproject',
-          'Show project name, engine version, last-opened timestamp',
-          'Launch UE Editor for a project; open the project folder',
-          'Bulk cleanup of Intermediate/Saved/DerivedDataCache across many projects',
-          'Install a Fab asset directly into a chosen project'
-        ]}
-      />
+      <ProjectsView />
     {:else if activeTab === 'vault'}
       <LocalVaultView />
     {:else if activeTab === 'settings'}

@@ -125,6 +125,7 @@ export interface AppSettings {
   projectPaths: string[]
   enginePaths: string[]
   vaultPaths: string[]
+  separateProjectsByPath: boolean
 }
 
 export interface SettingsApi {
@@ -158,6 +159,71 @@ export interface VaultApi {
   openInExplorer(absolutePath: string): Promise<VaultOpenResult>
 }
 
+export interface EngineInfo {
+  name: string
+  path: string
+  version: string
+  majorVersion: number
+  changelist: number
+  branchName: string
+  editorExePath: string | null
+  hasEditor: boolean
+}
+
+export interface EnginesListResult {
+  ok: boolean
+  error?: string
+  scannedPaths?: string[]
+  engines?: EngineInfo[]
+}
+
+export interface EnginesOpenResult {
+  ok: boolean
+  error?: string
+}
+
+export interface EnginesApi {
+  list(): Promise<EnginesListResult>
+  openInExplorer(absolutePath: string): Promise<EnginesOpenResult>
+}
+
+export interface ProjectInfo {
+  name: string
+  uprojectPath: string
+  projectDir: string
+  rootPath: string
+  engineAssociation: string
+  description: string
+  category: string
+  hasCode: boolean
+  lastModified: number
+}
+
+export interface ProjectsListResult {
+  ok: boolean
+  error?: string
+  scannedPaths?: string[]
+  projects?: ProjectInfo[]
+}
+
+export interface ProjectsOpenResult {
+  ok: boolean
+  error?: string
+}
+
+export interface ProjectsLaunchResult {
+  ok: boolean
+  error?: string
+  engineName?: string
+}
+
+export interface ProjectsApi {
+  list(): Promise<ProjectsListResult>
+  openInExplorer(absolutePath: string): Promise<ProjectsOpenResult>
+  launchEditor(uprojectPath: string): Promise<ProjectsLaunchResult>
+  runGame(uprojectPath: string): Promise<ProjectsLaunchResult>
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -166,6 +232,8 @@ declare global {
       library: LibraryApi
       debug: DebugApi
       vault: VaultApi
+      engines: EnginesApi
+      projects: ProjectsApi
       settings: SettingsApi
     }
   }

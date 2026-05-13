@@ -26,6 +26,10 @@ export interface AppSettings {
   enginePaths: string[]
   /** Where downloads are written. The first existing path is used; new entries are created on demand. */
   vaultPaths: string[]
+  /** Render the Projects tab with one table per configured root path instead of a single combined table. */
+  separateProjectsByPath: boolean
+  /** Extra args appended after `-game` when the user clicks "Run" on a project. `-game` is always added implicitly. */
+  gameLaunchParams: string[]
 }
 
 const SETTINGS_KEY = 'app_settings_v1'
@@ -68,7 +72,9 @@ export function defaultSettings(): AppSettings {
     imageSize: 'small',
     projectPaths: defaultProjectPaths(),
     enginePaths: defaultEnginePaths(),
-    vaultPaths: defaultVaultPaths()
+    vaultPaths: defaultVaultPaths(),
+    separateProjectsByPath: false,
+    gameLaunchParams: ['-log', '-windowed', '-ResX=1280', '-ResY=720']
   }
 }
 
@@ -119,7 +125,14 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
     imageSize: partial.imageSize ? sanitizeImageSize(partial.imageSize) : d.imageSize,
     projectPaths: partial.projectPaths ? sanitizePaths(partial.projectPaths) : d.projectPaths,
     enginePaths: partial.enginePaths ? sanitizePaths(partial.enginePaths) : d.enginePaths,
-    vaultPaths: partial.vaultPaths ? sanitizePaths(partial.vaultPaths) : d.vaultPaths
+    vaultPaths: partial.vaultPaths ? sanitizePaths(partial.vaultPaths) : d.vaultPaths,
+    separateProjectsByPath:
+      typeof partial.separateProjectsByPath === 'boolean'
+        ? partial.separateProjectsByPath
+        : d.separateProjectsByPath,
+    gameLaunchParams: partial.gameLaunchParams
+      ? sanitizePaths(partial.gameLaunchParams)
+      : d.gameLaunchParams
   }
 }
 
