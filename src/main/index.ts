@@ -21,6 +21,13 @@ import { SettingsStore } from './settings'
 import { registerSettingsIpc } from './settings-ipc'
 import { registerEnginesIpc } from './engines-ipc'
 import { registerProjectsIpc } from './projects-ipc'
+import { DownloadsRepo } from './db/downloads-repo'
+import { DownloadsManager } from './downloads-manager'
+import {
+  broadcastDownloadProgress,
+  broadcastDownloads,
+  registerDownloadsIpc
+} from './downloads-ipc'
 
 let db: AppDb | null = null
 let mainWindow: BrowserWindow | null = null
@@ -82,11 +89,28 @@ app.whenReady().then(async () => {
     fabFetch,
     debugDir: app.getPath('userData')
   })
-  registerVaultIpc()
   const settingsStore = new SettingsStore(db.kv)
   registerSettingsIpc(settingsStore)
+  registerVaultIpc(settingsStore)
   registerEnginesIpc(settingsStore)
   registerProjectsIpc(settingsStore)
+
+  const downloadsRepo = new DownloadsRepo(db.raw)
+  const downloadsManager = new DownloadsManager({
+    repo: downloadsRepo,
+    settings: settingsStore,
+    runner: {
+      assetsRepo,
+      session,
+      epicWebSessionFactory,
+      fabSessionClient,
+      fabFetch
+    },
+    broadcast: broadcastDownloads,
+    broadcastProgress: broadcastDownloadProgress
+  })
+  registerDownloadsIpc(downloadsManager, settingsStore)
+  downloadsManager.bootstrap()
 
   await session.init()
   console.warn(`[auth] initial state: ${session.getState().status}`)

@@ -11,8 +11,8 @@
   import LocalVaultView from './lib/LocalVaultView.svelte'
   import EnginesView from './lib/EnginesView.svelte'
   import ProjectsView from './lib/ProjectsView.svelte'
+  import DownloadsView from './lib/DownloadsView.svelte'
   import SettingsView from './lib/SettingsView.svelte'
-  import PlaceholderView from './lib/PlaceholderView.svelte'
 
   const auth = createAuthStore()
   const library = createLibraryStore()
@@ -76,16 +76,15 @@
           lastSync={library.lastSync}
           search={library.search}
           sourceFilter={library.sourceFilter}
-          showHidden={library.showHidden}
           syncBusy={library.syncBusy}
           progressText={progressText()}
           syncError={library.syncError}
           syncLog={library.syncLog}
           onSearch={(s) => library.setSearch(s)}
           onSourceFilter={(f) => library.setSourceFilter(f)}
-          onShowHidden={(v) => library.setShowHidden(v)}
           onSyncNow={() => library.startSync()}
           onToggleHidden={(a) => library.setHidden(a, !a.hidden)}
+          onToggleBookmark={(a) => library.setBookmarked(a, !a.bookmarked)}
           onSignOut={() => auth.logout()}
         />
       {/if}
@@ -98,18 +97,7 @@
     {:else if activeTab === 'settings'}
       <SettingsView />
     {:else if activeTab === 'downloads'}
-      <PlaceholderView
-        title="Downloads"
-        blurb="Queue, progress, and history of asset downloads."
-        planned={[
-          'Live progress per asset (bytes, throughput, ETA)',
-          'Pause / resume / cancel per item',
-          'Retry failed downloads',
-          'Resume across app restarts (state persisted in SQLite)',
-          'Filter: in-progress / queued / done / failed',
-          'Click an entry to see the build log + plugin compile output'
-        ]}
-      />
+      <DownloadsView />
     {/if}
   {/if}
 {:else}

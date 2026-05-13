@@ -15,12 +15,14 @@ export function normalizeVaultAsset(
   return {
     source: 'vault',
     sourceId: summary.catalogItemId,
+    subSource: null,
     title,
     description,
     imageUrl,
     productUrl: null,
     ownedAt: ownedAt !== null && Number.isFinite(ownedAt) ? ownedAt : null,
     hidden: false,
+    bookmarked: false,
     raw: JSON.stringify({ summary, catalog }),
     syncedAt
   }
@@ -30,6 +32,7 @@ export function normalizeFabAsset(item: FabLibraryItem, syncedAt: number): Asset
   return {
     source: 'fab',
     sourceId: item.assetId,
+    subSource: 'fab-ue',
     title: item.title,
     description: item.description ?? null,
     imageUrl: pickFabImageUrl(item) ?? null,
@@ -38,6 +41,7 @@ export function normalizeFabAsset(item: FabLibraryItem, syncedAt: number): Asset
     // We keep `ownedAt` null and rely on `syncedAt` for ordering.
     ownedAt: null,
     hidden: false,
+    bookmarked: false,
     raw: JSON.stringify(item),
     syncedAt
   }
@@ -85,12 +89,14 @@ export function normalizeFabOtherAsset(
   return {
     source: 'fab',
     sourceId: listing.uid,
+    subSource: 'fab-other',
     title: listing.title,
     description: pickFabOtherDescription(listing) ?? listing.description ?? null,
     imageUrl: pickFabOtherImageUrl(listing) ?? null,
     productUrl: `https://www.fab.com/listings/${listing.uid}`,
     ownedAt: null,
     hidden: false,
+    bookmarked: false,
     raw: JSON.stringify(listing),
     syncedAt
   }

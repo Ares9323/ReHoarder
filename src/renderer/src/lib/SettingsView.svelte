@@ -15,6 +15,7 @@
     enginePaths: string[]
     vaultPaths: string[]
     separateProjectsByPath: boolean
+    separateVaultsByPath: boolean
     gameLaunchParams: string[]
   }
 
@@ -259,6 +260,15 @@
           oninput={markDirty}
           spellcheck="false"
         ></textarea>
+        <label>
+          <input
+            type="checkbox"
+            bind:checked={settings.separateVaultsByPath}
+            onchange={markDirty}
+          />
+          Separate by path
+          <span class="hint">(render one table per root path on the Vault tab)</span>
+        </label>
       </div>
     </div>
   {/if}

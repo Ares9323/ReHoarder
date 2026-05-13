@@ -3,16 +3,20 @@
   import SyncLogPanel from './SyncLogPanel.svelte'
 
   type AssetSource = 'vault' | 'fab' | 'legacy'
+  type AssetSubSource = 'fab-ue' | 'fab-other' | null
+  type SourceFilter = 'all' | 'vault' | 'fab-ue' | 'fab-other' | 'bookmarks' | 'hidden'
 
   interface AssetRow {
     source: AssetSource
     sourceId: string
+    subSource: AssetSubSource
     title: string
     description: string | null
     imageUrl: string | null
     productUrl: string | null
     ownedAt: number | null
     hidden: boolean
+    bookmarked: boolean
     raw: string | null
     syncedAt: number
   }
@@ -22,17 +26,16 @@
     countsBySource: Record<string, number>
     lastSync: Record<string, { at: number; status: string; error: string | null }>
     search: string
-    sourceFilter: AssetSource | 'all'
-    showHidden: boolean
+    sourceFilter: SourceFilter
     syncBusy: boolean
     progressText: string | null
     syncError: string | null
     syncLog: string[]
     onSearch: (s: string) => void
-    onSourceFilter: (f: AssetSource | 'all') => void
-    onShowHidden: (v: boolean) => void
+    onSourceFilter: (f: SourceFilter) => void
     onSyncNow: () => void
     onToggleHidden: (asset: AssetRow) => void
+    onToggleBookmark: (asset: AssetRow) => void
     onSignOut: () => void
   }
 
@@ -42,16 +45,15 @@
     lastSync,
     search,
     sourceFilter,
-    showHidden,
     syncBusy,
     progressText,
     syncError,
     syncLog,
     onSearch,
     onSourceFilter,
-    onShowHidden,
     onSyncNow,
     onToggleHidden,
+    onToggleBookmark,
     onSignOut
   }: Props = $props()
 
@@ -62,6 +64,31 @@
     if (times.length === 0) return 'never'
     const newest = Math.max(...times)
     return new Date(newest).toLocaleString()
+  }
+
+  /**
+   * Union of `engineVersions` across every `projectVersions[]` entry of a Fab asset.
+   * Returns short labels like `5.6` (stripped of the `UE_` prefix), sorted numerically.
+   */
+  function engineVersionsFor(asset: AssetRow): string[] {
+    if (asset.source !== 'fab' || !asset.raw) return []
+    let parsed: { projectVersions?: Array<{ engineVersions?: string[] }> }
+    try {
+      parsed = JSON.parse(asset.raw)
+    } catch {
+      return []
+    }
+    const versions = parsed.projectVersions ?? []
+    const set = new Set<string>()
+    for (const pv of versions) {
+      for (const v of pv.engineVersions ?? []) {
+        const clean = v.replace(/^UE_/i, '').trim()
+        if (clean) set.add(clean)
+      }
+    }
+    return [...set].sort((a, b) =>
+      a.localeCompare(b, undefined, { numeric: true })
+    )
   }
 </script>
 
@@ -93,20 +120,15 @@
     <select
       value={sourceFilter}
       onchange={(e) =>
-        onSourceFilter((e.currentTarget as HTMLSelectElement).value as AssetSource | 'all')}
+        onSourceFilter((e.currentTarget as HTMLSelectElement).value as SourceFilter)}
     >
       <option value="all">All sources</option>
-      <option value="vault">Vault</option>
-      <option value="fab">Fab</option>
+      <option value="vault">Only Unreal Marketplace</option>
+      <option value="fab-ue">Only Fab UE</option>
+      <option value="fab-other">Only Fab Other</option>
+      <option value="bookmarks">Only Bookmarks</option>
+      <option value="hidden">Only Hidden</option>
     </select>
-    <label class="show-hidden">
-      <input
-        type="checkbox"
-        checked={showHidden}
-        onchange={(e) => onShowHidden((e.currentTarget as HTMLInputElement).checked)}
-      />
-      Show hidden
-    </label>
   </div>
 </div>
 
@@ -119,9 +141,12 @@
       productUrl={a.productUrl}
       source={a.source}
       hidden={a.hidden}
+      bookmarked={a.bookmarked}
+      engineVersions={engineVersionsFor(a)}
       onToggleHidden={() => onToggleHidden(a)}
+      onToggleBookmark={() => onToggleBookmark(a)}
       onDownload={a.source === 'fab'
-        ? () => window.api.debug.downloadSampleAsset(a.sourceId)
+        ? () => window.api.downloads.enqueue(a.source, a.sourceId, a.title)
         : undefined}
     />
   {/each}
@@ -245,14 +270,6 @@
   input[type='search'] {
     flex: 1;
     max-width: 320px;
-  }
-
-  .show-hidden {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    color: #a0a0a0;
-    font-size: 0.85rem;
   }
 
   .grid {

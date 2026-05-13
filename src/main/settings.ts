@@ -28,6 +28,8 @@ export interface AppSettings {
   vaultPaths: string[]
   /** Render the Projects tab with one table per configured root path instead of a single combined table. */
   separateProjectsByPath: boolean
+  /** Render the Vault tab with one table per configured root path instead of a single combined table. */
+  separateVaultsByPath: boolean
   /** Extra args appended after `-game` when the user clicks "Run" on a project. `-game` is always added implicitly. */
   gameLaunchParams: string[]
 }
@@ -74,6 +76,7 @@ export function defaultSettings(): AppSettings {
     enginePaths: defaultEnginePaths(),
     vaultPaths: defaultVaultPaths(),
     separateProjectsByPath: false,
+    separateVaultsByPath: false,
     gameLaunchParams: ['-log', '-windowed', '-ResX=1280', '-ResY=720']
   }
 }
@@ -130,6 +133,10 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
       typeof partial.separateProjectsByPath === 'boolean'
         ? partial.separateProjectsByPath
         : d.separateProjectsByPath,
+    separateVaultsByPath:
+      typeof partial.separateVaultsByPath === 'boolean'
+        ? partial.separateVaultsByPath
+        : d.separateVaultsByPath,
     gameLaunchParams: partial.gameLaunchParams
       ? sanitizePaths(partial.gameLaunchParams)
       : d.gameLaunchParams

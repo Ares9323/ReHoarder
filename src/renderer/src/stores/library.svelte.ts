@@ -1,15 +1,32 @@
 // Local mirrors of preload types (see auth.svelte.ts for rationale).
 type AssetSource = 'vault' | 'fab' | 'legacy'
+type AssetSubSource = 'fab-ue' | 'fab-other' | null
+
+/**
+ * The Source dropdown supports a few values that aren't real `assets.source`
+ * rows: `bookmarks` and `hidden` are filter shortcuts, and `fab-ue` / `fab-other`
+ * narrow within `source = 'fab'`. The store maps each value to the right
+ * combination of backend filter flags when calling `library:list`.
+ */
+type SourceFilter =
+  | 'all'
+  | 'vault'
+  | 'fab-ue'
+  | 'fab-other'
+  | 'bookmarks'
+  | 'hidden'
 
 interface AssetRow {
   source: AssetSource
   sourceId: string
+  subSource: AssetSubSource
   title: string
   description: string | null
   imageUrl: string | null
   productUrl: string | null
   ownedAt: number | null
   hidden: boolean
+  bookmarked: boolean
   raw: string | null
   syncedAt: number
 }
@@ -35,8 +52,7 @@ export interface LibraryStore {
   readonly countsBySource: Record<string, number>
   readonly lastSync: Record<string, { at: number; status: string; error: string | null }>
   readonly search: string
-  readonly sourceFilter: AssetSource | 'all'
-  readonly showHidden: boolean
+  readonly sourceFilter: SourceFilter
   readonly syncBusy: boolean
   readonly syncProgress: SyncProgress | null
   readonly syncError: string | null
@@ -46,10 +62,10 @@ export interface LibraryStore {
    * of the empty-library CTA on first paint. */
   readonly initialLoading: boolean
   setSearch(s: string): void
-  setSourceFilter(f: AssetSource | 'all'): void
-  setShowHidden(v: boolean): void
+  setSourceFilter(f: SourceFilter): void
   refresh(): Promise<void>
   setHidden(asset: AssetRow, hidden: boolean): Promise<void>
+  setBookmarked(asset: AssetRow, bookmarked: boolean): Promise<void>
   startSync(): Promise<void>
   clearSyncLog(): void
 }
@@ -59,8 +75,7 @@ export function createLibraryStore(): LibraryStore {
   let countsBySource = $state<Record<string, number>>({})
   let lastSync = $state<Record<string, { at: number; status: string; error: string | null }>>({})
   let search = $state('')
-  let sourceFilter = $state<AssetSource | 'all'>('all')
-  let showHidden = $state(false)
+  let sourceFilter = $state<SourceFilter>('all')
   let syncBusy = $state(false)
   let syncProgress = $state<SyncProgress | null>(null)
   let syncError = $state<string | null>(null)
@@ -83,13 +98,35 @@ export function createLibraryStore(): LibraryStore {
     syncLog = [...syncLog, `[${ts}] ${line}`].slice(-500)
   })
 
+  /** Translate the Source dropdown selection into the backend query shape. */
+  function buildQuery(): {
+    source?: AssetSource
+    subSource?: 'fab-ue' | 'fab-other'
+    search?: string
+    includeHidden?: boolean
+    onlyHidden?: boolean
+    onlyBookmarked?: boolean
+  } {
+    const base = { search: search.trim() === '' ? undefined : search }
+    switch (sourceFilter) {
+      case 'all':
+        return { ...base }
+      case 'vault':
+        return { ...base, source: 'vault' }
+      case 'fab-ue':
+        return { ...base, source: 'fab', subSource: 'fab-ue' }
+      case 'fab-other':
+        return { ...base, source: 'fab', subSource: 'fab-other' }
+      case 'bookmarks':
+        return { ...base, onlyBookmarked: true, includeHidden: true }
+      case 'hidden':
+        return { ...base, onlyHidden: true }
+    }
+  }
+
   async function refresh(): Promise<void> {
     try {
-      const result: LibraryListResult = await window.api.library.list({
-        source: sourceFilter === 'all' ? undefined : sourceFilter,
-        search: search.trim() === '' ? undefined : search,
-        includeHidden: showHidden
-      })
+      const result: LibraryListResult = await window.api.library.list(buildQuery())
       assets = result.assets
       countsBySource = result.countsBySource
       lastSync = result.lastSync
@@ -113,9 +150,6 @@ export function createLibraryStore(): LibraryStore {
     },
     get sourceFilter() {
       return sourceFilter
-    },
-    get showHidden() {
-      return showHidden
     },
     get syncBusy() {
       return syncBusy
@@ -146,13 +180,13 @@ export function createLibraryStore(): LibraryStore {
       sourceFilter = f
       void refresh()
     },
-    setShowHidden(v) {
-      showHidden = v
-      void refresh()
-    },
     refresh,
     async setHidden(asset, hidden) {
       await window.api.library.setHidden(asset.source, asset.sourceId, hidden)
+      await refresh()
+    },
+    async setBookmarked(asset, bookmarked) {
+      await window.api.library.setBookmarked(asset.source, asset.sourceId, bookmarked)
       await refresh()
     },
     async startSync() {

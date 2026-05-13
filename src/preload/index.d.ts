@@ -26,24 +26,30 @@ export interface AuthApi {
 }
 
 export type AssetSource = 'vault' | 'fab' | 'legacy'
+export type AssetSubSource = 'fab-ue' | 'fab-other' | null
 
 export interface AssetRow {
   source: AssetSource
   sourceId: string
+  subSource: AssetSubSource
   title: string
   description: string | null
   imageUrl: string | null
   productUrl: string | null
   ownedAt: number | null
   hidden: boolean
+  bookmarked: boolean
   raw: string | null
   syncedAt: number
 }
 
 export interface LibraryQuery {
   source?: AssetSource
+  subSource?: 'fab-ue' | 'fab-other'
   search?: string
   includeHidden?: boolean
+  onlyHidden?: boolean
+  onlyBookmarked?: boolean
 }
 
 export interface LibraryListResult {
@@ -65,6 +71,7 @@ export interface SyncProgress {
 export interface LibraryApi {
   list(query: LibraryQuery): Promise<LibraryListResult>
   setHidden(source: AssetSource, sourceId: string, hidden: boolean): Promise<void>
+  setBookmarked(source: AssetSource, sourceId: string, bookmarked: boolean): Promise<void>
   sync(): Promise<{ ok: boolean; error?: string }>
   onSyncProgress(handler: (p: SyncProgress) => void): () => void
   onSyncLog(handler: (line: string) => void): () => void
@@ -126,6 +133,8 @@ export interface AppSettings {
   enginePaths: string[]
   vaultPaths: string[]
   separateProjectsByPath: boolean
+  separateVaultsByPath: boolean
+  gameLaunchParams: string[]
 }
 
 export interface SettingsApi {
@@ -136,6 +145,7 @@ export interface SettingsApi {
 export interface LocalVaultEntry {
   name: string
   path: string
+  rootPath: string
   totalBytes: number
   fileCount: number
   lastModified: number
@@ -145,7 +155,7 @@ export interface LocalVaultEntry {
 export interface VaultListResult {
   ok: boolean
   error?: string
-  vaultDir?: string
+  vaultDirs?: string[]
   entries?: LocalVaultEntry[]
 }
 
@@ -224,6 +234,53 @@ export interface ProjectsApi {
   runGame(uprojectPath: string): Promise<ProjectsLaunchResult>
 }
 
+export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+
+export interface DownloadRow {
+  id: string
+  source: string
+  sourceId: string
+  title: string
+  status: DownloadStatus
+  bytesDone: number
+  bytesTotal: number
+  filesDone: number
+  filesTotal: number
+  currentFile: string | null
+  destDir: string | null
+  error: string | null
+  createdAt: number
+  startedAt: number | null
+  finishedAt: number | null
+}
+
+export interface DownloadsListResult {
+  rows: DownloadRow[]
+}
+
+export interface DownloadsEnqueueResult {
+  ok: boolean
+  error?: string
+  id?: string
+}
+
+export interface DownloadsActionResult {
+  ok: boolean
+  error?: string
+}
+
+export interface DownloadsApi {
+  list(): Promise<DownloadsListResult>
+  enqueue(source: string, sourceId: string, title: string): Promise<DownloadsEnqueueResult>
+  cancel(id: string): Promise<DownloadsActionResult>
+  retry(id: string): Promise<DownloadsActionResult>
+  remove(id: string): Promise<DownloadsActionResult>
+  clearCompleted(): Promise<{ removed: number }>
+  openInExplorer(absolutePath: string): Promise<DownloadsActionResult>
+  onStateChanged(handler: (rows: DownloadRow[]) => void): () => void
+  onProgress(handler: (row: DownloadRow) => void): () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -234,6 +291,7 @@ declare global {
       vault: VaultApi
       engines: EnginesApi
       projects: ProjectsApi
+      downloads: DownloadsApi
       settings: SettingsApi
     }
   }

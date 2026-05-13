@@ -5,15 +5,13 @@ import type { AssetsRepo } from '../db/assets-repo'
 import type { Session } from '../auth/session'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
 import type { FabSessionClient } from '../fab/fab-session'
-import { downloadAsset } from './download-orchestrator'
-import { EPIC_USER_AGENT } from '../vault/user-agent'
 import {
   fetchManifestLocator,
   downloadManifestBlob,
-  extractCloudDirBase,
-  extractCloudDirInfo
+  extractCloudDirBase
 } from './manifest-client'
 import { parseManifest } from './manifest-parser'
+import { runFabAssetDownload } from './fab-asset-runner'
 
 interface DebugDeps {
   assetsRepo: AssetsRepo
@@ -169,81 +167,17 @@ async function runDebugDownload(
   deps: DebugDeps,
   assetId: string
 ): Promise<DebugDownloadSampleAssetResult> {
-  const accessToken = deps.session.getAccessToken()
-  if (!accessToken) {
-    return { ok: false, error: 'Not authenticated — log in and run a sync first.' }
-  }
-  const asset = deps.assetsRepo.findById('fab', assetId)
-  if (!asset || !asset.raw) {
-    return { ok: false, error: `Asset "${assetId}" not found or has no raw JSON.` }
-  }
-  const raw = JSON.parse(asset.raw) as {
-    assetNamespace?: string
-    projectVersions?: Array<{ artifactId?: string }>
-  }
-  const artifactId = raw.projectVersions?.[0]?.artifactId
-  const namespace = raw.assetNamespace
-  if (!artifactId || !namespace) {
-    return {
-      ok: false,
-      error: `Asset "${assetId}" raw JSON missing projectVersions[0].artifactId or assetNamespace.`
-    }
-  }
-
-  console.warn('[debug] establishing Fab session before download…')
-  const epicSession = await deps.epicWebSessionFactory.create(accessToken, (m) =>
-    console.warn('[debug]', m)
-  )
-  await deps.fabSessionClient.establishSession(accessToken, epicSession, (m) =>
-    console.warn('[debug]', m)
-  )
-
-  console.warn(`[debug] requesting manifest + downloading for ${artifactId}`)
-  const locator = await fetchManifestLocator(deps.fabFetch, {
-    artifactId,
-    itemId: assetId,
-    namespace,
-    platform: 'Windows',
-    accessToken
-  })
-  const blob = await downloadManifestBlob(deps.fabFetch, locator)
-  // Save the raw manifest blob FIRST, so if parseManifest() throws we still
-  // have the bytes to inspect (e.g. legacy JSON manifests that the v0c parser
-  // doesn't yet recognize).
-  const debugDir = path.join(app.getPath('userData'), 'debug')
-  fs.mkdirSync(debugDir, { recursive: true })
-  const safeId = assetId.replace(/[^A-Za-z0-9._-]/g, '_')
-  const blobPath = path.join(debugDir, `${safeId}.download-manifest.bin`)
-  fs.writeFileSync(blobPath, blob)
-  console.warn(`[debug] saved raw manifest blob → ${blobPath} (${blob.length} bytes)`)
-  for (const [i, p] of locator.distributionPoints.entries()) {
-    console.warn(`[debug] distribution[${i}] full URL: ${p.url}`)
-  }
-  const manifest = parseManifest(blob)
-  const infos = locator.distributionPoints.map((p) => extractCloudDirInfo(p.url))
-  const baseUris = infos.map((i) => i.baseUri)
-  const chunkQueryStrings = infos.map((i) => i.queryString)
-
   const vaultDir = path.join(app.getPath('userData'), 'debug-downloads')
-  const result = await downloadAsset(
-    { manifest, baseUris, chunkQueryStrings, locator },
-    {
-      vaultDir,
-      fetchImpl: deps.fabFetch,
-      chunkHeaders: {
-        Authorization: `bearer ${accessToken}`,
-        'User-Agent': EPIC_USER_AGENT
-      },
-      onLog: (m) => console.warn('[debug]', m),
-      onProgress: (p) => {
-        if (p.currentFile) console.warn(`[debug] ${p.bytesDone}/${p.bytesTotal} — ${p.currentFile}`)
-      }
+  const result = await runFabAssetDownload(deps, assetId, {
+    vaultDir,
+    onLog: (m) => console.warn('[debug]', m),
+    onProgress: (p) => {
+      if (p.currentFile) console.warn(`[debug] ${p.bytesDone}/${p.bytesTotal} — ${p.currentFile}`)
     }
-  )
-
+  })
   return {
     ok: true,
-    artifactId,
+    artifactId: result.artifactId,
     dataDir: result.dataDir,
     fileCount: result.files.length,
     bytesWritten: result.bytesWritten,

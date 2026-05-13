@@ -6,6 +6,8 @@ export interface LocalVaultEntry {
   name: string
   /** Absolute path of the asset directory (the one containing `data/`). */
   path: string
+  /** The configured root path the entry was discovered under. */
+  rootPath: string
   /** Sum of byte sizes of every regular file under the entry. */
   totalBytes: number
   /** Number of regular files (excluding `cache/` if present). */
@@ -17,52 +19,65 @@ export interface LocalVaultEntry {
 }
 
 /**
- * Enumerate top-level entries under `vaultDir`. Each top-level subdirectory
- * is treated as one local asset. For each entry we walk its contents and
- * accumulate total bytes, file count, and the newest mtime. The `cache/`
- * subdirectory (used while a download is in flight) is skipped from the
- * counts so users see the actual on-disk asset size, not the chunk cache.
+ * Enumerate top-level entries under each path in `vaultDirs`. Each top-level
+ * subdirectory is treated as one local asset. For each entry we walk its
+ * contents and accumulate total bytes, file count, and the newest mtime.
+ * The `cache/` subdirectory (used while a download is in flight) is skipped
+ * from the counts so users see the actual on-disk asset size, not the
+ * chunk cache.
  *
  * Returns entries sorted by `lastModified` descending — newest downloads
- * first.
+ * first. If two configured roots produce an entry at the same absolute path
+ * (e.g. one is a prefix of the other), the first wins.
  */
-export async function listLocalVault(vaultDir: string): Promise<LocalVaultEntry[]> {
-  let topNames: string[]
-  try {
-    topNames = await fsp.readdir(vaultDir)
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw err
-  }
-
+export async function listLocalVault(vaultDirs: string[]): Promise<LocalVaultEntry[]> {
   const entries: LocalVaultEntry[] = []
-  for (const name of topNames) {
-    const entryPath = path.join(vaultDir, name)
-    let stat
+  const seenPaths = new Set<string>()
+
+  for (const vaultDir of vaultDirs) {
+    let topNames: string[]
     try {
-      stat = await fsp.stat(entryPath)
-    } catch {
+      topNames = await fsp.readdir(vaultDir)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue
+      // permission errors / I/O errors on one root shouldn't fail the whole list
+      console.warn(`[vault] could not read "${vaultDir}":`, err)
       continue
     }
-    if (!stat.isDirectory()) continue
-    const walked = await walkEntry(entryPath)
-    const dataPath = path.join(entryPath, 'data')
-    let hasData = false
-    try {
-      const ds = await fsp.stat(dataPath)
-      hasData = ds.isDirectory()
-    } catch {
-      hasData = false
+
+    for (const name of topNames) {
+      const entryPath = path.join(vaultDir, name)
+      const key = path.resolve(entryPath).toLowerCase()
+      if (seenPaths.has(key)) continue
+      let stat
+      try {
+        stat = await fsp.stat(entryPath)
+      } catch {
+        continue
+      }
+      if (!stat.isDirectory()) continue
+      const walked = await walkEntry(entryPath)
+      const dataPath = path.join(entryPath, 'data')
+      let hasData = false
+      try {
+        const ds = await fsp.stat(dataPath)
+        hasData = ds.isDirectory()
+      } catch {
+        hasData = false
+      }
+      entries.push({
+        name,
+        path: entryPath,
+        rootPath: vaultDir,
+        totalBytes: walked.totalBytes,
+        fileCount: walked.fileCount,
+        lastModified: walked.lastModified,
+        hasData
+      })
+      seenPaths.add(key)
     }
-    entries.push({
-      name,
-      path: entryPath,
-      totalBytes: walked.totalBytes,
-      fileCount: walked.fileCount,
-      lastModified: walked.lastModified,
-      hasData
-    })
   }
+
   entries.sort((a, b) => b.lastModified - a.lastModified)
   return entries
 }

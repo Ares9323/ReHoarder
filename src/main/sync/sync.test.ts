@@ -125,6 +125,8 @@ describe('Sync.syncAll', () => {
       productUrl: null,
       ownedAt: null,
       hidden: false,
+      bookmarked: false,
+      subSource: 'fab-ue',
       raw: '{}',
       syncedAt: 0
     })

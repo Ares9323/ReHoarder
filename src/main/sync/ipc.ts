@@ -5,8 +5,11 @@ import type { Session } from '../auth/session'
 
 export interface LibraryQuery {
   source?: AssetSource
+  subSource?: 'fab-ue' | 'fab-other'
   search?: string
   includeHidden?: boolean
+  onlyHidden?: boolean
+  onlyBookmarked?: boolean
 }
 
 export interface LibraryListResult {
@@ -33,6 +36,13 @@ export function registerLibraryIpc(
     'library:set-hidden',
     (_e, source: AssetSource, sourceId: string, hidden: boolean): void => {
       repo.setHidden(source, sourceId, hidden)
+    }
+  )
+
+  ipcMain.handle(
+    'library:set-bookmarked',
+    (_e, source: AssetSource, sourceId: string, bookmarked: boolean): void => {
+      repo.setBookmarked(source, sourceId, bookmarked)
     }
   )
 

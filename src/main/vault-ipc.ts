@@ -1,11 +1,13 @@
-import { ipcMain, app, shell } from 'electron'
+import { ipcMain, shell } from 'electron'
 import * as path from 'node:path'
 import { listLocalVault, type LocalVaultEntry } from './vault-local'
+import type { SettingsStore } from './settings'
 
 export interface VaultListResult {
   ok: boolean
   error?: string
-  vaultDir?: string
+  /** Every configured root path that was scanned, in the order the user set. */
+  vaultDirs?: string[]
   entries?: LocalVaultEntry[]
 }
 
@@ -17,16 +19,15 @@ export interface VaultOpenResult {
 /**
  * Register `vault:*` IPCs exposing the local-vault scanner to the renderer.
  *
- * For v0c the vault directory is hardcoded to `<userData>/debug-downloads/`
- * (the same path the debug download handler writes to). Once Settings
- * exists, this will read from a user-configured list of vault paths.
+ * Reads `settings.vaultPaths` live on every call so adding/removing paths
+ * in Settings reflects without restart.
  */
-export function registerVaultIpc(): void {
+export function registerVaultIpc(settings: SettingsStore): void {
   ipcMain.handle('vault:list', async (): Promise<VaultListResult> => {
     try {
-      const vaultDir = path.join(app.getPath('userData'), 'debug-downloads')
-      const entries = await listLocalVault(vaultDir)
-      return { ok: true, vaultDir, entries }
+      const cfg = settings.load()
+      const entries = await listLocalVault(cfg.vaultPaths)
+      return { ok: true, vaultDirs: cfg.vaultPaths, entries }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       console.error('[vault] list failed:', msg)
@@ -37,12 +38,14 @@ export function registerVaultIpc(): void {
   ipcMain.handle(
     'vault:open-in-explorer',
     async (_e, absolutePath: string): Promise<VaultOpenResult> => {
-      // Defense-in-depth: only open paths under the userData tree, never
-      // arbitrary disk locations supplied by the renderer.
-      const userData = app.getPath('userData')
+      // Only allow opening paths that fall under one of the configured vault roots.
+      const cfg = settings.load()
       const resolved = path.resolve(absolutePath)
-      if (!resolved.startsWith(path.resolve(userData))) {
-        return { ok: false, error: 'Refusing to open path outside userData' }
+      const allowed = cfg.vaultPaths.some((root) =>
+        resolved.startsWith(path.resolve(root))
+      )
+      if (!allowed) {
+        return { ok: false, error: 'Refusing to open path outside the configured vault roots' }
       }
       try {
         const result = await shell.openPath(resolved)

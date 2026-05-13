@@ -21,6 +21,8 @@ const sampleAsset = (over: Partial<AssetRow> = {}): AssetRow => ({
   productUrl: 'https://www.unrealengine.com/marketplace/en-US/product/test-asset',
   ownedAt: 1_700_000_000_000,
   hidden: false,
+  bookmarked: false,
+  subSource: null,
   raw: '{}',
   syncedAt: 1_700_000_000_000,
   ...over

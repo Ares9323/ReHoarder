@@ -1,49 +1,66 @@
 import type Database from 'better-sqlite3'
 
 export type AssetSource = 'vault' | 'fab' | 'legacy'
+/** Sub-bucket within `source = 'fab'`. `null` for `source = 'vault'`. */
+export type AssetSubSource = 'fab-ue' | 'fab-other' | null
 
 export interface AssetRow {
   source: AssetSource
   sourceId: string
+  subSource: AssetSubSource
   title: string
   description: string | null
   imageUrl: string | null
   productUrl: string | null
   ownedAt: number | null
   hidden: boolean
+  bookmarked: boolean
   raw: string | null
   syncedAt: number
 }
 
 export interface ListFilters {
   source?: AssetSource
+  /** When set, narrows `fab` to either `fab-ue` or `fab-other`. Ignored for other sources. */
+  subSource?: 'fab-ue' | 'fab-other'
   search?: string
+  /** If `true`, hidden rows are included in the result. Default `false`. */
   includeHidden?: boolean
+  /** If `true`, ONLY hidden rows are returned (overrides `includeHidden`). */
+  onlyHidden?: boolean
+  /** If `true`, ONLY bookmarked rows are returned. */
+  onlyBookmarked?: boolean
 }
 
 interface AssetRowDb {
   source: string
   source_id: string
+  sub_source: string | null
   title: string
   description: string | null
   image_url: string | null
   product_url: string | null
   owned_at: number | null
   hidden: number
+  bookmarked: number
   raw: string | null
   synced_at: number
 }
 
 function fromDb(r: AssetRowDb): AssetRow {
+  const sub: AssetSubSource =
+    r.sub_source === 'fab-ue' || r.sub_source === 'fab-other' ? r.sub_source : null
   return {
     source: r.source as AssetSource,
     sourceId: r.source_id,
+    subSource: sub,
     title: r.title,
     description: r.description,
     imageUrl: r.image_url,
     productUrl: r.product_url,
     ownedAt: r.owned_at,
     hidden: r.hidden !== 0,
+    bookmarked: r.bookmarked !== 0,
     raw: r.raw,
     syncedAt: r.synced_at
   }
@@ -53,6 +70,7 @@ export class AssetsRepo {
   private readonly upsertStmt: Database.Statement
   private readonly findByIdStmt: Database.Statement
   private readonly setHiddenStmt: Database.Statement
+  private readonly setBookmarkedStmt: Database.Statement
   private readonly countAllStmt: Database.Statement
   private readonly countBySourceStmt: Database.Statement
   private readonly knownIdsStmt: Database.Statement
@@ -62,12 +80,15 @@ export class AssetsRepo {
   private readonly getAllTagsStmt: Database.Statement
 
   constructor(public readonly db: Database.Database) {
-    // Upsert preserves the existing `hidden` flag on conflict so sync doesn't
-    // resurrect assets the user explicitly hid.
+    // Upsert preserves the existing `hidden` and `bookmarked` flags on conflict
+    // so sync doesn't undo user-driven state on previously-known assets.
+    // `sub_source` IS refreshed: sync derives it from the raw payload and
+    // overwriting keeps it consistent with the source endpoint the row came from.
     this.upsertStmt = db.prepare(`
-      INSERT INTO assets (source, source_id, title, description, image_url, product_url, owned_at, hidden, raw, synced_at)
-      VALUES (@source, @source_id, @title, @description, @image_url, @product_url, @owned_at, @hidden, @raw, @synced_at)
+      INSERT INTO assets (source, source_id, sub_source, title, description, image_url, product_url, owned_at, hidden, bookmarked, raw, synced_at)
+      VALUES (@source, @source_id, @sub_source, @title, @description, @image_url, @product_url, @owned_at, @hidden, @bookmarked, @raw, @synced_at)
       ON CONFLICT(source, source_id) DO UPDATE SET
+        sub_source = excluded.sub_source,
         title = excluded.title,
         description = excluded.description,
         image_url = excluded.image_url,
@@ -80,6 +101,9 @@ export class AssetsRepo {
     this.findByIdStmt = db.prepare('SELECT * FROM assets WHERE source = ? AND source_id = ?')
     this.setHiddenStmt = db.prepare(
       'UPDATE assets SET hidden = ? WHERE source = ? AND source_id = ?'
+    )
+    this.setBookmarkedStmt = db.prepare(
+      'UPDATE assets SET bookmarked = ? WHERE source = ? AND source_id = ?'
     )
     this.countAllStmt = db.prepare('SELECT COUNT(*) AS n FROM assets')
     this.countBySourceStmt = db.prepare('SELECT source, COUNT(*) AS n FROM assets GROUP BY source')
@@ -100,12 +124,14 @@ export class AssetsRepo {
     this.upsertStmt.run({
       source: asset.source,
       source_id: asset.sourceId,
+      sub_source: asset.subSource,
       title: asset.title,
       description: asset.description,
       image_url: asset.imageUrl,
       product_url: asset.productUrl,
       owned_at: asset.ownedAt,
       hidden: asset.hidden ? 1 : 0,
+      bookmarked: asset.bookmarked ? 1 : 0,
       raw: asset.raw,
       synced_at: asset.syncedAt
     })
@@ -120,12 +146,21 @@ export class AssetsRepo {
     const clauses: string[] = []
     const params: unknown[] = []
 
-    if (!filters.includeHidden) {
+    if (filters.onlyHidden) {
+      clauses.push('hidden = 1')
+    } else if (!filters.includeHidden) {
       clauses.push('hidden = 0')
+    }
+    if (filters.onlyBookmarked) {
+      clauses.push('bookmarked = 1')
     }
     if (filters.source) {
       clauses.push('source = ?')
       params.push(filters.source)
+    }
+    if (filters.subSource) {
+      clauses.push('sub_source = ?')
+      params.push(filters.subSource)
     }
     if (filters.search && filters.search.trim().length > 0) {
       clauses.push("(LOWER(title) LIKE ? OR LOWER(IFNULL(description, '')) LIKE ?)")
@@ -141,6 +176,10 @@ export class AssetsRepo {
 
   setHidden(source: AssetSource, sourceId: string, hidden: boolean): void {
     this.setHiddenStmt.run(hidden ? 1 : 0, source, sourceId)
+  }
+
+  setBookmarked(source: AssetSource, sourceId: string, bookmarked: boolean): void {
+    this.setBookmarkedStmt.run(bookmarked ? 1 : 0, source, sourceId)
   }
 
   countAll(): number {

@@ -19,24 +19,30 @@ export interface SubmitCodeResult {
 }
 
 export type AssetSource = 'vault' | 'fab' | 'legacy'
+export type AssetSubSource = 'fab-ue' | 'fab-other' | null
 
 export interface AssetRow {
   source: AssetSource
   sourceId: string
+  subSource: AssetSubSource
   title: string
   description: string | null
   imageUrl: string | null
   productUrl: string | null
   ownedAt: number | null
   hidden: boolean
+  bookmarked: boolean
   raw: string | null
   syncedAt: number
 }
 
 export interface LibraryQuery {
   source?: AssetSource
+  subSource?: 'fab-ue' | 'fab-other'
   search?: string
   includeHidden?: boolean
+  onlyHidden?: boolean
+  onlyBookmarked?: boolean
 }
 
 export interface LibraryListResult {
@@ -69,11 +75,14 @@ export interface AppSettings {
   enginePaths: string[]
   vaultPaths: string[]
   separateProjectsByPath: boolean
+  separateVaultsByPath: boolean
+  gameLaunchParams: string[]
 }
 
 export interface LocalVaultEntry {
   name: string
   path: string
+  rootPath: string
   totalBytes: number
   fileCount: number
   lastModified: number
@@ -83,7 +92,7 @@ export interface LocalVaultEntry {
 export interface VaultListResult {
   ok: boolean
   error?: string
-  vaultDir?: string
+  vaultDirs?: string[]
   entries?: LocalVaultEntry[]
 }
 
@@ -145,6 +154,41 @@ export interface ProjectsLaunchResult {
   engineName?: string
 }
 
+export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
+
+export interface DownloadRow {
+  id: string
+  source: string
+  sourceId: string
+  title: string
+  status: DownloadStatus
+  bytesDone: number
+  bytesTotal: number
+  filesDone: number
+  filesTotal: number
+  currentFile: string | null
+  destDir: string | null
+  error: string | null
+  createdAt: number
+  startedAt: number | null
+  finishedAt: number | null
+}
+
+export interface DownloadsListResult {
+  rows: DownloadRow[]
+}
+
+export interface DownloadsEnqueueResult {
+  ok: boolean
+  error?: string
+  id?: string
+}
+
+export interface DownloadsActionResult {
+  ok: boolean
+  error?: string
+}
+
 export interface DebugClearLibraryResult {
   ok: boolean
   error?: string
@@ -197,6 +241,8 @@ const api = {
       ipcRenderer.invoke('library:list', query),
     setHidden: (source: AssetSource, sourceId: string, hidden: boolean): Promise<void> =>
       ipcRenderer.invoke('library:set-hidden', source, sourceId, hidden),
+    setBookmarked: (source: AssetSource, sourceId: string, bookmarked: boolean): Promise<void> =>
+      ipcRenderer.invoke('library:set-bookmarked', source, sourceId, bookmarked),
     sync: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('library:sync'),
     onSyncProgress: (handler: (p: SyncProgress) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, p: SyncProgress): void => handler(p)
@@ -236,6 +282,31 @@ const api = {
       ipcRenderer.invoke('projects:launch-editor', uprojectPath),
     runGame: (uprojectPath: string): Promise<ProjectsLaunchResult> =>
       ipcRenderer.invoke('projects:run-game', uprojectPath)
+  },
+  downloads: {
+    list: (): Promise<DownloadsListResult> => ipcRenderer.invoke('downloads:list'),
+    enqueue: (source: string, sourceId: string, title: string): Promise<DownloadsEnqueueResult> =>
+      ipcRenderer.invoke('downloads:enqueue', source, sourceId, title),
+    cancel: (id: string): Promise<DownloadsActionResult> =>
+      ipcRenderer.invoke('downloads:cancel', id),
+    retry: (id: string): Promise<DownloadsActionResult> =>
+      ipcRenderer.invoke('downloads:retry', id),
+    remove: (id: string): Promise<DownloadsActionResult> =>
+      ipcRenderer.invoke('downloads:remove', id),
+    clearCompleted: (): Promise<{ removed: number }> =>
+      ipcRenderer.invoke('downloads:clear-completed'),
+    openInExplorer: (absolutePath: string): Promise<DownloadsActionResult> =>
+      ipcRenderer.invoke('downloads:open-in-explorer', absolutePath),
+    onStateChanged: (handler: (rows: DownloadRow[]) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, rows: DownloadRow[]): void => handler(rows)
+      ipcRenderer.on('downloads:state-changed', listener)
+      return () => ipcRenderer.removeListener('downloads:state-changed', listener)
+    },
+    onProgress: (handler: (row: DownloadRow) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, row: DownloadRow): void => handler(row)
+      ipcRenderer.on('downloads:progress', listener)
+      return () => ipcRenderer.removeListener('downloads:progress', listener)
+    }
   },
   settings: {
     get: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
