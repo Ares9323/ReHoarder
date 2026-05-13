@@ -93,11 +93,23 @@ export interface DebugClearLibraryResult {
   syncStateRowsReset?: number
 }
 
+export interface DebugDownloadSampleAssetResult {
+  ok: boolean
+  error?: string
+  artifactId?: string
+  dataDir?: string
+  fileCount?: number
+  bytesWritten?: number
+  durationMs?: number
+  firstFiles?: Array<{ filename: string; size: number; skipped: boolean }>
+}
+
 export interface DebugApi {
   fetchSampleManifest(assetId: string): Promise<DebugFetchSampleManifestResult>
   clearLibrary(opts?: {
     sources?: Array<'vault' | 'fab' | 'legacy'>
   }): Promise<DebugClearLibraryResult>
+  downloadSampleAsset(assetId: string): Promise<DebugDownloadSampleAssetResult>
 }
 
 declare global {

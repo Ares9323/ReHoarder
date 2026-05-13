@@ -63,6 +63,17 @@ export interface DebugClearLibraryResult {
   syncStateRowsReset?: number
 }
 
+export interface DebugDownloadSampleAssetResult {
+  ok: boolean
+  error?: string
+  artifactId?: string
+  dataDir?: string
+  fileCount?: number
+  bytesWritten?: number
+  durationMs?: number
+  firstFiles?: Array<{ filename: string; size: number; skipped: boolean }>
+}
+
 export interface DebugFetchSampleManifestResult {
   ok: boolean
   error?: string
@@ -113,7 +124,9 @@ const api = {
       ipcRenderer.invoke('debug:fetch-sample-manifest', assetId),
     clearLibrary: (
       opts: { sources?: Array<'vault' | 'fab' | 'legacy'> } = {}
-    ): Promise<DebugClearLibraryResult> => ipcRenderer.invoke('debug:clear-library', opts)
+    ): Promise<DebugClearLibraryResult> => ipcRenderer.invoke('debug:clear-library', opts),
+    downloadSampleAsset: (assetId: string): Promise<DebugDownloadSampleAssetResult> =>
+      ipcRenderer.invoke('debug:download-sample-asset', assetId)
   }
 }
 

@@ -1,10 +1,11 @@
-import { ipcMain } from 'electron'
+import { ipcMain, app } from 'electron'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { AssetsRepo } from '../db/assets-repo'
 import type { Session } from '../auth/session'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
 import type { FabSessionClient } from '../fab/fab-session'
+import { downloadAsset } from './download-orchestrator'
 import {
   fetchManifestLocator,
   downloadManifestBlob,
@@ -77,6 +78,8 @@ export function registerDebugIpc(deps: DebugDeps): void {
       }
     }
   )
+
+  registerDebugDownloadIpc(deps)
 }
 
 export interface DebugClearLibraryResult {
@@ -124,6 +127,111 @@ function clearLibrary(
       `(sources=${sources?.join(',') ?? 'ALL'})`
   )
   return { ok: true, ...result }
+}
+
+export interface DebugDownloadSampleAssetResult {
+  ok: boolean
+  error?: string
+  artifactId?: string
+  dataDir?: string
+  fileCount?: number
+  bytesWritten?: number
+  durationMs?: number
+  firstFiles?: Array<{ filename: string; size: number; skipped: boolean }>
+}
+
+/**
+ * Register `debug:download-sample-asset` so the renderer's DevTools console
+ * can trigger a full end-to-end download against the live Fab CDN. Saves
+ * everything into `<userData>/debug-downloads/<artifactId>/data/`.
+ *
+ * Sample usage (from DevTools console):
+ *   await window.api.debug.downloadSampleAsset('<assetId>')
+ */
+export function registerDebugDownloadIpc(deps: DebugDeps): void {
+  ipcMain.handle(
+    'debug:download-sample-asset',
+    async (_event, assetId: string): Promise<DebugDownloadSampleAssetResult> => {
+      try {
+        return await runDebugDownload(deps, assetId)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error('[debug] download-sample-asset failed:', msg)
+        return { ok: false, error: msg }
+      }
+    }
+  )
+}
+
+async function runDebugDownload(
+  deps: DebugDeps,
+  assetId: string
+): Promise<DebugDownloadSampleAssetResult> {
+  const accessToken = deps.session.getAccessToken()
+  if (!accessToken) {
+    return { ok: false, error: 'Not authenticated — log in and run a sync first.' }
+  }
+  const asset = deps.assetsRepo.findById('fab', assetId)
+  if (!asset || !asset.raw) {
+    return { ok: false, error: `Asset "${assetId}" not found or has no raw JSON.` }
+  }
+  const raw = JSON.parse(asset.raw) as {
+    assetNamespace?: string
+    projectVersions?: Array<{ artifactId?: string }>
+  }
+  const artifactId = raw.projectVersions?.[0]?.artifactId
+  const namespace = raw.assetNamespace
+  if (!artifactId || !namespace) {
+    return {
+      ok: false,
+      error: `Asset "${assetId}" raw JSON missing projectVersions[0].artifactId or assetNamespace.`
+    }
+  }
+
+  console.warn('[debug] establishing Fab session before download…')
+  const epicSession = await deps.epicWebSessionFactory.create(accessToken, (m) =>
+    console.warn('[debug]', m)
+  )
+  await deps.fabSessionClient.establishSession(accessToken, epicSession, (m) =>
+    console.warn('[debug]', m)
+  )
+
+  console.warn(`[debug] requesting manifest + downloading for ${artifactId}`)
+  const locator = await fetchManifestLocator(deps.fabFetch, {
+    artifactId,
+    itemId: assetId,
+    namespace,
+    platform: 'Windows',
+    accessToken
+  })
+  const blob = await downloadManifestBlob(deps.fabFetch, locator)
+  const manifest = parseManifest(blob)
+  const baseUris = locator.distributionPoints.map((p) => extractCloudDirBase(p.url))
+
+  const vaultDir = path.join(app.getPath('userData'), 'debug-downloads')
+  const result = await downloadAsset(
+    { manifest, baseUris, locator },
+    {
+      vaultDir,
+      fetchImpl: deps.fabFetch,
+      onLog: (m) => console.warn('[debug]', m),
+      onProgress: (p) => {
+        if (p.currentFile) console.warn(`[debug] ${p.bytesDone}/${p.bytesTotal} — ${p.currentFile}`)
+      }
+    }
+  )
+
+  return {
+    ok: true,
+    artifactId,
+    dataDir: result.dataDir,
+    fileCount: result.files.length,
+    bytesWritten: result.bytesWritten,
+    durationMs: result.durationMs,
+    firstFiles: result.files
+      .slice(0, 10)
+      .map((f) => ({ filename: f.filename, size: f.fileSize, skipped: f.skipped }))
+  }
 }
 
 async function fetchSampleManifest(
