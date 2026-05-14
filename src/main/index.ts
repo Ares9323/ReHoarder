@@ -117,7 +117,11 @@ app.whenReady().then(async () => {
   const fabSessionClient = new FabSessionClient(fabLoginDriver)
   const fabClient = new FabClient(fabFetch)
   const sync = new Sync(assetsRepo, vaultClient, epicWebSessionFactory, fabSessionClient, fabClient)
-  registerLibraryIpc(assetsRepo, sync, session, () => mainWindow)
+  registerLibraryIpc(assetsRepo, sync, session, () => mainWindow, {
+    epicWebSessionFactory,
+    fabSessionClient,
+    fabFetch
+  })
   registerDebugIpc({
     assetsRepo,
     session,

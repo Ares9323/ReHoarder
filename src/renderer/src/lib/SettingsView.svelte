@@ -10,6 +10,7 @@
     compilePluginsOnInstall: boolean
     deleteExtraVaultPlatforms: boolean
     skipCruftAtDownload: boolean
+    focusFreebiesTabAtStartup: boolean
     cruftPatterns: string[]
     downloadThreads: number
     maxConcurrentDownloads: number
@@ -263,6 +264,15 @@
           />
           Exit ReHoarder when launching Unreal
           <span class="hint">(quits the app after the editor or Run-game spawns)</span>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            bind:checked={settings.focusFreebiesTabAtStartup}
+            onchange={markDirty}
+          />
+          Focus Freebies tab at startup if unclaimed
+          <span class="hint">(opens the Freebies tab on launch when this month's free assets haven't been claimed)</span>
         </label>
       </div>
 

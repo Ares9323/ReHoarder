@@ -56,6 +56,22 @@ export interface LibraryListResult {
   lastSync: Record<string, { at: number; status: string; error: string | null }>
 }
 
+export interface FabFreebie {
+  uid: string
+  title: string
+  imageUrl: string | null
+  productUrl: string
+  claimed?: boolean
+  [key: string]: unknown
+}
+
+export interface FreebiesResult {
+  ok: boolean
+  error?: string
+  freebies?: FabFreebie[]
+  fetchedAt?: number
+}
+
 export type SyncPhase = 'starting' | 'vault' | 'fab' | 'done' | 'error'
 
 export interface SyncProgress {
@@ -75,6 +91,7 @@ export interface AppSettings {
   compilePluginsOnInstall: boolean
   deleteExtraVaultPlatforms: boolean
   skipCruftAtDownload: boolean
+  focusFreebiesTabAtStartup: boolean
   cruftPatterns: string[]
   downloadThreads: number
   maxConcurrentDownloads: number
@@ -384,6 +401,8 @@ const api = {
     setBookmarked: (source: AssetSource, sourceId: string, bookmarked: boolean): Promise<void> =>
       ipcRenderer.invoke('library:set-bookmarked', source, sourceId, bookmarked),
     sync: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('library:sync'),
+    listFreebies: (opts: { force?: boolean } = {}): Promise<FreebiesResult> =>
+      ipcRenderer.invoke('library:list-freebies', opts),
     onSyncProgress: (handler: (p: SyncProgress) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, p: SyncProgress): void => handler(p)
       ipcRenderer.on('library:sync-progress', listener)

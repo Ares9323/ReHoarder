@@ -18,6 +18,8 @@ export interface AppSettings {
   deleteExtraVaultPlatforms: boolean
   /** Master switch for the cruft-skip behaviour at download time. When off, neither defaults nor `cruftPatterns` are applied. */
   skipCruftAtDownload: boolean
+  /** When true, the renderer fetches Fab freebies on app launch and switches the active tab to Freebies if any are unclaimed. */
+  focusFreebiesTabAtStartup: boolean
   /** Extra glob patterns appended to the built-in cruft list (cruft-filter syntax). One per line in the UI. */
   cruftPatterns: string[]
   /** Worker pool size for chunk downloads within a single asset (1-64). */
@@ -83,6 +85,7 @@ export function defaultSettings(): AppSettings {
     compilePluginsOnInstall: process.platform === 'linux',
     deleteExtraVaultPlatforms: false,
     skipCruftAtDownload: true,
+    focusFreebiesTabAtStartup: false,
     cruftPatterns: [],
     downloadThreads: 16,
     maxConcurrentDownloads: 2,
@@ -142,6 +145,10 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
       typeof partial.skipCruftAtDownload === 'boolean'
         ? partial.skipCruftAtDownload
         : d.skipCruftAtDownload,
+    focusFreebiesTabAtStartup:
+      typeof partial.focusFreebiesTabAtStartup === 'boolean'
+        ? partial.focusFreebiesTabAtStartup
+        : d.focusFreebiesTabAtStartup,
     cruftPatterns: partial.cruftPatterns ? sanitizePaths(partial.cruftPatterns) : d.cruftPatterns,
     downloadThreads:
       typeof partial.downloadThreads === 'number'

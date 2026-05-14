@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { createAuthStore } from './stores/auth.svelte'
   import { createLibraryStore } from './stores/library.svelte'
+  import { freebiesStore } from './stores/freebies.svelte'
   import LoginView from './lib/LoginView.svelte'
   import EmptyLibraryView from './lib/EmptyLibraryView.svelte'
   import AssetLibraryView from './lib/AssetLibraryView.svelte'
@@ -12,6 +13,7 @@
   import EnginesView from './lib/EnginesView.svelte'
   import ProjectsView from './lib/ProjectsView.svelte'
   import DownloadsView from './lib/DownloadsView.svelte'
+  import FreebiesView from './lib/FreebiesView.svelte'
   import SettingsView from './lib/SettingsView.svelte'
 
   const auth = createAuthStore()
@@ -23,8 +25,26 @@
     await auth.refresh()
     if (auth.state.status === 'authenticated') {
       await library.refresh()
+      void maybeFocusFreebiesTab()
     }
   })
+
+  /**
+   * Opt-in startup behavior: if `focusFreebiesTabAtStartup` is on and the
+   * monthly freebies fetch reports unclaimed items, switch the active tab
+   * to Freebies so the user lands there directly. Network failures stay
+   * silent — they shouldn't disturb the normal boot flow.
+   */
+  async function maybeFocusFreebiesTab(): Promise<void> {
+    try {
+      const settings = await window.api.settings.get()
+      if (!settings.focusFreebiesTabAtStartup) return
+      await freebiesStore.ensureLoaded()
+      if (freebiesStore.unclaimedCount > 0) activeTab = 'freebies'
+    } catch {
+      // Background check — never blocks the UI on failure.
+    }
+  }
 
   $effect(() => {
     if (auth.state.status === 'authenticated') {
@@ -99,6 +119,8 @@
       <ProjectsView />
     {:else if activeTab === 'vault'}
       <LocalVaultView />
+    {:else if activeTab === 'freebies'}
+      <FreebiesView />
     {:else if activeTab === 'settings'}
       <SettingsView />
     {:else if activeTab === 'downloads'}
@@ -112,3 +134,4 @@
     onSubmitCode={(code) => auth.submitCode(code)}
   />
 {/if}
+

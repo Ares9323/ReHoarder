@@ -73,11 +73,28 @@ export interface SyncProgress {
   error?: string
 }
 
+export interface FabFreebie {
+  uid: string
+  title: string
+  imageUrl: string | null
+  productUrl: string
+  claimed?: boolean
+  [key: string]: unknown
+}
+
+export interface FreebiesResult {
+  ok: boolean
+  error?: string
+  freebies?: FabFreebie[]
+  fetchedAt?: number
+}
+
 export interface LibraryApi {
   list(query: LibraryQuery): Promise<LibraryListResult>
   setHidden(source: AssetSource, sourceId: string, hidden: boolean): Promise<void>
   setBookmarked(source: AssetSource, sourceId: string, bookmarked: boolean): Promise<void>
   sync(): Promise<{ ok: boolean; error?: string }>
+  listFreebies(opts?: { force?: boolean }): Promise<FreebiesResult>
   onSyncProgress(handler: (p: SyncProgress) => void): () => void
   onSyncLog(handler: (line: string) => void): () => void
 }
@@ -133,6 +150,7 @@ export interface AppSettings {
   compilePluginsOnInstall: boolean
   deleteExtraVaultPlatforms: boolean
   skipCruftAtDownload: boolean
+  focusFreebiesTabAtStartup: boolean
   cruftPatterns: string[]
   downloadThreads: number
   maxConcurrentDownloads: number

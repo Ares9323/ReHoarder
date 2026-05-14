@@ -3,5 +3,6 @@ export type TabKey =
   | 'engines'
   | 'projects'
   | 'vault'
+  | 'freebies'
   | 'settings'
   | 'downloads'

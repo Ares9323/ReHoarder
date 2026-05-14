@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import type { TabKey } from './tabs'
   import { downloadsStore } from '../stores/downloads.svelte'
+  import { freebiesStore } from '../stores/freebies.svelte'
 
   interface TabDef {
     key: TabKey
@@ -21,6 +22,9 @@
   const activeDownloads = $derived(
     downloadsStore.all.filter((d) => d.status === 'queued' || d.status === 'running').length
   )
+  // Unclaimed freebies show as a chip on the Freebies tab. The store keeps
+  // its own loading lifecycle — we just read the derived count.
+  const unclaimedFreebies = $derived(freebiesStore.unclaimedCount)
 
   onMount(() => {
     void downloadsStore.ensureLoaded()
@@ -41,6 +45,7 @@
     { key: 'projects', label: 'Projects' },
     { key: 'engines', label: 'Engines' },
     { key: 'vault', label: 'Vault' },
+    { key: 'freebies', label: 'Freebies' },
     { key: 'settings', label: 'Settings' },
     { key: 'downloads', label: 'Downloads' }
   ]
@@ -60,6 +65,11 @@
         {#if t.key === 'downloads' && activeDownloads > 0}
           <span class="badge" title="{activeDownloads} download{activeDownloads === 1 ? '' : 's'} in progress">
             {activeDownloads}
+          </span>
+        {/if}
+        {#if t.key === 'freebies' && unclaimedFreebies > 0}
+          <span class="badge" title="{unclaimedFreebies} freebie{unclaimedFreebies === 1 ? '' : 's'} you haven't claimed yet">
+            {unclaimedFreebies}
           </span>
         {/if}
       </button>
