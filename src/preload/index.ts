@@ -293,6 +293,20 @@ export interface DownloadsActionResult {
   error?: string
 }
 
+export interface UpdateCheckResult {
+  ok: boolean
+  available: boolean
+  error?: string
+  currentVersion?: string
+  targetVersion?: string
+  notes?: string | null
+}
+
+export interface UpdateActionResult {
+  ok: boolean
+  error?: string
+}
+
 export interface DebugClearLibraryResult {
   ok: boolean
   error?: string
@@ -438,6 +452,18 @@ const api = {
     get: (): Promise<AppSettings> => ipcRenderer.invoke('settings:get'),
     set: (partial: Partial<AppSettings>): Promise<AppSettings> =>
       ipcRenderer.invoke('settings:set', partial)
+  },
+  updates: {
+    currentVersion: (): Promise<string> => ipcRenderer.invoke('updates:current-version'),
+    check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check'),
+    download: (): Promise<UpdateActionResult> => ipcRenderer.invoke('updates:download'),
+    applyAndRestart: (): Promise<UpdateActionResult> =>
+      ipcRenderer.invoke('updates:apply-and-restart'),
+    onDownloadProgress: (handler: (perc: number) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, perc: number): void => handler(perc)
+      ipcRenderer.on('updates:download-progress', listener)
+      return () => ipcRenderer.removeListener('updates:download-progress', listener)
+    }
   }
 }
 

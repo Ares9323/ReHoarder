@@ -35,6 +35,80 @@
   let savedFlash = $state(false)
   let dirty = $state(false)
 
+  // Updates pane state — populated lazily on mount. `updateState` walks:
+  //   idle → checking → available | up-to-date | error
+  //   available → downloading → ready (then user clicks restart)
+  type UpdateState =
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'up-to-date'
+    | 'downloading'
+    | 'ready'
+    | 'error'
+  let currentVersion = $state<string>('')
+  let updateState = $state<UpdateState>('idle')
+  let updateTargetVersion = $state<string | null>(null)
+  let updateNotes = $state<string | null>(null)
+  let updateError = $state<string | null>(null)
+  let updateProgress = $state(0)
+
+  async function checkForUpdates(): Promise<void> {
+    updateState = 'checking'
+    updateError = null
+    try {
+      const r = await window.api.updates.check()
+      if (!r.ok) {
+        updateState = 'error'
+        updateError = r.error ?? 'Update check failed'
+        return
+      }
+      if (r.currentVersion) currentVersion = r.currentVersion
+      if (r.available) {
+        updateState = 'available'
+        updateTargetVersion = r.targetVersion ?? null
+        updateNotes = r.notes ?? null
+      } else {
+        updateState = 'up-to-date'
+      }
+    } catch (err) {
+      updateState = 'error'
+      updateError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function downloadUpdate(): Promise<void> {
+    updateState = 'downloading'
+    updateProgress = 0
+    updateError = null
+    try {
+      const r = await window.api.updates.download()
+      if (!r.ok) {
+        updateState = 'error'
+        updateError = r.error ?? 'Download failed'
+        return
+      }
+      updateState = 'ready'
+    } catch (err) {
+      updateState = 'error'
+      updateError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
+  async function applyUpdate(): Promise<void> {
+    try {
+      const r = await window.api.updates.applyAndRestart()
+      if (!r.ok) {
+        updateState = 'error'
+        updateError = r.error ?? 'Apply failed'
+      }
+      // On success the app is quitting — no UI to update.
+    } catch (err) {
+      updateState = 'error'
+      updateError = err instanceof Error ? err.message : String(err)
+    }
+  }
+
   function fromArray(arr: string[]): string {
     return arr.join('\n')
   }
@@ -105,7 +179,23 @@
     dirty = true
   }
 
-  onMount(load)
+  onMount(async () => {
+    await load()
+    try {
+      currentVersion = await window.api.updates.currentVersion()
+    } catch {
+      // best effort: leave version blank
+    }
+  })
+
+  // Subscribe to download progress events. Returned unsubscribe is tracked
+  // by `$effect` so it cleans up on component unmount.
+  $effect(() => {
+    const unsub = window.api.updates.onDownloadProgress((perc) => {
+      updateProgress = perc
+    })
+    return unsub
+  })
 
   // Ctrl+S / Cmd+S — common reflex for "save" forms. Only fires while the
   // panel is mounted (effect cleanup removes the listener on unmount). We
@@ -216,6 +306,81 @@
         </label>
       </div>
 
+      <div class="group">
+        <h3>About &amp; updates</h3>
+        <p class="explain">
+          Current version: <code>{currentVersion || '—'}</code>
+          {#if updateState === 'up-to-date'}<span class="ok">· up to date</span>{/if}
+          {#if updateState === 'available' && updateTargetVersion}<span class="up">· {updateTargetVersion} available</span>{/if}
+          {#if updateState === 'ready'}<span class="up">· update ready</span>{/if}
+        </p>
+        <div class="updates-row">
+          {#if updateState === 'idle' || updateState === 'up-to-date' || updateState === 'error'}
+            <button type="button" class="ghost" onclick={checkForUpdates}>
+              Check for updates
+            </button>
+          {:else if updateState === 'checking'}
+            <button type="button" class="ghost" disabled>Checking…</button>
+          {:else if updateState === 'available'}
+            <button type="button" class="primary" onclick={downloadUpdate}>
+              Download {updateTargetVersion ?? 'update'}
+            </button>
+            <button type="button" class="ghost" onclick={checkForUpdates}>Re-check</button>
+          {:else if updateState === 'downloading'}
+            <button type="button" class="ghost" disabled>
+              Downloading… {Math.round(updateProgress)}%
+            </button>
+          {:else if updateState === 'ready'}
+            <button type="button" class="primary" onclick={applyUpdate}>
+              Install &amp; restart
+            </button>
+          {/if}
+        </div>
+        {#if updateState === 'downloading'}
+          <div class="bar"><div class="bar-fill" style:width="{updateProgress}%"></div></div>
+        {/if}
+        {#if updateError}
+          <span class="hint hint-error">{updateError}</span>
+        {/if}
+        {#if updateNotes && updateState === 'available'}
+          <details class="notes">
+            <summary>Release notes</summary>
+            <pre>{updateNotes}</pre>
+          </details>
+        {/if}
+      </div>
+
+      <div class="group full">
+        <h3>Vault paths</h3>
+        <p class="explain">
+          Where downloaded assets are written. The first writable path wins; the others are scanned read-only.
+        </p>
+        <textarea
+          rows="3"
+          bind:value={vaultPathsText}
+          oninput={markDirty}
+          spellcheck="false"
+        ></textarea>
+        <label>
+          <input
+            type="checkbox"
+            bind:checked={settings.separateVaultsByPath}
+            onchange={markDirty}
+          />
+          Separate by path
+          <span class="hint">(render one table per root path on the Vault tab)</span>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            bind:checked={settings.showVaultThumbnails}
+            onchange={markDirty}
+          />
+          Show thumbnails
+          <span class="hint">(display the asset image next to each entry — slightly heavier on big vaults)</span>
+        </label>
+      </div>
+
       <div class="group full">
         <h3>Project paths</h3>
         <p class="explain">
@@ -276,37 +441,6 @@
           oninput={markDirty}
           spellcheck="false"
         ></textarea>
-      </div>
-
-      <div class="group full">
-        <h3>Vault paths</h3>
-        <p class="explain">
-          Where downloaded assets are written. The first writable path wins; the others are scanned read-only.
-        </p>
-        <textarea
-          rows="3"
-          bind:value={vaultPathsText}
-          oninput={markDirty}
-          spellcheck="false"
-        ></textarea>
-        <label>
-          <input
-            type="checkbox"
-            bind:checked={settings.separateVaultsByPath}
-            onchange={markDirty}
-          />
-          Separate by path
-          <span class="hint">(render one table per root path on the Vault tab)</span>
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            bind:checked={settings.showVaultThumbnails}
-            onchange={markDirty}
-          />
-          Show thumbnails
-          <span class="hint">(display the asset image next to each entry — slightly heavier on big vaults)</span>
-        </label>
       </div>
     </div>
   {/if}
@@ -412,6 +546,63 @@
   .hint code {
     color: #a0a0a0;
     font-size: 0.72rem;
+  }
+  .hint-error {
+    color: #fbbf24;
+  }
+  .updates-row {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+  .ghost {
+    background: transparent;
+    border: 1px solid #444;
+    color: #c0c0c0;
+    border-radius: 5px;
+    padding: 0.4rem 0.9rem;
+    font-family: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+  .ghost:hover:not(:disabled) {
+    color: #fff;
+    border-color: #666;
+  }
+  .ghost:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .bar {
+    height: 6px;
+    background: #2a2a2a;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #c084fc, #f472b6);
+    transition: width 0.2s;
+  }
+  .notes summary {
+    cursor: pointer;
+    color: #b0b0b0;
+    font-size: 0.78rem;
+  }
+  .notes pre {
+    color: #d0d0d0;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    padding: 0.55rem 0.7rem;
+    font-size: 0.75rem;
+    white-space: pre-wrap;
+    max-height: 220px;
+    overflow: auto;
+  }
+  .up {
+    color: #fbbf24;
+    font-size: 0.75rem;
   }
   .disabled-soft {
     opacity: 0.78;

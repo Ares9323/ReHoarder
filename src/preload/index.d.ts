@@ -396,6 +396,28 @@ export interface DownloadsApi {
   onProgress(handler: (row: DownloadRow) => void): () => void
 }
 
+export interface UpdateCheckResult {
+  ok: boolean
+  available: boolean
+  error?: string
+  currentVersion?: string
+  targetVersion?: string
+  notes?: string | null
+}
+
+export interface UpdateActionResult {
+  ok: boolean
+  error?: string
+}
+
+export interface UpdatesApi {
+  currentVersion(): Promise<string>
+  check(): Promise<UpdateCheckResult>
+  download(): Promise<UpdateActionResult>
+  applyAndRestart(): Promise<UpdateActionResult>
+  onDownloadProgress(handler: (perc: number) => void): () => void
+}
+
 declare global {
   interface Window {
     electron: ElectronAPI
@@ -408,6 +430,7 @@ declare global {
       projects: ProjectsApi
       downloads: DownloadsApi
       settings: SettingsApi
+      updates: UpdatesApi
     }
   }
 }

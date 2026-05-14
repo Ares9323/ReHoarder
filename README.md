@@ -139,6 +139,45 @@ src/
     └── views/       Top-level tab views (Assets, Vault, Projects, Engines, Downloads, Settings)
 ```
 
+### Release with Velopack (Windows)
+
+ReHoarder uses [Velopack](https://velopack.io) for installers + in-app auto-update. The flow is:
+
+1. `electron-vite build` produces the JS bundles.
+2. `electron-builder --dir --win` packs them into a real `ReHoarder.exe` under `release/win-unpacked/`.
+3. `vpk pack` reads that directory and emits `Releases/ReHoarder-Setup.exe` plus the delta-package + `RELEASES` index that the in-app updater consumes.
+4. `vpk upload github` attaches all of the above to a GitHub Release matching `vX.Y.Z`.
+
+**Local prerequisites:**
+
+```bash
+# Once per machine — vpk is a dotnet 8 global tool
+dotnet tool install -g vpk
+```
+
+**Cut a release locally:**
+
+```bash
+# 1. Bump version in package.json (e.g. 0.1.0)
+# 2. Build + pack
+npm run build:win
+# Outputs land under ./Releases/ — verify by running ReHoarder-Setup.exe in a VM.
+# 3. Upload to GitHub (needs $env:GITHUB_TOKEN with `repo` scope)
+$env:GITHUB_TOKEN = "ghp_..."
+npm run release:win
+```
+
+**Cut a release from CI:**
+
+Push a tag — `.github/workflows/release.yml` triggers on `v*` tags. The workflow installs `vpk`, runs `build:win` and `release:win` using the built-in `GITHUB_TOKEN`. No secret setup required.
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+In-app updates: the `Settings → About & updates` pane uses Velopack's `UpdateManager` to check `github.com/Ares9323/ReHoarder` for the latest release, downloads the delta when available, and applies it on the next restart. No update server / S3 bucket required.
+
 ### Dev exe rebrand (Windows)
 
 By default `npm run dev` launches Electron's bundled `electron.exe`, so Windows' Task Manager shows the helper processes as "Electron". The `predev` hook runs `scripts/brand-dev-electron.cjs`, which uses [`rcedit`](https://www.npmjs.com/package/rcedit) to rewrite the Win32 version-info on the local `node_modules/electron/dist/electron.exe` so it shows up as "ReHoarder" instead. The script is idempotent (stamps a `.rehoarder-branded` marker next to the exe) and re-runs automatically whenever `npm install` replaces the binary. It's a no-op on Linux/macOS; on Windows you only need to make sure `npm install` has been run after the `rcedit` devDep was added.

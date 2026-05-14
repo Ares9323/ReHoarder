@@ -2,6 +2,16 @@ import { app, BrowserWindow, protocol, safeStorage } from 'electron'
 import * as path from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
+import { VelopackApp } from 'velopack'
+import { registerUpdatesIpc } from './updates-ipc'
+
+// Velopack hook — MUST run before any other startup work. The installer
+// re-invokes us with custom CLI args (first-run, update, uninstall, restart)
+// and `VelopackApp.run()` will handle them and `process.exit` early when
+// appropriate. Skipped in dev (no packaged install context).
+if (app.isPackaged) {
+  VelopackApp.build().run()
+}
 import { createMainWindow } from './window'
 import { openAppDb, type AppDb } from './db'
 import { AssetsRepo } from './db/assets-repo'
@@ -185,6 +195,7 @@ app.whenReady().then(async () => {
   })
   registerSettingsIpc(settingsStore)
   registerEnginesIpc(settingsStore)
+  registerUpdatesIpc(() => mainWindow)
   const downloadsRepo = new DownloadsRepo(db.raw)
   registerVaultIpc(settingsStore, downloadsRepo, assetsRepo)
   registerProjectsIpc(settingsStore, downloadsRepo, assetsRepo)

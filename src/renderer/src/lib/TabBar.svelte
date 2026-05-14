@@ -38,8 +38,8 @@
 
   const tabs: TabDef[] = [
     { key: 'assets', label: 'Assets' },
-    { key: 'engines', label: 'Engines' },
     { key: 'projects', label: 'Projects' },
+    { key: 'engines', label: 'Engines' },
     { key: 'vault', label: 'Vault' },
     { key: 'settings', label: 'Settings' },
     { key: 'downloads', label: 'Downloads' }
