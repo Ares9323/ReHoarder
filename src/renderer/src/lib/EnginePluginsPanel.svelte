@@ -47,6 +47,49 @@
   let saving = $state(false)
   let error = $state<string | null>(null)
 
+  interface BaselineEntry {
+    name: string
+    upluginPath: string
+    enabledByDefault: boolean
+    installed: boolean
+  }
+  /** Baseline info: shown in the header when ReHoarder has previously
+   *  captured the Day-0 state of this engine's plugins. */
+  let baseline = $state<{
+    exists: boolean
+    createdAt?: number
+    pluginCount?: number
+    plugins: BaselineEntry[]
+  }>({ exists: false, plugins: [] })
+  let restoreConfirmOpen = $state(false)
+  let restoring = $state(false)
+
+  /** Map of upluginPath → expected baseline flags, recomputed when the
+   *  baseline reloads. O(1) lookup keeps the divergence count cheap even
+   *  with hundreds of plugins. */
+  const baselineByPath = $derived.by(() => {
+    const m = new Map<string, BaselineEntry>()
+    for (const b of baseline.plugins) m.set(b.upluginPath, b)
+    return m
+  })
+
+  /**
+   * How many plugins currently on disk differ from the baseline. Zero means
+   * a Restore would be a no-op, so the banner stays hidden — the safety net
+   * exists silently in the background until the user actually mutates state.
+   */
+  const baselineDivergenceCount = $derived(
+    baseline.exists
+      ? plugins.reduce((acc, p) => {
+          const b = baselineByPath.get(p.upluginPath)
+          if (!b) return acc
+          return p.enabledByDefault !== b.enabledByDefault || p.installed !== b.installed
+            ? acc + 1
+            : acc
+        }, 0)
+      : 0
+  )
+
   type Filter = 'all' | 'enabled' | 'installed' | 'modified'
   let filter = $state<Filter>('all')
   let searchInput = $state('')
@@ -83,10 +126,50 @@
         })
       }
       originalByPath = snap
+      // Fetch baseline info on every load — it can transition exists=false
+      // → exists=true after the first Apply on this engine.
+      const info = await window.api.engines.readBaselineInfo(engine.path)
+      baseline = {
+        exists: info.exists,
+        createdAt: info.createdAt,
+        pluginCount: info.pluginCount,
+        plugins: info.plugins ?? []
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     } finally {
       loading = false
+    }
+  }
+
+  function formatBaselineDate(ms: number | undefined): string {
+    if (ms === undefined) return ''
+    return new Date(ms).toLocaleString()
+  }
+
+  async function doRestore(): Promise<void> {
+    if (restoring) return
+    restoring = true
+    error = null
+    try {
+      const r = await window.api.engines.restoreBaseline(engine.path)
+      if (!r.ok) {
+        error = r.error ?? 'Restore failed'
+        return
+      }
+      if (r.failures && r.failures.length > 0) {
+        error = `Restored ${r.restored ?? 0} plugin(s) — ${r.failures.length} failed:\n${r.failures
+          .map((f) => `  ${f.name}: ${f.error}`)
+          .join('\n')}`
+      }
+      restoreConfirmOpen = false
+      // Re-read the on-disk state so the table reflects the restore + the
+      // modified count drops back to zero.
+      await load()
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+    } finally {
+      restoring = false
     }
   }
 
@@ -196,6 +279,20 @@
       }
     } finally {
       saving = false
+      // The first successful Apply on an engine creates the baseline file
+      // server-side. Refresh the summary so the Restore banner appears
+      // without forcing the user to close and reopen the panel.
+      try {
+        const info = await window.api.engines.readBaselineInfo(engine.path)
+        baseline = {
+          exists: info.exists,
+          createdAt: info.createdAt,
+          pluginCount: info.pluginCount,
+          plugins: info.plugins ?? []
+        }
+      } catch {
+        /* ignore — purely cosmetic */
+      }
     }
   }
 </script>
@@ -232,6 +329,24 @@
       <button type="button" onclick={onClose} disabled={saving} title="Close the plugin panel">×</button>
     </div>
   </header>
+
+  {#if baseline.exists && baselineDivergenceCount > 0}
+    <div class="baseline-row">
+      <span class="baseline-label">
+        <strong>{baselineDivergenceCount}</strong> plugin{baselineDivergenceCount === 1 ? '' : 's'}
+        differ from the baseline captured {formatBaselineDate(baseline.createdAt)}.
+      </span>
+      <button
+        type="button"
+        class="ghost-small"
+        onclick={() => (restoreConfirmOpen = true)}
+        disabled={saving || restoring}
+        title="Revert every diverging plugin to the state it had when ReHoarder first touched this engine"
+      >
+        Restore baseline
+      </button>
+    </div>
+  {/if}
 
   <div class="toolbar">
     <input
@@ -361,6 +476,48 @@
   {/if}
 </section>
 
+{#if restoreConfirmOpen}
+  <div
+    class="confirm-backdrop"
+    role="presentation"
+    onclick={(e) => {
+      if (
+        (e.target as HTMLElement).classList.contains('confirm-backdrop') &&
+        !restoring
+      ) {
+        restoreConfirmOpen = false
+      }
+    }}
+  >
+    <div class="confirm-popup" role="dialog" aria-modal="true" aria-label="Restore baseline">
+      <h3>Restore baseline?</h3>
+      <p>
+        Reverts <strong>{baselineDivergenceCount}</strong> diverging plugin{baselineDivergenceCount === 1 ? '' : 's'}
+        on <code>{engine.name}</code> to the <code>EnabledByDefault</code> /
+        <code>Installed</code> values captured on
+        <strong>{formatBaselineDate(baseline.createdAt)}</strong>.
+      </p>
+      <p class="hint">
+        Per-file <code>.bak</code> rollback still applies if any individual write
+        fails. Modifications you haven't applied yet will be discarded.
+      </p>
+      <div class="confirm-actions">
+        <button type="button" class="ghost" disabled={restoring} onclick={() => (restoreConfirmOpen = false)}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="danger-primary"
+          disabled={restoring}
+          onclick={() => void doRestore()}
+        >
+          {restoring ? 'Restoring…' : 'Restore baseline'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .panel {
     margin-top: 1.5rem;
@@ -429,6 +586,96 @@
   .modified-count {
     color: #c084fc;
     font-weight: 600;
+  }
+  .baseline-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.8rem;
+    margin-bottom: 0.7rem;
+    padding: 0.45rem 0.7rem;
+    background: #1a1d22;
+    border: 1px solid #2c333d;
+    border-radius: 4px;
+    color: #b0b0b0;
+    font-size: 0.78rem;
+  }
+  .baseline-label {
+    color: #b0b0b0;
+  }
+  .confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 280;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .confirm-popup {
+    width: 480px;
+    max-width: 92vw;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 10px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+    padding: 1.1rem 1.2rem 1rem;
+  }
+  .confirm-popup h3 {
+    margin: 0 0 0.7rem;
+    color: #fff;
+    font-size: 1rem;
+  }
+  .confirm-popup p {
+    margin: 0 0 0.6rem;
+    color: #c0c0c0;
+    font-size: 0.85rem;
+    line-height: 1.4;
+  }
+  .confirm-popup .hint {
+    color: #888;
+    font-size: 0.78rem;
+  }
+  .confirm-popup code {
+    background: #2a2a2a;
+    padding: 0 0.25em;
+    border-radius: 3px;
+    color: #c0c0c0;
+  }
+  .confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.9rem;
+  }
+  .confirm-actions button {
+    border: none;
+    border-radius: 5px;
+    padding: 0.45rem 1.1rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .confirm-actions .ghost {
+    background: transparent;
+    color: #c0c0c0;
+    border: 1px solid #444;
+  }
+  .confirm-actions .ghost:hover:not(:disabled) {
+    color: #fff;
+    border-color: #666;
+  }
+  .confirm-actions .danger-primary {
+    background: linear-gradient(135deg, #fca5a5, #ef4444);
+    color: #1a1a1a;
+    font-weight: 600;
+  }
+  .confirm-actions .danger-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+  .confirm-actions button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
   .toolbar {
     display: flex;

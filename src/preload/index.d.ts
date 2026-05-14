@@ -283,11 +283,37 @@ export interface SetPluginStateResult {
   installed?: boolean
 }
 
+export interface PluginBaselineEntry {
+  name: string
+  upluginPath: string
+  enabledByDefault: boolean
+  installed: boolean
+}
+
+export interface BaselineInfoResult {
+  ok: boolean
+  error?: string
+  exists: boolean
+  createdAt?: number
+  pluginCount?: number
+  path?: string
+  plugins?: PluginBaselineEntry[]
+}
+
+export interface RestoreBaselineResult {
+  ok: boolean
+  error?: string
+  restored?: number
+  failures?: Array<{ name: string; error: string }>
+}
+
 export interface EnginesApi {
   list(): Promise<EnginesListResult>
   openInExplorer(absolutePath: string): Promise<EnginesOpenResult>
   listPlugins(engineRoot: string): Promise<EnginePluginsListResult>
   setPluginState(req: SetPluginStateRequest): Promise<SetPluginStateResult>
+  readBaselineInfo(engineRoot: string): Promise<BaselineInfoResult>
+  restoreBaseline(engineRoot: string): Promise<RestoreBaselineResult>
 }
 
 export interface ProjectInfo {

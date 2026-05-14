@@ -212,6 +212,30 @@ export interface SetPluginStateResult {
   installed?: boolean
 }
 
+export interface PluginBaselineEntry {
+  name: string
+  upluginPath: string
+  enabledByDefault: boolean
+  installed: boolean
+}
+
+export interface BaselineInfoResult {
+  ok: boolean
+  error?: string
+  exists: boolean
+  createdAt?: number
+  pluginCount?: number
+  path?: string
+  plugins?: PluginBaselineEntry[]
+}
+
+export interface RestoreBaselineResult {
+  ok: boolean
+  error?: string
+  restored?: number
+  failures?: Array<{ name: string; error: string }>
+}
+
 export interface ProjectInfo {
   name: string
   uprojectPath: string
@@ -493,7 +517,11 @@ const api = {
     listPlugins: (engineRoot: string): Promise<EnginePluginsListResult> =>
       ipcRenderer.invoke('engines:list-plugins', engineRoot),
     setPluginState: (req: SetPluginStateRequest): Promise<SetPluginStateResult> =>
-      ipcRenderer.invoke('engines:set-plugin-state', req)
+      ipcRenderer.invoke('engines:set-plugin-state', req),
+    readBaselineInfo: (engineRoot: string): Promise<BaselineInfoResult> =>
+      ipcRenderer.invoke('engines:read-baseline-info', engineRoot),
+    restoreBaseline: (engineRoot: string): Promise<RestoreBaselineResult> =>
+      ipcRenderer.invoke('engines:restore-baseline', engineRoot)
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),
