@@ -3,6 +3,7 @@
   import { settingsVersion } from '../stores/settings-events.svelte'
   import { projectsStore } from '../stores/projects.svelte'
   import UProjectEditorPanel from './UProjectEditorPanel.svelte'
+  import SetAsTemplateDialog from './SetAsTemplateDialog.svelte'
 
   interface ProjectInfo {
     name: string
@@ -201,6 +202,57 @@
     void projectsStore.rescan()
   }
 
+  /** When non-null, the Set-as-template dialog is open with this row preset. */
+  let templatingProject = $state<ProjectInfo | null>(null)
+  function startTemplating(p: ProjectInfo): void {
+    templatingProject = p
+  }
+  function stopTemplating(): void {
+    templatingProject = null
+  }
+
+  /**
+   * Right-click context menu state. The row stays in `contextMenu.project`
+   * so the menu items can dispatch against it even after the user moves the
+   * cursor away. Position is fixed-viewport coordinates (clientX/Y).
+   */
+  let contextMenu = $state<{ x: number; y: number; project: ProjectInfo } | null>(null)
+  function openContextMenu(e: MouseEvent, p: ProjectInfo): void {
+    e.preventDefault()
+    contextMenu = { x: e.clientX, y: e.clientY, project: p }
+  }
+  function closeContextMenu(): void {
+    contextMenu = null
+  }
+  function ctxEdit(): void {
+    if (!contextMenu) return
+    const p = contextMenu.project
+    closeContextMenu()
+    startEditing(p)
+  }
+  function ctxTemplate(): void {
+    if (!contextMenu) return
+    const p = contextMenu.project
+    closeContextMenu()
+    startTemplating(p)
+  }
+
+  $effect(() => {
+    if (!contextMenu) return
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (e.key === 'Escape') closeContextMenu()
+    }
+    const onClick = (): void => closeContextMenu()
+    window.addEventListener('keydown', onKey)
+    // Use mousedown so the menu closes BEFORE the click reaches an underlying
+    // element — feels snappier and matches how OS context menus dismiss.
+    window.addEventListener('mousedown', onClick)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onClick)
+    }
+  })
+
   // Per-row transient action state: shows a busy indicator on the button that
   // was just clicked, and the IPC error if the launch failed (the error sits
   // next to the row buttons until the next action is taken).
@@ -333,6 +385,35 @@
   <UProjectEditorPanel uprojectPath={editingPath} onClose={stopEditing} />
 {/if}
 
+{#if templatingProject}
+  {@const t = templatingProject}
+  <SetAsTemplateDialog
+    projectName={t.name}
+    uprojectPath={t.uprojectPath}
+    engineAssociation={t.engineAssociation || null}
+    hasCode={t.hasCode}
+    onClose={stopTemplating}
+  />
+{/if}
+
+{#if contextMenu}
+  {@const cm = contextMenu}
+  <div
+    class="ctx-menu"
+    role="menu"
+    style:left="{cm.x}px"
+    style:top="{cm.y}px"
+    onmousedown={(e) => e.stopPropagation()}
+  >
+    <button type="button" role="menuitem" onclick={ctxEdit}>
+      Edit .uproject descriptor
+    </button>
+    <button type="button" role="menuitem" onclick={ctxTemplate}>
+      Use as engine template
+    </button>
+  </div>
+{/if}
+
 {#snippet tableFor(rows: ProjectInfo[])}
   <table>
     <thead>
@@ -354,7 +435,11 @@
     <tbody>
       {#each rows as p (p.uprojectPath)}
         {@const st = getState(p.uprojectPath)}
-        <tr>
+        <tr
+          class="row"
+          oncontextmenu={(e) => openContextMenu(e, p)}
+          title="Right-click for more actions"
+        >
           <td class="kind">
             {#if p.hasCode}
               <span class="code-pill">C++</span>
@@ -403,9 +488,6 @@
               title="Launch in -game mode with the configured run params"
             >
               {st.busyAction === 'run' ? '…' : 'Run'}
-            </button>
-            <button type="button" onclick={() => startEditing(p)} title="Edit .uproject descriptor">
-              Edit
             </button>
             <button type="button" onclick={() => reveal(p)}>Open</button>
           </td>
@@ -629,6 +711,42 @@
   }
   tr:last-child td {
     border-bottom: none;
+  }
+  /* Highlight the row under the cursor + nudge the pointer style so users
+     discover the right-click menu without a banner explaining it. */
+  tr.row {
+    cursor: context-menu;
+    transition: background-color 0.08s ease;
+  }
+  tr.row:hover td {
+    background: #2d2d2d;
+  }
+  .ctx-menu {
+    position: fixed;
+    z-index: 400;
+    min-width: 220px;
+    background: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    padding: 0.25rem;
+    display: flex;
+    flex-direction: column;
+  }
+  .ctx-menu button {
+    background: transparent;
+    color: #d0d0d0;
+    border: none;
+    padding: 0.45rem 0.7rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .ctx-menu button:hover {
+    background: #2a2a2a;
+    color: #fff;
   }
   .ver {
     color: #e0e0e0;

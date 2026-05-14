@@ -17,6 +17,7 @@ import {
   type AddToProjectConflict,
   type AddToProjectResult
 } from './projects-add-to'
+import { setAsTemplate, type SetAsTemplateResult } from './projects-set-as-template'
 import type { DownloadsRepo } from './db/downloads-repo'
 import type { AssetsRepo, AssetSource } from './db/assets-repo'
 import type { SettingsStore } from './settings'
@@ -355,6 +356,42 @@ export function registerProjectsIpc(
         return { ok: false, error: `Unknown conflict mode: ${req.conflict}` }
       }
       return await addToProject(downloadsRepo, { ...req, projectDir: resolved })
+    }
+  )
+
+  ipcMain.handle(
+    'projects:set-as-template',
+    async (
+      _e,
+      req: {
+        uprojectPath: string
+        engineRoot: string
+        templateName: string
+        displayName: string
+        description: string
+        categories: string[]
+      }
+    ): Promise<SetAsTemplateResult> => {
+      const cfg = settings.load()
+      const resolvedUproject = guardProjectPath(req.uprojectPath, cfg.projectPaths)
+      if (!resolvedUproject) {
+        return { ok: false, error: 'Project is outside the configured project roots' }
+      }
+      const resolvedEngine = path.resolve(req.engineRoot)
+      const engineAllowed = cfg.enginePaths.some((root) =>
+        resolvedEngine.startsWith(path.resolve(root))
+      )
+      if (!engineAllowed) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      return await setAsTemplate({
+        uprojectPath: resolvedUproject,
+        engineRoot: resolvedEngine,
+        templateName: req.templateName,
+        displayName: req.displayName,
+        description: req.description,
+        categories: req.categories
+      })
     }
   )
 

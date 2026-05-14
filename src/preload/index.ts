@@ -289,6 +289,25 @@ export interface AddToProjectResult {
   bytesCopied?: number
 }
 
+export interface SetAsTemplateRequest {
+  uprojectPath: string
+  engineRoot: string
+  templateName: string
+  displayName: string
+  description: string
+  categories: string[]
+}
+
+export interface SetAsTemplateResult {
+  ok: boolean
+  error?: string
+  templateDir?: string
+  uprojectPath?: string
+  filesCopied?: number
+  bytesCopied?: number
+  mediaCopied?: boolean
+}
+
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
 export interface DownloadRow {
@@ -461,7 +480,9 @@ const api = {
     createFromVault: (req: CreateProjectRequest): Promise<CreateProjectResult> =>
       ipcRenderer.invoke('projects:create-from-vault', req),
     addToProject: (req: AddToProjectRequest): Promise<AddToProjectResult> =>
-      ipcRenderer.invoke('projects:add-to-project', req)
+      ipcRenderer.invoke('projects:add-to-project', req),
+    setAsTemplate: (req: SetAsTemplateRequest): Promise<SetAsTemplateResult> =>
+      ipcRenderer.invoke('projects:set-as-template', req)
   },
   downloads: {
     list: (): Promise<DownloadsListResult> => ipcRenderer.invoke('downloads:list'),

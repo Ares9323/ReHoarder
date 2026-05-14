@@ -365,6 +365,25 @@ export interface AddToProjectResult {
   bytesCopied?: number
 }
 
+export interface SetAsTemplateRequest {
+  uprojectPath: string
+  engineRoot: string
+  templateName: string
+  displayName: string
+  description: string
+  categories: string[]
+}
+
+export interface SetAsTemplateResult {
+  ok: boolean
+  error?: string
+  templateDir?: string
+  uprojectPath?: string
+  filesCopied?: number
+  bytesCopied?: number
+  mediaCopied?: boolean
+}
+
 export interface ProjectsApi {
   list(): Promise<ProjectsListResult>
   openInExplorer(absolutePath: string): Promise<ProjectsOpenResult>
@@ -376,6 +395,7 @@ export interface ProjectsApi {
   installFromVault(req: InstallFromVaultRequest): Promise<InstallFromVaultResult>
   createFromVault(req: CreateProjectRequest): Promise<CreateProjectResult>
   addToProject(req: AddToProjectRequest): Promise<AddToProjectResult>
+  setAsTemplate(req: SetAsTemplateRequest): Promise<SetAsTemplateResult>
 }
 
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
