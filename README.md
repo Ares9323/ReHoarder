@@ -16,13 +16,13 @@ It connects to your Epic Games account, indexes everything you've ever acquired 
 - **Local catalog** — keeps an offline cache so you can browse your library without an internet connection or sign-in round-trips.
 - **Auto-claim Fab freebies** _(planned)_ — never miss a monthly free drop again.
 - **Tagging and filtering** — organize by your own taxonomy: "used", "for current project", "wishlist", "never going to touch", etc.
-- **Hide & exclude** _(planned)_ — mark bloat, deprecated, or unwanted assets to keep them out of the active library view and skip them during bulk downloads.
+- **Hide & exclude** — mark bloat, deprecated, or unwanted assets to keep them out of the active library view (bulk-download skip coming once bulk actions land).
 - **Download manager** _(planned)_ — fetches asset manifests and installs them into a chosen UE project or a shared library folder.
 - **Duplicate / overlap detection** _(planned)_ — flags assets you own multiple times across Humble Bundle, Fab, and the legacy Marketplace.
 
 ## Status
 
-**Pre-alpha — under active development.** Star/watch the repo to follow along.
+**Public alpha — under active development.** Star/watch the repo to follow along.
 
 ### What works today
 
@@ -36,6 +36,7 @@ It connects to your Epic Games account, indexes everything you've ever acquired 
 - ✅ **Fab manifest client** (v0b) — POST `/e/artifacts/{artifactId}/manifest`, CDN blob download with SHA1 verify across distribution points, hands off to the parser. 17 unit tests.
 - ✅ **Chunk download + file assembly** (v0c) — fetch each `.chunk` from the CDN, verify Poly64 + SHA1, decompress (zlib), assemble files atomically on disk with file-level SHA1 verification. Persistent chunk cache + in-flight URL dedup. 29 unit tests.
 - ✅ **Downloads tab** (v0d) — per-asset Download button, persistent queue, live progress bars, per-version chip state in the asset grid (idle / queued / busy / error / downloaded / updatable).
+- ✅ **Parallel downloads** — `maxConcurrentDownloads` (1–8) runs that many assets from the queue at once, each with its own progress bar and abort handle. Slot count is hot-reloadable from Settings.
 - ✅ **Assets browser** — search, source filter, listing-type filter, category filter, "only downloaded" / "only updatable" / "only bookmarked" toggles. Bookmarks + per-card context menu (open on Fab, copy id, hide, …). Image-size picker.
 - ✅ **Vault tab** — list of locally cached assets with friendly names, size, last-modified, sortable headers, optional thumbnails, delete-with-confirm (cascades to clear the chip on the Assets tab).
 - ✅ **Projects tab** — recursive scan of configured project roots for `*.uproject`, descriptor metadata (engine association, description, category, code-vs-blueprint), Saved/AutoScreenshot thumbnail (with Fab thumbnail fallback for ReHoarder-created projects), open in Explorer, Launch editor (via `UnrealVersionSelector`), Run game with custom CLI params.
@@ -45,13 +46,14 @@ It connects to your Epic Games account, indexes everything you've ever acquired 
 - ✅ **Engines tab** — scan for `UE_*/Engine/Build/Build.version`, expose Editor / Run / shell-open per row, branch-name cleanup (`++UE5+Release-5.5` → `UE5 Release 5.5`).
 - ✅ **uproject editor** — JSON editor panel with atomic write + `.uproject.bak` backup; reads & writes `EngineAssociation`, `Description`, `Category`, `Modules`, `Plugins`, `AdditionalDependencies` etc.
 - ✅ **Settings panel** — project / engine / vault paths, image size, downloads pane (threads, compile plugins on install, skip non-current-platform binaries), per-tab "separate by path" and "show thumbnails" toggles, `Ctrl+S` save shortcut.
-- ✅ **Custom `rh-file://` protocol** — restricted local-file scheme for showing on-disk thumbnails (project auto-screenshots, engine icons) without weakening the renderer CSP. Allow-list of roots = configured project / engine / vault paths.
+- ✅ **On-disk thumbnails** — Projects show their `Saved/AutoScreenshot.png` (with Fab thumbnail fallback for ReHoarder-created projects), Engines show their splash icon, Vault rows can show their cached image. Served through a custom restricted `rh-file://` scheme so the renderer CSP stays tight; allow-list of roots = configured project / engine / vault paths.
 - ✅ **Singleton renderer stores** — Vault, Projects, Engines and Downloads each live in a single Svelte store at module scope, so tab switches are free (no rescan unless the user asks for one).
 - ✅ **SQLite catalog** — assets, tags, sync_state, downloads, bookmarks. Schema migrations via `PRAGMA user_version` for one-shot fixes (category re-tagging, listing-type backfill, …).
+- ✅ **Velopack installer + in-app auto-update** — Windows installer, delta updates, `Settings → About & updates` pane that checks GitHub Releases for the latest `vX.Y.Z` and applies it on next restart. No update server required.
 
 ### What's next
 
-- 📋 **Concurrent downloads** — `downloadThreads` is wired through Settings but the worker pool currently runs serially.
+- 📋 **Concurrent chunk downloads** — `downloadThreads` is wired through Settings; queue-level parallelism (`maxConcurrentDownloads`) ships in 0.1.1, intra-asset chunk parallelism is still pending.
 - 📋 **Engine downloads** — fetch UE binaries from the Epic launcher manifest with a components picker (Core / Templates / Source / MetaHuman / Editor Symbols / Target Platforms).
 - 📋 **Source-build engines** — detect installs registered under `HKCU\Software\Epic Games\Unreal Engine\Builds\<GUID>` so the Projects tab can resolve `EngineAssociation = "{GUID}"`.
 - 📋 **Auto-claim Fab freebies** — never miss a monthly free drop again.
@@ -75,7 +77,7 @@ ReHoarder aims to be:
 ## Tech stack
 
 - **Electron** + **TypeScript** for the desktop shell and OAuth-via-embedded-browser flow.
-- **Svelte** _(tentative)_ for the renderer UI.
+- **Svelte 5** (runes) for the renderer UI.
 - **SQLite** for the local library catalog.
 
 ## Disclaimer

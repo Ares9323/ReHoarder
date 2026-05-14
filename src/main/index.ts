@@ -193,7 +193,6 @@ app.whenReady().then(async () => {
       return new Response('Not found', { status: 404 })
     }
   })
-  registerSettingsIpc(settingsStore)
   registerEnginesIpc(settingsStore)
   registerUpdatesIpc(() => mainWindow)
   const downloadsRepo = new DownloadsRepo(db.raw)
@@ -213,6 +212,9 @@ app.whenReady().then(async () => {
     broadcastProgress: broadcastDownloadProgress
   })
   registerDownloadsIpc(downloadsManager, settingsStore)
+  registerSettingsIpc(settingsStore, {
+    onChange: () => downloadsManager.onSettingsChanged()
+  })
   downloadsManager.bootstrap()
 
   await session.init()

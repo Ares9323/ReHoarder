@@ -42,17 +42,17 @@ export interface DownloadsManagerDeps {
 }
 
 /**
- * Single-flight queue: at most one download runs at a time. Progress and
- * status are persisted in the `downloads` table, so the queue survives
- * restarts (interrupted rows are bumped back to `queued` on startup).
+ * N-slot queue: up to `settings.maxConcurrentDownloads` assets run at once.
+ * Progress and status are persisted in the `downloads` table, so the queue
+ * survives restarts (interrupted rows are bumped back to `queued` on startup).
  */
 export class DownloadsManager {
-  private currentId: string | null = null
-  private currentAbort: AbortController | null = null
+  /** Abort controllers keyed by download id for every in-flight slot. */
+  private readonly running = new Map<string, AbortController>()
   /** When `true`, picking up the next queued item is skipped. Used when the orchestrator is shutting down. */
   private stopped = false
-  /** Throttle progress broadcasts to ~5/s — chunk-grained updates would otherwise hammer IPC. */
-  private lastProgressBroadcastAt = 0
+  /** Per-id throttle for progress broadcasts (~5/s each) — chunk-grained updates would otherwise hammer IPC. */
+  private readonly lastProgressBroadcastAt = new Map<string, number>()
 
   constructor(private readonly deps: DownloadsManagerDeps) {}
 
@@ -103,10 +103,13 @@ export class DownloadsManager {
       this.notify()
       return true
     }
-    if (row.status === 'running' && this.currentId === id && this.currentAbort) {
-      this.currentAbort.abort()
-      // Final state transition happens inside `pump()` once the orchestrator throws.
-      return true
+    if (row.status === 'running') {
+      const ac = this.running.get(id)
+      if (ac) {
+        ac.abort()
+        // Final state transition happens inside `runDownload()` once the orchestrator throws.
+        return true
+      }
     }
     return false
   }
@@ -148,10 +151,19 @@ export class DownloadsManager {
     return n
   }
 
-  /** Tell the manager to stop accepting new pumps. Called at app shutdown. */
+  /** Tell the manager to stop accepting new pumps and abort every running slot. Called at app shutdown. */
   stop(): void {
     this.stopped = true
-    if (this.currentAbort) this.currentAbort.abort()
+    for (const ac of this.running.values()) ac.abort()
+  }
+
+  /**
+   * Notify the manager that settings may have changed. If `maxConcurrentDownloads`
+   * just got bigger, this fills the newly-available slots without waiting for a
+   * fresh enqueue.
+   */
+  onSettingsChanged(): void {
+    void this.pump()
   }
 
   private notify(): void {
@@ -192,14 +204,39 @@ export class DownloadsManager {
     return { vaultDir, subdir }
   }
 
+  /**
+   * Top-level scheduler. Synchronously claims as many queued rows as fit into
+   * the empty slots, then spawns a fire-and-forget `runDownload` for each.
+   *
+   * Claim must happen synchronously before any await: otherwise a second
+   * `pump()` invocation could pick the same row out of `nextQueued()` between
+   * the await points.
+   */
   private async pump(): Promise<void> {
     if (this.stopped) return
-    if (this.currentId !== null) return // already running one
-    const next = this.deps.repo.nextQueued()
-    if (!next) return
+    const maxSlots = this.deps.settings.load().maxConcurrentDownloads
+    while (this.running.size < maxSlots) {
+      const next = this.deps.repo.nextQueued()
+      if (!next) return
+      const ac = new AbortController()
+      this.running.set(next.id, ac)
+      this.deps.repo.setStatus(next.id, 'running', {
+        startedAt: Date.now(),
+        error: null
+      })
+      this.notify()
+      void this.runDownload(next, ac)
+    }
+  }
 
+  /**
+   * One slot's worth of work: resolve the destination, run the orchestrator,
+   * persist the final state, free the slot, then re-pump for the next queued
+   * row. Errors and cancellations are caught and recorded — they must never
+   * leak out and crash the manager.
+   */
+  private async runDownload(row: DownloadRow, abort: AbortController): Promise<void> {
     const cfg = this.deps.settings.load()
-
     // Decide the destination ahead of the runner: explicit override > engine-plugin
     // auto-route (for CODE_PLUGIN assets with a matched engine install) > the
     // configured vault path. Auto-routing requires both `engineVersion` to be set
@@ -211,30 +248,23 @@ export class DownloadsManager {
     //   2. For project installs, strip the `Engine/Plugins/Marketplace/` prefix
     //      so files land under `<project>/Plugins/<plugin>/...` instead of
     //      `<project>/Plugins/Engine/Plugins/Marketplace/<plugin>/...`
-    let vaultDir: string | undefined = next.installTargetPath ?? undefined
+    let vaultDir: string | undefined = row.installTargetPath ?? undefined
     let assetSubdirOverride: string | undefined
     let pathStripPrefix: string | undefined
     let noWrapDataDir = false
 
-    const targetKind = classifyInstallTarget(next.installTargetPath)
+    const targetKind = classifyInstallTarget(row.installTargetPath)
     if (targetKind === 'engine') {
-      // installTargetPath = `<engine>/Engine/Plugins/Marketplace`. Manifest
-      // already writes its own `Engine/Plugins/Marketplace/<plugin>/...` tree,
-      // so we step UP to the engine root and let the manifest paths land in
-      // the right place naturally. No subdir, no data/ wrap.
-      vaultDir = path.resolve(next.installTargetPath ?? '', '..', '..', '..')
+      vaultDir = path.resolve(row.installTargetPath ?? '', '..', '..', '..')
       assetSubdirOverride = ''
       noWrapDataDir = true
     } else if (targetKind === 'project') {
-      // installTargetPath = `<project>/Plugins`. Strip the engine-side prefix
-      // so files land in `<project>/Plugins/<plugin>/...`.
       assetSubdirOverride = ''
       noWrapDataDir = true
       pathStripPrefix = 'Engine/Plugins/Marketplace/'
-    } else if (!vaultDir && next.engineVersion) {
-      const pluginRoute = await this.resolvePluginEngineRoute(next, cfg.enginePaths)
+    } else if (!vaultDir && row.engineVersion) {
+      const pluginRoute = await this.resolvePluginEngineRoute(row, cfg.enginePaths)
       if (pluginRoute) {
-        // Auto-routed engine install: same handling as the explicit one.
         vaultDir = path.resolve(pluginRoute.vaultDir, '..', '..', '..')
         assetSubdirOverride = ''
         noWrapDataDir = true
@@ -242,38 +272,32 @@ export class DownloadsManager {
     }
     if (!vaultDir) vaultDir = cfg.vaultPaths[0]
     if (!vaultDir) {
-      this.deps.repo.setStatus(next.id, 'failed', {
+      this.deps.repo.setStatus(row.id, 'failed', {
         error: 'No vault path configured — set one under Settings → Vault paths.',
         finishedAt: Date.now()
       })
+      this.running.delete(row.id)
+      this.lastProgressBroadcastAt.delete(row.id)
       this.notify()
       void this.pump()
       return
     }
 
-    this.currentId = next.id
-    this.currentAbort = new AbortController()
-    this.deps.repo.setStatus(next.id, 'running', {
-      startedAt: Date.now(),
-      error: null
-    })
-    this.notify()
-
     try {
       await runFabAssetDownload(
         this.deps.runner,
-        next.sourceId,
+        row.sourceId,
         {
           vaultDir,
           assetSubdir: assetSubdirOverride,
-          engineVersion: next.engineVersion ?? undefined,
+          engineVersion: row.engineVersion ?? undefined,
           pathStripPrefix,
           noWrapDataDir,
-          signal: this.currentAbort.signal,
-          onLog: (m) => console.warn(`[downloads:${next.id.slice(0, 8)}]`, m),
+          signal: abort.signal,
+          onLog: (m) => console.warn(`[downloads:${row.id.slice(0, 8)}]`, m),
           onProgress: (p) => {
             this.deps.repo.updateProgress(
-              next.id,
+              row.id,
               p.bytesDone,
               p.bytesTotal,
               p.filesDone,
@@ -281,15 +305,16 @@ export class DownloadsManager {
               p.currentFile
             )
             const now = Date.now()
-            if (now - this.lastProgressBroadcastAt > 200) {
-              this.lastProgressBroadcastAt = now
-              const fresh = this.deps.repo.findById(next.id)
-              if (fresh) this.deps.broadcastProgress?.(next.id, fresh)
+            const last = this.lastProgressBroadcastAt.get(row.id) ?? 0
+            if (now - last > 200) {
+              this.lastProgressBroadcastAt.set(row.id, now)
+              const fresh = this.deps.repo.findById(row.id)
+              if (fresh) this.deps.broadcastProgress?.(row.id, fresh)
             }
           }
         },
         (startInfo) => {
-          this.deps.repo.setStatus(next.id, 'running', {
+          this.deps.repo.setStatus(row.id, 'running', {
             destDir: startInfo.assetDir,
             bytesTotal: startInfo.bytesTotal,
             filesTotal: startInfo.filesTotal,
@@ -300,24 +325,25 @@ export class DownloadsManager {
           this.notify()
         }
       )
-      this.deps.repo.setStatus(next.id, 'done', { finishedAt: Date.now(), currentFile: null })
+      this.deps.repo.setStatus(row.id, 'done', { finishedAt: Date.now(), currentFile: null })
     } catch (err) {
       const cancelled = err instanceof DownloadCancelledError
       const msg = err instanceof Error ? err.message : String(err)
-      this.deps.repo.setStatus(next.id, cancelled ? 'cancelled' : 'failed', {
+      this.deps.repo.setStatus(row.id, cancelled ? 'cancelled' : 'failed', {
         finishedAt: Date.now(),
         error: cancelled ? null : msg,
         currentFile: null
       })
       if (!cancelled) {
-        console.error(`[downloads:${next.id.slice(0, 8)}] failed:`, msg)
+        console.error(`[downloads:${row.id.slice(0, 8)}] failed:`, msg)
       }
     } finally {
-      this.currentId = null
-      this.currentAbort = null
+      this.running.delete(row.id)
+      this.lastProgressBroadcastAt.delete(row.id)
       this.notify()
       // Tail-call the next item, if any.
       void this.pump()
     }
   }
 }
+

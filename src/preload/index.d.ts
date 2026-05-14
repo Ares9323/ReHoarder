@@ -133,6 +133,7 @@ export interface AppSettings {
   compilePluginsOnInstall: boolean
   deleteExtraVaultPlatforms: boolean
   downloadThreads: number
+  maxConcurrentDownloads: number
   imageSize: ImageSize
   projectPaths: string[]
   enginePaths: string[]

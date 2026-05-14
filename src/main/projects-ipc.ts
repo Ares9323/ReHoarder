@@ -1,4 +1,4 @@
-import { ipcMain, shell } from 'electron'
+import { app, ipcMain, shell } from 'electron'
 import { spawn } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
@@ -80,6 +80,17 @@ function guardProjectPath(uprojectPath: string, roots: string[]): string | null 
   return resolved
 }
 
+/**
+ * Schedule a deferred `app.quit()` when the user opted in to exit-on-launch.
+ * The short delay gives the IPC reply time to flush back to the renderer (so
+ * the click handler completes) and the just-launched UVS / editor process
+ * time to fully detach before our event loop tears down.
+ */
+function scheduleExitOnLaunch(settings: SettingsStore): void {
+  if (!settings.load().exitOnLaunchUnreal) return
+  setTimeout(() => app.quit(), 500)
+}
+
 export function registerProjectsIpc(
   settings: SettingsStore,
   downloadsRepo: DownloadsRepo,
@@ -144,6 +155,7 @@ export function registerProjectsIpc(
       try {
         const err = await shell.openPath(resolved)
         if (err) return { ok: false, error: err }
+        scheduleExitOnLaunch(settings)
         return { ok: true }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -200,6 +212,7 @@ export function registerProjectsIpc(
           { detached: true, stdio: 'ignore' }
         )
         proc.unref()
+        scheduleExitOnLaunch(settings)
         return { ok: true, engineName: engine.name }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }

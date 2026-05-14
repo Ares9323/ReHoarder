@@ -16,8 +16,10 @@ export interface AppSettings {
   compilePluginsOnInstall: boolean
   /** Skip `/Binaries/<otherPlatform>/` and `/Intermediates/Build/<otherPlatform>/` at download time. */
   deleteExtraVaultPlatforms: boolean
-  /** Worker pool size for chunk downloads (1-64). */
+  /** Worker pool size for chunk downloads within a single asset (1-64). */
   downloadThreads: number
+  /** How many separate asset downloads can run from the queue at once (1-8). */
+  maxConcurrentDownloads: number
   /** Asset card size preset in the library grid. */
   imageSize: ImageSize
   /** Filesystem paths scanned for *.uproject files (one per line in the UI). */
@@ -42,6 +44,8 @@ const SETTINGS_KEY = 'app_settings_v1'
 
 const MIN_THREADS = 1
 const MAX_THREADS = 64
+const MIN_CONCURRENT_DOWNLOADS = 1
+const MAX_CONCURRENT_DOWNLOADS = 8
 
 function defaultProjectPaths(): string[] {
   if (process.platform === 'win32') {
@@ -75,6 +79,7 @@ export function defaultSettings(): AppSettings {
     compilePluginsOnInstall: process.platform === 'linux',
     deleteExtraVaultPlatforms: false,
     downloadThreads: 16,
+    maxConcurrentDownloads: 2,
     imageSize: 'small',
     projectPaths: defaultProjectPaths(),
     enginePaths: defaultEnginePaths(),
@@ -131,6 +136,10 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
       typeof partial.downloadThreads === 'number'
         ? clamp(partial.downloadThreads, MIN_THREADS, MAX_THREADS)
         : d.downloadThreads,
+    maxConcurrentDownloads:
+      typeof partial.maxConcurrentDownloads === 'number'
+        ? clamp(partial.maxConcurrentDownloads, MIN_CONCURRENT_DOWNLOADS, MAX_CONCURRENT_DOWNLOADS)
+        : d.maxConcurrentDownloads,
     imageSize: partial.imageSize ? sanitizeImageSize(partial.imageSize) : d.imageSize,
     projectPaths: partial.projectPaths ? sanitizePaths(partial.projectPaths) : d.projectPaths,
     enginePaths: partial.enginePaths ? sanitizePaths(partial.enginePaths) : d.enginePaths,

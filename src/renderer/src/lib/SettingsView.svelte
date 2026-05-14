@@ -10,6 +10,7 @@
     compilePluginsOnInstall: boolean
     deleteExtraVaultPlatforms: boolean
     downloadThreads: number
+    maxConcurrentDownloads: number
     imageSize: ImageSize
     projectPaths: string[]
     enginePaths: string[]
@@ -248,19 +249,32 @@
           Check version at startup
           <span class="hint">(requires Velopack auto-updater — not wired yet)</span>
         </label>
-        <label class="disabled-soft">
+        <label>
           <input
             type="checkbox"
             bind:checked={settings.exitOnLaunchUnreal}
             onchange={markDirty}
           />
           Exit ReHoarder when launching Unreal
-          <span class="hint">(active once engine/project launch lands)</span>
+          <span class="hint">(quits the app after the editor or Run-game spawns)</span>
         </label>
       </div>
 
       <div class="group">
         <h3>Downloads</h3>
+        <label class="row">
+          <span class="lbl">Parallel downloads</span>
+          <input
+            type="number"
+            min="1"
+            max="8"
+            step="1"
+            class="num-input"
+            bind:value={settings.maxConcurrentDownloads}
+            onchange={markDirty}
+          />
+          <span class="hint">(1–8 assets downloading from the queue at the same time)</span>
+        </label>
         <label class="row">
           <span class="lbl">Download threads</span>
           <input
@@ -272,7 +286,7 @@
             bind:value={settings.downloadThreads}
             onchange={markDirty}
           />
-          <span class="hint">(1–64, file-level worker pool)</span>
+          <span class="hint">(1–64, chunk-level worker pool within one asset)</span>
         </label>
         <label>
           <input
