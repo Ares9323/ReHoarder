@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { settingsVersion } from '../stores/settings-events.svelte'
+  import { vaultStore } from '../stores/vault.svelte'
 
   interface LocalVaultEntry {
     name: string
@@ -13,12 +15,15 @@
     hasData: boolean
   }
 
-  let entries = $state<LocalVaultEntry[]>([])
-  let vaultDirs = $state<string[]>([])
+  // Filesystem-derived state lives in the singleton store — switching to
+  // another tab and back doesn't re-walk the vault, only an explicit Rescan or
+  // a Settings save does.
+  const entries = $derived(vaultStore.entries)
+  const vaultDirs = $derived(vaultStore.vaultDirs)
+  const loading = $derived(vaultStore.loading)
+  const error = $derived(vaultStore.error)
   let separateByPath = $state(false)
   let showThumbnails = $state(true)
-  let loading = $state(true)
-  let error = $state<string | null>(null)
 
   type SortKey = 'name' | 'size' | 'lastModified'
   type SortDir = 'asc' | 'desc'
@@ -79,25 +84,35 @@
     return sortDir === 'asc' ? ' ▲' : ' ▼'
   }
 
-  async function load(): Promise<void> {
-    loading = true
-    error = null
-    const [r, s] = await Promise.all([window.api.vault.list(), window.api.settings.get()])
-    separateByPath = s.separateVaultsByPath
-    showThumbnails = s.showVaultThumbnails
-    if (r.ok) {
-      entries = r.entries ?? []
-      vaultDirs = r.vaultDirs ?? []
-    } else {
-      error = r.error ?? 'Failed to list vault'
+  async function loadSettings(): Promise<void> {
+    try {
+      const s = await window.api.settings.get()
+      separateByPath = s.separateVaultsByPath
+      showThumbnails = s.showVaultThumbnails
+    } catch {
+      // best-effort; UI falls back to defaults
     }
-    loading = false
   }
 
-  // Mount + re-scan on Settings save (vault paths can be added/removed live).
+  // First mount: pull settings (cheap) and ask the store to load only if it
+  // hasn't already. Tab switches re-mount this component but hit the cache.
+  onMount(() => {
+    void loadSettings()
+    void vaultStore.ensureLoaded()
+  })
+
+  // React to settings changes (vault paths might have moved) — but skip the
+  // initial tick so the very first mount doesn't trigger a wasteful re-scan
+  // on top of `ensureLoaded()`.
+  let firstSettingsTick = true
   $effect(() => {
     settingsVersion()
-    void load()
+    if (firstSettingsTick) {
+      firstSettingsTick = false
+      return
+    }
+    void loadSettings()
+    void vaultStore.rescan()
   })
 
   function formatBytes(n: number): string {
@@ -149,7 +164,7 @@
         return
       }
       pendingDelete = null
-      await load()
+      await vaultStore.rescan()
     } catch (err) {
       deleteError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -179,7 +194,7 @@
       <span>{totalFiles()} files</span>
       <span>·</span>
       <span>{formatBytes(totalBytes())}</span>
-      <button type="button" onclick={load} disabled={loading}>
+      <button type="button" onclick={() => vaultStore.rescan()} disabled={loading}>
         {loading ? 'Loading…' : 'Refresh'}
       </button>
     </div>

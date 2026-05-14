@@ -17,6 +17,7 @@
     separateProjectsByPath: boolean
     separateVaultsByPath: boolean
     showVaultThumbnails: boolean
+    showProjectThumbnails: boolean
     gameLaunchParams: string[]
   }
 
@@ -219,6 +220,18 @@
           />
           Separate by path
           <span class="hint">(render one table per root path on the Projects tab)</span>
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            bind:checked={settings.showProjectThumbnails}
+            onchange={markDirty}
+          />
+          Show thumbnails
+          <span class="hint">
+            (display the source-asset image next to each project; only available for projects created with
+            <em>Create project</em> from this app)
+          </span>
         </label>
         <label class="stack">
           <span class="lbl-block">Run params</span>

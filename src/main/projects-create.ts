@@ -122,6 +122,27 @@ export async function createProjectFromVault(
     }
   }
 
+  // Stamp a `.rehoarder.json` next to the .uproject so the Projects scanner
+  // can later cross-reference back to the source asset (and pull the thumbnail
+  // out of `assets.image_url`). Non-fatal: a project without the marker still
+  // works, it just won't show a thumbnail.
+  try {
+    const marker = {
+      version: 1,
+      source: req.source,
+      sourceId: req.sourceId,
+      engineVersion: req.engineVersion,
+      createdAt: Date.now()
+    }
+    await fsp.writeFile(
+      path.join(projectDir, '.rehoarder.json'),
+      JSON.stringify(marker, null, 2) + '\n',
+      'utf-8'
+    )
+  } catch (err) {
+    console.warn('[projects-create] could not write .rehoarder.json marker:', err)
+  }
+
   return {
     ok: true,
     projectDir,

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount } from 'svelte'
   import type { TabKey } from './tabs'
+  import { downloadsStore } from '../stores/downloads.svelte'
 
   interface TabDef {
     key: TabKey
@@ -16,33 +17,13 @@
   let { active, onChange, onSignOut }: Props = $props()
 
   // Live count of queued+running downloads, surfaced as a chip next to the
-  // Downloads tab so the user sees the queue moving even when they're not on
-  // that tab. Updated by the `downloads:state-changed` broadcast.
-  let activeDownloads = $state(0)
-  let unsubDownloads: (() => void) | null = null
-
-  async function refreshActiveCount(): Promise<void> {
-    try {
-      const r = await window.api.downloads.list()
-      activeDownloads = r.rows.filter(
-        (d) => d.status === 'queued' || d.status === 'running'
-      ).length
-    } catch {
-      activeDownloads = 0
-    }
-  }
+  // Downloads tab. Derived off the singleton store — no per-mount IPC.
+  const activeDownloads = $derived(
+    downloadsStore.all.filter((d) => d.status === 'queued' || d.status === 'running').length
+  )
 
   onMount(() => {
-    void refreshActiveCount()
-    unsubDownloads = window.api.downloads.onStateChanged((rows) => {
-      activeDownloads = rows.filter(
-        (d) => d.status === 'queued' || d.status === 'running'
-      ).length
-    })
-  })
-
-  onDestroy(() => {
-    unsubDownloads?.()
+    void downloadsStore.ensureLoaded()
   })
 
   /**

@@ -140,6 +140,7 @@ export interface AppSettings {
   separateProjectsByPath: boolean
   separateVaultsByPath: boolean
   showVaultThumbnails: boolean
+  showProjectThumbnails: boolean
   gameLaunchParams: string[]
 }
 
@@ -222,6 +223,9 @@ export interface ProjectInfo {
   category: string
   hasCode: boolean
   lastModified: number
+  rehoarderSource: string | null
+  rehoarderSourceId: string | null
+  imageUrl: string | null
 }
 
 export interface ProjectsListResult {

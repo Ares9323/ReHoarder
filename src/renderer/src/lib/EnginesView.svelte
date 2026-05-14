@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { settingsVersion } from '../stores/settings-events.svelte'
+  import { enginesStore } from '../stores/engines.svelte'
 
   interface EngineInfo {
     name: string
@@ -12,29 +14,23 @@
     hasEditor: boolean
   }
 
-  let engines = $state<EngineInfo[]>([])
-  let scannedPaths = $state<string[]>([])
-  let loading = $state(true)
-  let error = $state<string | null>(null)
+  const engines = $derived(enginesStore.engines)
+  const scannedPaths = $derived(enginesStore.scannedPaths)
+  const loading = $derived(enginesStore.loading)
+  const error = $derived(enginesStore.error)
 
-  async function load(): Promise<void> {
-    loading = true
-    error = null
-    const r = await window.api.engines.list()
-    if (r.ok) {
-      engines = r.engines ?? []
-      scannedPaths = r.scannedPaths ?? []
-    } else {
-      error = r.error ?? 'Failed to list engines'
-    }
-    loading = false
-  }
+  onMount(() => {
+    void enginesStore.ensureLoaded()
+  })
 
-  // Re-scan whenever settings are saved (so changing `enginePaths` takes
-  // effect immediately without a restart) and on mount.
+  let firstSettingsTick = true
   $effect(() => {
     settingsVersion()
-    void load()
+    if (firstSettingsTick) {
+      firstSettingsTick = false
+      return
+    }
+    void enginesStore.rescan()
   })
 
   async function reveal(engine: EngineInfo): Promise<void> {
@@ -46,6 +42,20 @@
     // slash works on every platform — the guard checks startsWith on the
     // resolved engine roots, which still passes for this subpath.
     await window.api.engines.openInExplorer(engine.path + '/Engine/Plugins/Marketplace')
+  }
+
+  /**
+   * Turn Epic's perforce-style branch name (`++UE5+Release-5.5`) into something
+   * human-readable. The raw form is what UBT writes to Build.version, but it's
+   * an internal P4 stream path — `++Project+Stream` markers don't mean anything
+   * to a UE user. We strip the leading `++`, replace `+` with spaces, and
+   * leave `-` alone (it separates Release-5.5 / Release-Live which the user
+   * recognises that way). The original string is still in `engine.branchName`
+   * if needed for diagnostics.
+   */
+  function formatBranch(raw: string): string {
+    if (!raw) return '—'
+    return raw.replace(/^\+\+/, '').replace(/\+/g, ' ').trim()
   }
 </script>
 
@@ -60,7 +70,7 @@
     </div>
     <div class="stats">
       <span>{engines.length} {engines.length === 1 ? 'install' : 'installs'}</span>
-      <button type="button" onclick={load} disabled={loading}>
+      <button type="button" onclick={() => enginesStore.rescan()} disabled={loading}>
         {loading ? 'Scanning…' : 'Rescan'}
       </button>
     </div>
@@ -103,7 +113,7 @@
               <span class="path-hint">{e.path}</span>
             </td>
             <td class="ver">{e.version}</td>
-            <td class="branch">{e.branchName || '—'}</td>
+            <td class="branch" title={e.branchName || ''}>{formatBranch(e.branchName)}</td>
             <td class="num">{e.changelist || '—'}</td>
             <td class="editor">
               {#if e.hasEditor}

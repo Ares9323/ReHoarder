@@ -59,6 +59,33 @@
   let createDialogOpen = $state(false)
   let addToProjectDialogOpen = $state(false)
 
+  /** Free-text filter for the project list (the menu is mostly used by people with dozens of projects). */
+  let projectSearch = $state('')
+  /** When `true`, the "Install into a project" section also shows projects whose engine doesn't match. */
+  let showIncompatibleProjects = $state(false)
+
+  /** Helper for case-insensitive substring matches on a project's display name. */
+  function matchesProjectSearch(name: string): boolean {
+    const q = projectSearch.trim().toLowerCase()
+    if (q.length === 0) return true
+    return name.toLowerCase().includes(q)
+  }
+
+  /** Is a project "compatible" with the asset request? Mirrors the rule used in the template. */
+  function isProjectCompatible(p: { engineAssociation: string }): boolean {
+    if (!p.engineAssociation) return false
+    return requestedVersion
+      ? p.engineAssociation === requestedVersion
+      : availableVersions.includes(p.engineAssociation)
+  }
+
+  const filteredCompatibleProjects = $derived(
+    knownProjects.filter((p) => isProjectCompatible(p) && matchesProjectSearch(p.name))
+  )
+  const filteredIncompatibleProjects = $derived(
+    knownProjects.filter((p) => !isProjectCompatible(p) && matchesProjectSearch(p.name))
+  )
+
   /** Effective kind, with the legacy `isPlugin` boolean as fallback for older callers. */
   const kind = $derived<'plugin' | 'project' | 'pack' | 'other'>(
     assetKind ?? (isPlugin ? 'plugin' : 'other')
@@ -234,6 +261,17 @@
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   })
+
+  // Lock body scroll while the modal is mounted so the asset grid behind it
+  // doesn't move when the user scrolls inside the popup or hits the mouse
+  // wheel. Restored on unmount.
+  $effect(() => {
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = prev
+    }
+  })
 </script>
 
 <div
@@ -342,8 +380,10 @@
         <ul class="list">
           {#each installedEngines as e (e.path)}
             {@const v = shortVersion(e)}
-            {@const compatible = availableVersions.includes(v)}
             {@const requested = !!requestedVersion && requestedVersion === v}
+            {@const compatible = requestedVersion
+              ? v === requestedVersion
+              : availableVersions.includes(v)}
             <li>
               <button
                 type="button"
@@ -353,7 +393,9 @@
                 class:incompatible={!compatible}
                 disabled={actionBusy || !compatible}
                 title={!compatible
-                  ? `${e.name} (${e.version}) isn't compatible with this asset (offers ${availableVersions.join(', ') || '—'})`
+                  ? requestedVersion
+                    ? `${e.name} (${e.version}) isn't engine ${requestedVersion} — pick the matching engine for this plugin`
+                    : `${e.name} (${e.version}) isn't compatible with this asset (offers ${availableVersions.join(', ') || '—'})`
                   : requested
                     ? `Install plugin into ${e.name} (${e.version}) — version you came in with`
                     : `Install plugin into ${e.name} (${e.version}) — alternative version`}
@@ -380,48 +422,94 @@
           No projects detected. Add Project paths under Settings → Project paths.
         </p>
       {:else}
-        <ul class="list">
-          {#each knownProjects as p (p.uprojectPath)}
-            {@const compatible = !!p.engineAssociation && availableVersions.includes(p.engineAssociation)}
-            {@const requested = !!requestedVersion && p.engineAssociation === requestedVersion}
-            <li>
-              <button
-                type="button"
-                class="row-btn"
-                class:requested
-                class:dimmed={compatible && !requested && !!requestedVersion}
-                class:incompatible={!compatible}
-                disabled={actionBusy || !compatible}
-                title={!compatible
-                  ? `${p.name} uses engine ${p.engineAssociation || '—'}; asset offers ${availableVersions.join(', ') || '—'}`
-                  : requested
+        <input
+          type="search"
+          class="search-input"
+          placeholder="Search projects…"
+          bind:value={projectSearch}
+          spellcheck="false"
+        />
+
+        {#if filteredCompatibleProjects.length === 0 && projectSearch.trim() !== ''}
+          <p class="hint">No matching project for "{projectSearch.trim()}".</p>
+        {:else if filteredCompatibleProjects.length === 0}
+          <p class="hint">
+            No installed project uses engine {requestedVersion ?? availableVersions.join(' / ')}.
+            Click the toggle below to install into a project with a different engine version.
+          </p>
+        {:else}
+          <ul class="list">
+            {#each filteredCompatibleProjects as p (p.uprojectPath)}
+              {@const requested = !!requestedVersion && p.engineAssociation === requestedVersion}
+              <li>
+                <button
+                  type="button"
+                  class="row-btn"
+                  class:requested
+                  disabled={actionBusy}
+                  title={requested
                     ? `Install plugin into ${p.name} (engine ${p.engineAssociation})`
-                    : `Install plugin into ${p.name} — uses engine ${p.engineAssociation}, different from the version you came in with`}
-                onclick={() => installToProject(p)}
-              >
-                <span class="row-main">{p.name}</span>
-                <span class="row-meta">{p.engineAssociation || '—'}</span>
-              </button>
-            </li>
-          {/each}
-        </ul>
+                    : `Install plugin into ${p.name} — uses engine ${p.engineAssociation}`}
+                  onclick={() => installToProject(p)}
+                >
+                  <span class="row-main">{p.name}</span>
+                  <span class="row-meta">{p.engineAssociation || '—'}</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        {#if filteredIncompatibleProjects.length > 0}
+          <button
+            type="button"
+            class="disclosure-btn"
+            onclick={() => (showIncompatibleProjects = !showIncompatibleProjects)}
+          >
+            <span class="chev">{showIncompatibleProjects ? '▾' : '▸'}</span>
+            {showIncompatibleProjects ? 'Hide' : 'Show'}
+            {filteredIncompatibleProjects.length}
+            {filteredIncompatibleProjects.length === 1 ? 'project' : 'projects'}
+            with a different engine
+          </button>
+          {#if showIncompatibleProjects}
+            <ul class="list older">
+              {#each filteredIncompatibleProjects as p (p.uprojectPath)}
+                <li>
+                  <button
+                    type="button"
+                    class="row-btn warning"
+                    disabled={actionBusy}
+                    title="Different engine version than the asset — install at your own risk"
+                    onclick={() => installToProject(p)}
+                  >
+                    <span class="row-main">{p.name}</span>
+                    <span class="row-meta">{p.engineAssociation || '—'}</span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        {/if}
       {/if}
     </section>
 
-    <section>
-      <h3>Download only</h3>
-      <p class="hint">
-        Drop the asset into the configured vault path without copying it anywhere else.
-      </p>
-      <button
-        type="button"
-        class="primary-btn"
-        disabled={actionBusy}
-        onclick={() => downloadOnly(requestedVersion)}
-      >
-        Download {#if requestedVersion}({requestedVersion}){/if}
-      </button>
-    </section>
+    {#if !(requestedVersion && downloadedVersions.includes(requestedVersion))}
+      <section>
+        <h3>Download only</h3>
+        <p class="hint">
+          Drop the asset into the configured vault path without copying it anywhere else.
+        </p>
+        <button
+          type="button"
+          class="primary-btn"
+          disabled={actionBusy}
+          onclick={() => downloadOnly(requestedVersion)}
+        >
+          Download {#if requestedVersion}({requestedVersion}){/if}
+        </button>
+      </section>
+    {/if}
   </div>
 </div>
 
@@ -618,6 +706,58 @@
     padding: 0.05rem 0.45rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+  }
+
+  .search-input {
+    background: #1a1a1a;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #e0e0e0;
+    padding: 0.35rem 0.6rem;
+    font-family: inherit;
+    font-size: 0.82rem;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .search-input::placeholder {
+    color: #666;
+  }
+  .search-input:focus {
+    outline: none;
+    border-color: #c084fc;
+  }
+
+  .disclosure-btn {
+    background: transparent;
+    color: #888;
+    border: none;
+    text-align: left;
+    padding: 0.2rem 0;
+    cursor: pointer;
+    font-size: 0.78rem;
+    font-family: inherit;
+  }
+  .disclosure-btn:hover {
+    color: #c084fc;
+  }
+  .chev {
+    display: inline-block;
+    width: 1rem;
+    color: #c084fc;
+  }
+
+  .list.older {
+    margin-top: 0.2rem;
+  }
+  .row-btn.warning {
+    border-color: #5a4128;
+  }
+  .row-btn.warning:hover:not(:disabled) {
+    background: #3a2a14;
+    border-color: #7a5a2c;
+  }
+  .row-btn.warning .row-meta {
+    color: #fbbf24;
   }
   .primary-btn {
     align-self: flex-start;

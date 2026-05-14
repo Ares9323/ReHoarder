@@ -18,6 +18,12 @@ export interface ProjectInfo {
   hasCode: boolean
   /** Last-modified time of the `.uproject` file in ms (proxy for "last opened/edited"). */
   lastModified: number
+  /** When the project was created with ReHoarder, the asset source it derived from (`'fab'` / `'vault'`). */
+  rehoarderSource: string | null
+  /** When the project was created with ReHoarder, the asset sourceId it derived from. */
+  rehoarderSourceId: string | null
+  /** Resolved by the IPC layer via `assetsRepo.image_url`. `null` when there's no `.rehoarder.json` or no matching asset row. */
+  imageUrl: string | null
 }
 
 interface UProjectDescriptor {
@@ -128,6 +134,7 @@ async function readProjectInfo(
   const base = path.basename(uprojectPath)
   const nameNoExt = base.replace(/\.uproject$/i, '')
   const hasCode = Array.isArray(d.Modules) && d.Modules.length > 0
+  const marker = await readRehoarderMarker(projectDir)
   return {
     name: nameNoExt,
     uprojectPath,
@@ -137,6 +144,36 @@ async function readProjectInfo(
     description: d.Description ?? '',
     category: d.Category ?? '',
     hasCode,
-    lastModified: stat.mtimeMs
+    lastModified: stat.mtimeMs,
+    rehoarderSource: marker?.source ?? null,
+    rehoarderSourceId: marker?.sourceId ?? null,
+    // Resolved (or left null) by the IPC layer with access to the assets repo.
+    imageUrl: null
+  }
+}
+
+/**
+ * Read the `.rehoarder.json` marker we stamp next to a `.uproject` when the
+ * project is created via the Create-project flow. The marker traces the
+ * project back to its source asset so the Projects tab can fetch the same
+ * thumbnail / metadata we already show on the Assets tab. Missing or malformed
+ * marker → `null` (the project just won't have a thumbnail).
+ */
+async function readRehoarderMarker(
+  projectDir: string
+): Promise<{ source: string; sourceId: string } | null> {
+  const markerPath = path.join(projectDir, '.rehoarder.json')
+  let raw: string
+  try {
+    raw = await fsp.readFile(markerPath, 'utf-8')
+  } catch {
+    return null
+  }
+  try {
+    const j = JSON.parse(raw) as { source?: unknown; sourceId?: unknown }
+    if (typeof j.source !== 'string' || typeof j.sourceId !== 'string') return null
+    return { source: j.source, sourceId: j.sourceId }
+  } catch {
+    return null
   }
 }

@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
   import { settingsVersion } from '../stores/settings-events.svelte'
+  import { projectsStore } from '../stores/projects.svelte'
   import UProjectEditorPanel from './UProjectEditorPanel.svelte'
 
   interface ProjectInfo {
@@ -12,16 +14,20 @@
     category: string
     hasCode: boolean
     lastModified: number
+    rehoarderSource: string | null
+    rehoarderSourceId: string | null
+    imageUrl: string | null
   }
 
   type SortKey = 'name' | 'engine' | 'lastModified'
   type SortDir = 'asc' | 'desc'
 
-  let projects = $state<ProjectInfo[]>([])
-  let scannedPaths = $state<string[]>([])
+  const projects = $derived(projectsStore.projects)
+  const scannedPaths = $derived(projectsStore.scannedPaths)
+  const loading = $derived(projectsStore.loading)
+  const error = $derived(projectsStore.error)
   let separateByPath = $state(false)
-  let loading = $state(true)
-  let error = $state<string | null>(null)
+  let showThumbnails = $state(true)
 
   let search = $state('')
   // Persisted across sessions in localStorage. We store the *hidden* set rather
@@ -51,29 +57,30 @@
   let sortBy = $state<SortKey>('lastModified')
   let sortDir = $state<SortDir>('desc')
 
-  async function load(): Promise<void> {
-    loading = true
-    error = null
-    const [r, s] = await Promise.all([
-      window.api.projects.list(),
-      window.api.settings.get()
-    ])
-    separateByPath = s.separateProjectsByPath
-    if (r.ok) {
-      projects = r.projects ?? []
-      scannedPaths = r.scannedPaths ?? []
-    } else {
-      error = r.error ?? 'Failed to list projects'
+  async function loadSettings(): Promise<void> {
+    try {
+      const s = await window.api.settings.get()
+      separateByPath = s.separateProjectsByPath
+      showThumbnails = s.showProjectThumbnails
+    } catch {
+      // best-effort; UI falls back to defaults
     }
-    loading = false
   }
 
-  // Re-scan whenever settings are saved (so changing `projectPaths` or
-  // `separateProjectsByPath` takes effect immediately without a restart)
-  // and on mount.
+  onMount(() => {
+    void loadSettings()
+    void projectsStore.ensureLoaded()
+  })
+
+  let firstSettingsTick = true
   $effect(() => {
     settingsVersion()
-    void load()
+    if (firstSettingsTick) {
+      firstSettingsTick = false
+      return
+    }
+    void loadSettings()
+    void projectsStore.rescan()
   })
 
   function formatDate(ms: number): string {
@@ -191,7 +198,7 @@
   function stopEditing(): void {
     editingPath = null
     // Re-scan in case Description/Category changed — they show in the table.
-    void load()
+    void projectsStore.rescan()
   }
 
   // Per-row transient action state: shows a busy indicator on the button that
@@ -247,7 +254,7 @@
         {sortedProjects().length} / {projects.length}
         {projects.length === 1 ? 'project' : 'projects'}
       </span>
-      <button type="button" onclick={load} disabled={loading}>
+      <button type="button" onclick={() => projectsStore.rescan()} disabled={loading}>
         {loading ? 'Scanning…' : 'Rescan'}
       </button>
     </div>
@@ -356,11 +363,24 @@
             {/if}
           </td>
           <td class="name">
-            <span class="project-name">{p.name}</span>
-            <span class="path-hint">{p.projectDir}</span>
-            {#if st.error}
-              <span class="row-error" title={st.error}>{st.error}</span>
-            {/if}
+            <div class="name-row">
+              {#if showThumbnails}
+                <div class="thumb">
+                  {#if p.imageUrl}
+                    <img src={p.imageUrl} alt="" loading="lazy" />
+                  {:else}
+                    <div class="thumb-placeholder">?</div>
+                  {/if}
+                </div>
+              {/if}
+              <div class="name-text">
+                <span class="project-name">{p.name}</span>
+                <span class="path-hint">{p.projectDir}</span>
+                {#if st.error}
+                  <span class="row-error" title={st.error}>{st.error}</span>
+                {/if}
+              </div>
+            </div>
           </td>
           <td class="ver">{formatEngine(p.engineAssociation)}</td>
           <td class="cat">{p.category || '—'}</td>
@@ -681,6 +701,38 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+  }
+  .thumb {
+    flex: 0 0 auto;
+    width: 56px;
+    height: 32px;
+    border-radius: 4px;
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .thumb-placeholder {
+    color: #444;
+    font-size: 0.85rem;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  .name-text {
+    min-width: 0;
+    flex: 1;
   }
   .project-name {
     color: #e0e0e0;

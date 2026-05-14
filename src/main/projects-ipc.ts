@@ -18,6 +18,7 @@ import {
   type AddToProjectResult
 } from './projects-add-to'
 import type { DownloadsRepo } from './db/downloads-repo'
+import type { AssetsRepo, AssetSource } from './db/assets-repo'
 import type { SettingsStore } from './settings'
 
 export interface ProjectsListResult {
@@ -81,12 +82,24 @@ function guardProjectPath(uprojectPath: string, roots: string[]): string | null 
 
 export function registerProjectsIpc(
   settings: SettingsStore,
-  downloadsRepo: DownloadsRepo
+  downloadsRepo: DownloadsRepo,
+  assetsRepo: AssetsRepo
 ): void {
   ipcMain.handle('projects:list', async (): Promise<ProjectsListResult> => {
     try {
       const cfg = settings.load()
       const projects = await scanProjects(cfg.projectPaths)
+      // Splice in the thumbnail URL for ReHoarder-created projects: the
+      // `.rehoarder.json` marker traced them back to (source, sourceId), now
+      // we look up `assets.image_url` for that pair.
+      for (const p of projects) {
+        if (!p.rehoarderSource || !p.rehoarderSourceId) continue
+        const asset = assetsRepo.findById(
+          p.rehoarderSource as AssetSource,
+          p.rehoarderSourceId
+        )
+        p.imageUrl = asset?.imageUrl ?? null
+      }
       return { ok: true, scannedPaths: cfg.projectPaths, projects }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)

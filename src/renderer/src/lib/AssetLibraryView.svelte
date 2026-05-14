@@ -4,10 +4,21 @@
   import SyncLogPanel from './SyncLogPanel.svelte'
   import CustomInstallMenu from './CustomInstallMenu.svelte'
   import { settingsVersion } from '../stores/settings-events.svelte'
+  import { enginesStore } from '../stores/engines.svelte'
+  import { projectsStore } from '../stores/projects.svelte'
+  import { downloadsStore } from '../stores/downloads.svelte'
+  import { vaultStore } from '../stores/vault.svelte'
 
   type AssetSource = 'vault' | 'fab' | 'legacy'
   type AssetSubSource = 'fab-ue' | 'fab-other' | null
-  type SourceFilter = 'all' | 'fab-ue' | 'fab-other' | 'bookmarks' | 'hidden'
+  type SourceFilter =
+    | 'all'
+    | 'fab-ue'
+    | 'fab-other'
+    | 'bookmarks'
+    | 'hidden'
+    | 'downloaded'
+    | 'updatable'
 
   interface AssetRow {
     source: AssetSource
@@ -74,66 +85,64 @@
   // Short engine version slugs (`5.4`, `4.27`) for engines the user has installed.
   // Used by AssetCard to decide whether a version chip click goes through the
   // "fast path" (auto-route + enqueue) or opens the Custom Install menu.
-  let installedEngineVersions = $state<string[]>([])
-  // The full engine info list is forwarded into the Custom Install menu so the
-  // user can pick a target engine. We fetch once on mount and on every settings
-  // change (paths may have moved) — same pattern as the other tabs.
-  interface EngineLite {
-    name: string
-    path: string
-    version: string
-    majorVersion: number
-    editorExePath: string | null
-    hasEditor: boolean
-  }
-  interface ProjectLite {
-    name: string
-    uprojectPath: string
-    projectDir: string
-    engineAssociation: string
-  }
-  let installedEngines = $state<EngineLite[]>([])
-  let knownProjects = $state<ProjectLite[]>([])
-  /** Configured `projectPaths` from settings — passed into Custom Install for the Create-project flow. */
-  let projectPaths = $state<string[]>([])
+  // Distinct major.minor slugs ("5.4", "4.27") computed off the engines store.
+  const installedEngineVersions = $derived(
+    [
+      ...new Set(
+        installedEngines.map((e) => e.version.split('.').slice(0, 2).join('.'))
+      )
+    ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+  )
+  // Pull engines & projects from the shared singleton stores — same data the
+  // Engines/Projects tabs render. No more parallel `engines.list()` + `projects.list()`
+  // on every Assets-tab mount; the stores fetch once and cache.
+  const installedEngines = $derived(
+    enginesStore.engines.map((e) => ({
+      name: e.name,
+      path: e.path,
+      version: e.version,
+      majorVersion: e.majorVersion,
+      editorExePath: e.editorExePath,
+      hasEditor: e.hasEditor
+    }))
+  )
+  const knownProjects = $derived(
+    projectsStore.projects.map((p) => ({
+      name: p.name,
+      uprojectPath: p.uprojectPath,
+      projectDir: p.projectDir,
+      engineAssociation: p.engineAssociation
+    }))
+  )
+  const projectPaths = $derived(projectsStore.scannedPaths)
 
-  async function loadInstallTargets(): Promise<void> {
-    try {
-      const [eRes, pRes] = await Promise.all([
-        window.api.engines.list(),
-        window.api.projects.list()
-      ])
-      if (eRes.ok) {
-        installedEngines = (eRes.engines ?? []).map((e) => ({
-          name: e.name,
-          path: e.path,
-          version: e.version,
-          majorVersion: e.majorVersion,
-          editorExePath: e.editorExePath,
-          hasEditor: e.hasEditor
-        }))
-        installedEngineVersions = [
-          ...new Set(installedEngines.map((e) => e.version.split('.').slice(0, 2).join('.')))
-        ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-      }
-      if (pRes.ok) {
-        knownProjects = (pRes.projects ?? []).map((p) => ({
-          name: p.name,
-          uprojectPath: p.uprojectPath,
-          projectDir: p.projectDir,
-          engineAssociation: p.engineAssociation
-        }))
-        projectPaths = pRes.scannedPaths ?? []
-      }
-    } catch {
-      // Best-effort; the UI degrades to "always show Custom" if engines aren't known.
+  onMount(() => {
+    void enginesStore.ensureLoaded()
+    void projectsStore.ensureLoaded()
+  })
+
+  // The "Only Downloaded" Source filter cross-references vault folder names
+  // with `assets.raw.{projectVersions[].artifactId, uid}` to surface legacy
+  // downloads (AMS, Launcher) that predate the ReHoarder downloads table.
+  // We trigger the vault scan lazily — only when the user actually picks that
+  // filter — so people who never use it pay no boot cost.
+  $effect(() => {
+    if (sourceFilter === 'downloaded') {
+      void vaultStore.ensureLoaded()
     }
-  }
+  })
 
-  onMount(loadInstallTargets)
+  // Settings save → re-scan both stores (paths / scan rules may have changed)
+  // but skip the initial reactive tick to avoid double-loading on mount.
+  let firstSettingsTick = true
   $effect(() => {
     settingsVersion()
-    void loadInstallTargets()
+    if (firstSettingsTick) {
+      firstSettingsTick = false
+      return
+    }
+    void enginesStore.rescan()
+    void projectsStore.rescan()
   })
 
   /** A Fab UE asset is treated as a plugin when `distributionMethod === 'CODE_PLUGIN'`. */
@@ -176,37 +185,12 @@
    * Re-fetched on mount and on every `downloads:state-changed` broadcast, so
    * a brand-new "done" row reflects in the cards without an explicit reload.
    */
-  // Raw `downloads.list()` snapshot kept in state so we can derive multiple
-  // views off it: completed (downloaded chips), in-flight progress, build
-  // versions for update detection. `onStateChanged` replaces the whole array;
-  // `onProgress` patches one row in place to keep progress smooth.
-  type DLRow = Awaited<ReturnType<typeof window.api.downloads.list>>['rows'][number]
-  let allDownloads = $state<DLRow[]>([])
-  async function loadAllDownloads(): Promise<void> {
-    try {
-      const r = await window.api.downloads.list()
-      allDownloads = r.rows
-    } catch {
-      // best-effort; chips fall back to "no download status" styling
-    }
-  }
+  // Downloads snapshot lives in the singleton `downloadsStore`: the IPC fetch
+  // runs once per app session and the broadcast listeners are attached at
+  // module load. Asset cards remounting on tab switch read off the cache.
+  const allDownloads = $derived(downloadsStore.all)
   onMount(() => {
-    void loadAllDownloads()
-    const offState = window.api.downloads.onStateChanged((rows) => {
-      allDownloads = rows
-    })
-    const offProgress = window.api.downloads.onProgress((row) => {
-      const idx = allDownloads.findIndex((r) => r.id === row.id)
-      if (idx >= 0) {
-        const next = allDownloads.slice()
-        next[idx] = row
-        allDownloads = next
-      }
-    })
-    return () => {
-      offState()
-      offProgress()
-    }
+    void downloadsStore.ensureLoaded()
   })
 
   /** `<source>:<sourceId>` → set of completed engine version slugs (`'*'` for generic / Fab Other). */
@@ -434,6 +418,8 @@
       <option value="all">All sources</option>
       <option value="fab-ue">Only Fab UE</option>
       <option value="fab-other">Only Fab Other</option>
+      <option value="downloaded">Only Downloaded</option>
+      <option value="updatable">Only Updatable</option>
       <option value="bookmarks">Only Bookmarks</option>
       <option value="hidden">Only Hidden</option>
     </select>

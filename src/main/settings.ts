@@ -32,6 +32,8 @@ export interface AppSettings {
   separateVaultsByPath: boolean
   /** Show the asset thumbnail (from Fab) next to each Vault entry. Off makes the list more compact / faster on big vaults. */
   showVaultThumbnails: boolean
+  /** Show the source-asset thumbnail next to each Project entry (only available for projects created via ReHoarder, where we stamp a `.rehoarder.json` next to the .uproject). */
+  showProjectThumbnails: boolean
   /** Extra args appended after `-game` when the user clicks "Run" on a project. `-game` is always added implicitly. */
   gameLaunchParams: string[]
 }
@@ -80,6 +82,7 @@ export function defaultSettings(): AppSettings {
     separateProjectsByPath: false,
     separateVaultsByPath: false,
     showVaultThumbnails: true,
+    showProjectThumbnails: true,
     gameLaunchParams: ['-log', '-windowed', '-ResX=1280', '-ResY=720']
   }
 }
@@ -144,6 +147,10 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
       typeof partial.showVaultThumbnails === 'boolean'
         ? partial.showVaultThumbnails
         : d.showVaultThumbnails,
+    showProjectThumbnails:
+      typeof partial.showProjectThumbnails === 'boolean'
+        ? partial.showProjectThumbnails
+        : d.showProjectThumbnails,
     gameLaunchParams: partial.gameLaunchParams
       ? sanitizePaths(partial.gameLaunchParams)
       : d.gameLaunchParams

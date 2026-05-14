@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount } from 'svelte'
+  import { downloadsStore } from '../stores/downloads.svelte'
 
   type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
@@ -23,41 +24,16 @@
 
   type StatusFilter = 'all' | DownloadStatus
 
-  let rows = $state<DownloadRow[]>([])
+  // Read off the singleton store — the IPC fetch + state-changed / progress
+  // listeners are attached once per app session inside `downloads.svelte.ts`,
+  // so opening this tab is essentially free after the first time.
+  const rows = $derived(downloadsStore.all as DownloadRow[])
+  const loading = $derived(downloadsStore.loading && !downloadsStore.loaded)
   let filter = $state<StatusFilter>('all')
-  let loading = $state(true)
   let actionError = $state<string | null>(null)
 
-  let unsubState: (() => void) | null = null
-  let unsubProgress: (() => void) | null = null
-
-  async function refresh(): Promise<void> {
-    const r = await window.api.downloads.list()
-    rows = r.rows
-    loading = false
-  }
-
-  onMount(async () => {
-    unsubState = window.api.downloads.onStateChanged((next) => {
-      rows = next
-    })
-    unsubProgress = window.api.downloads.onProgress((updated) => {
-      // Splice the single updated row in place rather than calling refresh(),
-      // so a 50-asset queue with one downloading row doesn't re-render the world
-      // every 200ms. Identity is preserved when the row is found.
-      const idx = rows.findIndex((r) => r.id === updated.id)
-      if (idx >= 0) {
-        const copy = rows.slice()
-        copy[idx] = updated
-        rows = copy
-      }
-    })
-    await refresh()
-  })
-
-  onDestroy(() => {
-    unsubState?.()
-    unsubProgress?.()
+  onMount(() => {
+    void downloadsStore.ensureLoaded()
   })
 
   function formatBytes(n: number): string {

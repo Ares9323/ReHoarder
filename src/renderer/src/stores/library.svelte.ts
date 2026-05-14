@@ -1,3 +1,6 @@
+import { downloadsStore } from './downloads.svelte'
+import { vaultStore } from './vault.svelte'
+
 // Local mirrors of preload types (see auth.svelte.ts for rationale).
 type AssetSource = 'vault' | 'fab' | 'legacy'
 type AssetSubSource = 'fab-ue' | 'fab-other' | null
@@ -14,6 +17,8 @@ type SourceFilter =
   | 'fab-other'
   | 'bookmarks'
   | 'hidden'
+  | 'downloaded'
+  | 'updatable'
 
 interface AssetRow {
   source: AssetSource
@@ -81,7 +86,102 @@ export interface LibraryStore {
 }
 
 export function createLibraryStore(): LibraryStore {
-  let assets = $state<AssetRow[]>([])
+  // `rawAssets` is what the backend returned for the current filter set;
+  // `assets` derives off it and optionally intersects with the downloaded set
+  // so the "Only downloaded" Source-filter value is a client-side narrowing.
+  let rawAssets = $state<AssetRow[]>([])
+  const assets = $derived.by(() => {
+    if (sourceFilter === 'updatable') {
+      // An asset is "updatable" when at least one of our `status='done'`
+      // downloads has a `buildVersion` that differs from the corresponding
+      // `projectVersions[i].buildVersion` in the live raw payload. Legacy
+      // downloads (no buildVersion recorded) are conservatively ignored —
+      // we can't tell if they're stale.
+      const buildsByAsset = new Map<string, Map<string, string>>()
+      for (const r of downloadsStore.all) {
+        if (r.status !== 'done' || !r.buildVersion) continue
+        const key = `${r.source}:${r.sourceId}`
+        const slug = (r.engineVersion ?? '*').toLowerCase()
+        let m = buildsByAsset.get(key)
+        if (!m) {
+          m = new Map()
+          buildsByAsset.set(key, m)
+        }
+        m.set(slug, r.buildVersion)
+      }
+      return rawAssets.filter((a) => {
+        const builds = buildsByAsset.get(`${a.source}:${a.sourceId}`)
+        if (!builds || !a.raw) return false
+        let parsed: {
+          projectVersions?: Array<{ engineVersions?: string[]; buildVersion?: unknown }>
+        }
+        try {
+          parsed = JSON.parse(a.raw)
+        } catch {
+          return false
+        }
+        for (const [slug, recordedBuild] of builds) {
+          if (slug === '*') continue
+          for (const pv of parsed.projectVersions ?? []) {
+            const evs = (pv.engineVersions ?? []).map((v) =>
+              v.replace(/^UE_/i, '').toLowerCase()
+            )
+            if (!evs.includes(slug)) continue
+            const currentBuild = typeof pv.buildVersion === 'string' ? pv.buildVersion : null
+            if (currentBuild && currentBuild !== recordedBuild) return true
+          }
+        }
+        return false
+      })
+    }
+    if (sourceFilter !== 'downloaded') return rawAssets
+
+    // 1) Anything ReHoarder downloaded itself — direct match against the
+    //    downloads table.
+    const downloaded = new Set<string>()
+    for (const r of downloadsStore.all) {
+      if (r.status === 'done') downloaded.add(`${r.source}:${r.sourceId}`)
+    }
+
+    // 2) Anything that's physically on disk in a vault root but predates the
+    //    DB row — typically AMS / Epic Launcher downloads done before
+    //    ReHoarder existed. We match on folder name == artifactId (Fab UE)
+    //    or folder name == uid (Fab Other). The vault scan needs to have run
+    //    at least once; if it hasn't, we just fall back to the DB set.
+    if (vaultStore.entries.length > 0) {
+      const vaultNames = new Set<string>()
+      for (const e of vaultStore.entries) vaultNames.add(e.name.toLowerCase())
+      for (const a of rawAssets) {
+        const key = `${a.source}:${a.sourceId}`
+        if (downloaded.has(key)) continue
+        if (a.source !== 'fab' || !a.raw) continue
+        try {
+          const parsed = JSON.parse(a.raw) as {
+            uid?: string
+            projectVersions?: Array<{ artifactId?: string }>
+          }
+          // Fab UE: each projectVersion has its own artifactId.
+          let matched = false
+          for (const pv of parsed.projectVersions ?? []) {
+            const aid = (pv.artifactId ?? '').toLowerCase()
+            if (aid && vaultNames.has(aid)) {
+              matched = true
+              break
+            }
+          }
+          // Fab Other: uid is the sourceId AND tends to be the folder name.
+          if (!matched && typeof parsed.uid === 'string' && vaultNames.has(parsed.uid.toLowerCase())) {
+            matched = true
+          }
+          if (matched) downloaded.add(key)
+        } catch {
+          // unparseable raw — skip
+        }
+      }
+    }
+
+    return rawAssets.filter((a) => downloaded.has(`${a.source}:${a.sourceId}`))
+  })
   let countsBySource = $state<Record<string, number>>({})
   let availableListingTypes = $state<string[]>([])
   let availableCategories = $state<string[]>([])
@@ -141,13 +241,23 @@ export function createLibraryStore(): LibraryStore {
         return { ...base, onlyBookmarked: true, includeHidden: true }
       case 'hidden':
         return { ...base, onlyHidden: true }
+      case 'downloaded':
+        // No backend source filter — the client-side `$derived` intersects
+        // with `downloadsStore.all` to keep only assets that have a
+        // `status='done'` row. Other backend filters (listing type, category,
+        // search) still apply as usual on top of that.
+        return { ...base }
+      case 'updatable':
+        // Same as 'downloaded': backend returns everything; the derived
+        // filters out anything whose recorded buildVersion still matches.
+        return { ...base }
     }
   }
 
   async function refresh(): Promise<void> {
     try {
       const result: LibraryListResult = await window.api.library.list(buildQuery())
-      assets = result.assets
+      rawAssets = result.assets
       countsBySource = result.countsBySource
       availableListingTypes = result.availableListingTypes
       availableCategories = result.availableCategories
