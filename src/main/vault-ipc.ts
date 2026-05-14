@@ -3,6 +3,7 @@ import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 import { listLocalVault, type LocalVaultEntry } from './vault-local'
 import { broadcastDownloads } from './downloads-ipc'
+import { compilePatterns, composeSkipPatterns, matchesAny } from './download/cruft-filter'
 import type { DownloadsRepo } from './db/downloads-repo'
 import type { AssetsRepo, AssetSource } from './db/assets-repo'
 import type { SettingsStore } from './settings'
@@ -25,6 +26,97 @@ export interface VaultDeleteResult {
   error?: string
   /** How many downloads-table rows were detached from this folder (cleared from the Assets tab). */
   downloadRowsRemoved?: number
+}
+
+export interface VaultCruftMatch {
+  /** Relative to the scanned asset directory, with forward slashes. */
+  relPath: string
+  size: number
+}
+
+export interface VaultCruftScanResult {
+  ok: boolean
+  error?: string
+  matches?: VaultCruftMatch[]
+  totalBytes?: number
+}
+
+export interface VaultCruftCleanResult {
+  ok: boolean
+  error?: string
+  deletedFiles?: number
+  freedBytes?: number
+}
+
+/**
+ * Walk `root` recursively and call `onFile(absPath, relPath, size)` for every
+ * regular file. Relative paths use forward slashes so they can be matched
+ * against the cruft-filter regexes directly. Symlinks are not followed.
+ */
+async function walkFiles(
+  root: string,
+  onFile: (absPath: string, relPath: string, size: number) => void
+): Promise<void> {
+  async function recurse(dir: string, prefix: string): Promise<void> {
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      const abs = path.join(dir, e.name)
+      const rel = prefix ? `${prefix}/${e.name}` : e.name
+      if (e.isDirectory()) {
+        if (e.isSymbolicLink()) continue
+        await recurse(abs, rel)
+        continue
+      }
+      if (!e.isFile()) continue
+      try {
+        const st = await fsp.stat(abs)
+        onFile(abs, rel, st.size)
+      } catch {
+        // Stat may fail for transient files / locked files — just skip.
+      }
+    }
+  }
+  await recurse(root, '')
+}
+
+/**
+ * After deleting files, climb `root` and remove every directory that ended
+ * up empty as a result. Stops at `root` itself (never deletes the scan root).
+ */
+async function pruneEmptyDirs(root: string): Promise<void> {
+  async function recurse(dir: string): Promise<boolean> {
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true })
+    } catch {
+      return false
+    }
+    let allEmpty = true
+    for (const e of entries) {
+      const abs = path.join(dir, e.name)
+      if (e.isDirectory() && !e.isSymbolicLink()) {
+        const wasEmpty = await recurse(abs)
+        if (!wasEmpty) allEmpty = false
+      } else {
+        allEmpty = false
+      }
+    }
+    if (allEmpty && dir !== root) {
+      try {
+        await fsp.rmdir(dir)
+        return true
+      } catch {
+        return false
+      }
+    }
+    return allEmpty
+  }
+  await recurse(root)
 }
 
 /**
@@ -115,6 +207,102 @@ export function registerVaultIpc(
       // the next `downloads:state-changed`, which only fires on enqueue/run).
       if (removed > 0) broadcastDownloads(downloadsRepo.listAll())
       return { ok: true, downloadRowsRemoved: removed }
+    }
+  )
+
+  /**
+   * Build the regexes for the current settings and the supplied vault-asset
+   * path, guarding against scans outside the configured vault roots. Returns
+   * `null` if the path fails the guard (the caller surfaces a friendly error).
+   */
+  function resolveScanContext(
+    absolutePath: string
+  ): { absDir: string; patterns: RegExp[] } | { error: string } {
+    const cfg = settings.load()
+    const resolved = path.resolve(absolutePath)
+    const root = cfg.vaultPaths
+      .map((r) => path.resolve(r))
+      .find((r) => resolved === r || resolved.startsWith(r + path.sep))
+    if (!root) {
+      return { error: 'Path is outside the configured vault roots' }
+    }
+    if (resolved === root) {
+      // Cleaning the root would scan every asset in one go and is too easy
+      // to misclick — require per-asset operations.
+      return { error: 'Refusing to scan the vault root itself' }
+    }
+    const patterns = compilePatterns(
+      composeSkipPatterns({
+        includeCruft: cfg.skipCruftAtDownload,
+        userExtras: cfg.cruftPatterns,
+        includePlatformBinaries: cfg.deleteExtraVaultPlatforms
+      })
+    )
+    return { absDir: resolved, patterns }
+  }
+
+  ipcMain.handle(
+    'vault:scan-cruft',
+    async (_e, absolutePath: string): Promise<VaultCruftScanResult> => {
+      const ctx = resolveScanContext(absolutePath)
+      if ('error' in ctx) return { ok: false, error: ctx.error }
+      if (ctx.patterns.length === 0) {
+        return { ok: true, matches: [], totalBytes: 0 }
+      }
+      const matches: VaultCruftMatch[] = []
+      let totalBytes = 0
+      try {
+        await walkFiles(ctx.absDir, (_abs, relPath, size) => {
+          if (matchesAny(relPath, ctx.patterns)) {
+            matches.push({ relPath, size })
+            totalBytes += size
+          }
+        })
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+      return { ok: true, matches, totalBytes }
+    }
+  )
+
+  ipcMain.handle(
+    'vault:clean-cruft',
+    async (_e, absolutePath: string): Promise<VaultCruftCleanResult> => {
+      const ctx = resolveScanContext(absolutePath)
+      if ('error' in ctx) return { ok: false, error: ctx.error }
+      if (ctx.patterns.length === 0) {
+        return { ok: true, deletedFiles: 0, freedBytes: 0 }
+      }
+      const toDelete: { abs: string; size: number }[] = []
+      try {
+        await walkFiles(ctx.absDir, (abs, relPath, size) => {
+          if (matchesAny(relPath, ctx.patterns)) {
+            toDelete.push({ abs, size })
+          }
+        })
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+      let deletedFiles = 0
+      let freedBytes = 0
+      for (const f of toDelete) {
+        try {
+          await fsp.unlink(f.abs)
+          deletedFiles++
+          freedBytes += f.size
+        } catch (err) {
+          // Best-effort: log and keep going. A partial clean is still useful.
+          console.warn(`[vault] failed to delete ${f.abs}:`, err)
+        }
+      }
+      // Empty parent directories left behind after deletion are tidied up so
+      // the file tree doesn't keep ghost folders like `Documentation/`.
+      try {
+        await pruneEmptyDirs(ctx.absDir)
+      } catch (err) {
+        console.warn('[vault] prune-empty-dirs failed:', err)
+      }
+      return { ok: true, deletedFiles, freedBytes }
     }
   )
 

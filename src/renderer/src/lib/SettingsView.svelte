@@ -9,6 +9,8 @@
     exitOnLaunchUnreal: boolean
     compilePluginsOnInstall: boolean
     deleteExtraVaultPlatforms: boolean
+    skipCruftAtDownload: boolean
+    cruftPatterns: string[]
     downloadThreads: number
     maxConcurrentDownloads: number
     imageSize: ImageSize
@@ -29,6 +31,7 @@
   let enginePathsText = $state('')
   let vaultPathsText = $state('')
   let gameLaunchParamsText = $state('')
+  let cruftPatternsText = $state('')
 
   let loading = $state(true)
   let saving = $state(false)
@@ -139,6 +142,7 @@
       enginePathsText = fromArray(s.enginePaths)
       vaultPathsText = fromArray(s.vaultPaths)
       gameLaunchParamsText = fromArgs(s.gameLaunchParams)
+      cruftPatternsText = fromArray(s.cruftPatterns)
       dirty = false
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
@@ -157,7 +161,8 @@
         projectPaths: toArray(projectPathsText),
         enginePaths: toArray(enginePathsText),
         vaultPaths: toArray(vaultPathsText),
-        gameLaunchParams: toArgs(gameLaunchParamsText)
+        gameLaunchParams: toArgs(gameLaunchParamsText),
+        cruftPatterns: toArray(cruftPatternsText)
       }
       const saved = await window.api.settings.set(payload)
       settings = saved
@@ -165,6 +170,7 @@
       enginePathsText = fromArray(saved.enginePaths)
       vaultPathsText = fromArray(saved.vaultPaths)
       gameLaunchParamsText = fromArgs(saved.gameLaunchParams)
+      cruftPatternsText = fromArray(saved.cruftPatterns)
       dirty = false
       savedFlash = true
       window.setTimeout(() => (savedFlash = false), 1500)
@@ -306,6 +312,29 @@
           Skip non-current-platform binaries
           <span class="hint">(don't download <code>Binaries/Mac</code>, <code>Binaries/Linux</code>, etc.)</span>
         </label>
+        <label>
+          <input
+            type="checkbox"
+            bind:checked={settings.skipCruftAtDownload}
+            onchange={markDirty}
+          />
+          Skip cruft at download
+          <span class="hint">(omit docs, vendor PDFs, DCC source files — built-in list + your extras)</span>
+        </label>
+        <label class="stack">
+          <span class="lbl-block">Extra cruft patterns</span>
+          <textarea
+            bind:value={cruftPatternsText}
+            oninput={markDirty}
+            placeholder={'one glob per line — e.g.\n**/*.fbx\nSamples/**'}
+            rows="4"
+            spellcheck="false"
+          ></textarea>
+          <span
+            class="hint hint-help"
+            title={'Minimal glob syntax:\n  *  → zero or more characters (no slash)\n  ?  → one character (no slash)\n  ** → zero or more path segments (slashes included)\n  Paths are case-insensitive and accept both / and \\\n\nExamples:\n  **/*.fbx           → every .fbx anywhere\n  Samples/**         → the whole Samples/ folder at the root\n  **/Documentation/**→ Documentation folder at any depth\n  Content/*.uasset   → only .uasset directly inside Content (not Content/Sub/)'}
+          >Glob syntax: <code>*</code>, <code>?</code>, <code>**</code> — hover for details. Applied on top of the built-in cruft list.</span>
+        </label>
       </div>
 
       <div class="group">
@@ -351,7 +380,7 @@
           {/if}
         </div>
         {#if updateState === 'downloading'}
-          <div class="bar"><div class="bar-fill" style:width="{updateProgress}%"></div></div>
+          <div class="progress"><div class="progress-fill" style:width="{updateProgress}%"></div></div>
         {/if}
         {#if updateError}
           <span class="hint hint-error">{updateError}</span>
@@ -564,6 +593,11 @@
   .hint-error {
     color: #fbbf24;
   }
+  .hint-help {
+    cursor: help;
+    text-decoration: underline dotted #555 1px;
+    text-underline-offset: 2px;
+  }
   .updates-row {
     display: flex;
     gap: 0.5rem;
@@ -587,13 +621,13 @@
     opacity: 0.55;
     cursor: not-allowed;
   }
-  .bar {
+  .progress {
     height: 6px;
     background: #2a2a2a;
     border-radius: 3px;
     overflow: hidden;
   }
-  .bar-fill {
+  .progress-fill {
     height: 100%;
     background: linear-gradient(90deg, #c084fc, #f472b6);
     transition: width 0.2s;

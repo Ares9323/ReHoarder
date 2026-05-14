@@ -3,9 +3,18 @@ import * as path from 'node:path'
 import type { DownloadRow, DownloadsRepo } from './db/downloads-repo'
 import type { FabRunnerDeps } from './download/fab-asset-runner'
 import { runFabAssetDownload } from './download/fab-asset-runner'
+import { composeSkipPatterns } from './download/cruft-filter'
 import { scanEngines } from './engines-local'
-import type { SettingsStore } from './settings'
+import type { AppSettings, SettingsStore } from './settings'
 import { DownloadCancelledError } from './download/download-types'
+
+function buildSkipPatterns(cfg: AppSettings): string[] {
+  return composeSkipPatterns({
+    includeCruft: cfg.skipCruftAtDownload,
+    userExtras: cfg.cruftPatterns,
+    includePlatformBinaries: cfg.deleteExtraVaultPlatforms
+  })
+}
 
 export interface EnqueueOptions {
   /** Short engine version slug (e.g. `5.4`). Used to pick the matching `projectVersion[]` from the asset raw JSON. */
@@ -293,6 +302,7 @@ export class DownloadsManager {
           engineVersion: row.engineVersion ?? undefined,
           pathStripPrefix,
           noWrapDataDir,
+          skipPatterns: buildSkipPatterns(cfg),
           signal: abort.signal,
           onLog: (m) => console.warn(`[downloads:${row.id.slice(0, 8)}]`, m),
           onProgress: (p) => {

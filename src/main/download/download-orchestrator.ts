@@ -2,9 +2,14 @@ import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 import { ChunkSource } from './chunk-source'
 import { assembleFile, type ChunkProvider } from './file-assembler'
+import { compilePatterns, matchesAny } from './cruft-filter'
 import type { ManifestBundle } from './manifest-client-types'
-import type { ChunkInfo } from './manifest-types'
-import type { DownloadOptions, DownloadResult, DownloadFileSummary } from './download-types'
+import type { ChunkInfo, FileManifestEntry, Manifest } from './manifest-types'
+import type {
+  DownloadOptions,
+  DownloadResult,
+  DownloadFileSummary
+} from './download-types'
 
 /** Default subdir-namer: replaces unsafe path characters in the artifactId. */
 function sanitizeSubdir(s: string): string {
@@ -23,6 +28,51 @@ function stripPrefix(filePath: string, prefix: string | undefined): string {
   const pref = prefix.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '') + '/'
   if (norm.startsWith(pref)) return filePath.slice(pref.length)
   return filePath
+}
+
+export interface AssetDownloadPlan {
+  /** Manifest entries that will actually be assembled to disk, in manifest order. */
+  filesToDownload: FileManifestEntry[]
+  /** Sum of `fileSize` for the kept files only. */
+  bytesTotal: number
+  filesTotal: number
+  /** Summaries for the entries that were filtered out by `skipPatterns`. */
+  skippedSummaries: DownloadFileSummary[]
+}
+
+/**
+ * Partition a manifest's files into "to download" and "to skip" given the
+ * caller's `pathStripPrefix` + `skipPatterns`. The runner uses this BEFORE
+ * starting work so it can persist accurate `bytesTotal` / `filesTotal` on the
+ * download row; the orchestrator re-runs the same partition internally to
+ * drive the assembly loop.
+ */
+export function planAssetDownload(
+  manifest: Manifest,
+  opts: Pick<DownloadOptions, 'pathStripPrefix' | 'skipPatterns'>
+): AssetDownloadPlan {
+  const skipRegexes = compilePatterns(opts.skipPatterns ?? [])
+  const filesToDownload: FileManifestEntry[] = []
+  const skippedSummaries: DownloadFileSummary[] = []
+  for (const entry of manifest.files) {
+    const relPath = stripPrefix(entry.filename, opts.pathStripPrefix)
+    if (skipRegexes.length > 0 && matchesAny(relPath, skipRegexes)) {
+      skippedSummaries.push({
+        filename: entry.filename,
+        fileSize: entry.fileSize,
+        skipped: true
+      })
+      continue
+    }
+    filesToDownload.push(entry)
+  }
+  const bytesTotal = filesToDownload.reduce((acc, f) => acc + f.fileSize, 0)
+  return {
+    filesToDownload,
+    bytesTotal,
+    filesTotal: filesToDownload.length,
+    skippedSummaries
+  }
 }
 
 /**
@@ -89,16 +139,21 @@ export async function downloadAsset(
   })
   const provider = buildChunkResolver(source, bundle.manifest.chunks)
 
-  const bytesTotal = bundle.manifest.files.reduce((acc, f) => acc + f.fileSize, 0)
-  const filesTotal = bundle.manifest.files.length
+  // Plan first: bytesTotal / filesTotal must reflect only the files that will
+  // actually be assembled, so the progress bar is honest about cruft skips.
+  const plan = planAssetDownload(bundle.manifest, opts)
+  const onLog = opts.onLog ?? (() => {})
+  for (const s of plan.skippedSummaries) {
+    onLog(`skip (cruft) ${s.filename} (${s.fileSize} bytes)`)
+  }
+  const { filesToDownload, bytesTotal, filesTotal } = plan
   let bytesDone = 0
   let bytesWritten = 0
   let filesDone = 0
-  const summaries: DownloadFileSummary[] = []
+  const summaries: DownloadFileSummary[] = [...plan.skippedSummaries]
   const onProgress = opts.onProgress
-  const onLog = opts.onLog ?? (() => {})
 
-  for (const entry of bundle.manifest.files) {
+  for (const entry of filesToDownload) {
     opts.signal?.throwIfAborted()
     const relPath = stripPrefix(entry.filename, opts.pathStripPrefix)
     onLog(`assembling ${relPath} (${entry.fileSize} bytes)`)

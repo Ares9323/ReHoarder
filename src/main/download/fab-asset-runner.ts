@@ -3,7 +3,7 @@ import type { AssetsRepo } from '../db/assets-repo'
 import type { Session } from '../auth/session'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
 import type { FabSessionClient } from '../fab/fab-session'
-import { downloadAsset } from './download-orchestrator'
+import { downloadAsset, planAssetDownload } from './download-orchestrator'
 import { EPIC_USER_AGENT } from '../vault/user-agent'
 import {
   fetchManifestLocator,
@@ -31,6 +31,8 @@ export interface FabRunnerOptions {
   pathStripPrefix?: string
   /** See `DownloadOptions.noWrapDataDir`. */
   noWrapDataDir?: boolean
+  /** See `DownloadOptions.skipPatterns`. */
+  skipPatterns?: string[]
   /** Forwarded to the orchestrator: cumulative progress callback. */
   onProgress?: (p: DownloadProgress) => void
   /** Forwarded to the orchestrator: per-step log line. */
@@ -138,8 +140,14 @@ export async function runFabAssetDownload(
   const chunkQueryStrings = infos.map((i) => i.queryString)
   opts.signal?.throwIfAborted()
 
-  const bytesTotal = manifest.files.reduce((acc, f) => acc + f.fileSize, 0)
-  const filesTotal = manifest.files.length
+  // Use the same planning logic the orchestrator runs internally, so the
+  // totals we persist via onStart match the progress the orchestrator emits.
+  const plan = planAssetDownload(manifest, {
+    pathStripPrefix: opts.pathStripPrefix,
+    skipPatterns: opts.skipPatterns
+  })
+  const bytesTotal = plan.bytesTotal
+  const filesTotal = plan.filesTotal
   const subdir = opts.assetSubdir ?? artifactId
   const assetDir = path.join(opts.vaultDir, subdir.replace(/[/\\:*?"<>|]/g, '_'))
   const buildVersion = manifest.meta.buildVersion
@@ -157,6 +165,7 @@ export async function runFabAssetDownload(
       },
       pathStripPrefix: opts.pathStripPrefix,
       noWrapDataDir: opts.noWrapDataDir,
+      skipPatterns: opts.skipPatterns,
       onLog: opts.onLog,
       onProgress: opts.onProgress,
       signal: opts.signal

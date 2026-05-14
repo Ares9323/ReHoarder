@@ -16,6 +16,10 @@ export interface AppSettings {
   compilePluginsOnInstall: boolean
   /** Skip `/Binaries/<otherPlatform>/` and `/Intermediates/Build/<otherPlatform>/` at download time. */
   deleteExtraVaultPlatforms: boolean
+  /** Master switch for the cruft-skip behaviour at download time. When off, neither defaults nor `cruftPatterns` are applied. */
+  skipCruftAtDownload: boolean
+  /** Extra glob patterns appended to the built-in cruft list (cruft-filter syntax). One per line in the UI. */
+  cruftPatterns: string[]
   /** Worker pool size for chunk downloads within a single asset (1-64). */
   downloadThreads: number
   /** How many separate asset downloads can run from the queue at once (1-8). */
@@ -78,6 +82,8 @@ export function defaultSettings(): AppSettings {
     exitOnLaunchUnreal: false,
     compilePluginsOnInstall: process.platform === 'linux',
     deleteExtraVaultPlatforms: false,
+    skipCruftAtDownload: true,
+    cruftPatterns: [],
     downloadThreads: 16,
     maxConcurrentDownloads: 2,
     imageSize: 'small',
@@ -132,6 +138,11 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
       typeof partial.deleteExtraVaultPlatforms === 'boolean'
         ? partial.deleteExtraVaultPlatforms
         : d.deleteExtraVaultPlatforms,
+    skipCruftAtDownload:
+      typeof partial.skipCruftAtDownload === 'boolean'
+        ? partial.skipCruftAtDownload
+        : d.skipCruftAtDownload,
+    cruftPatterns: partial.cruftPatterns ? sanitizePaths(partial.cruftPatterns) : d.cruftPatterns,
     downloadThreads:
       typeof partial.downloadThreads === 'number'
         ? clamp(partial.downloadThreads, MIN_THREADS, MAX_THREADS)

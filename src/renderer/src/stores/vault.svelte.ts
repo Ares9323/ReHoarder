@@ -68,6 +68,20 @@ export const vaultStore = {
   async rescan(): Promise<void> {
     await fetchOnce()
   },
+  /**
+   * Optimistically drop the entry at `absolutePath` from the in-memory list
+   * so the UI updates instantly after a destructive op, then kick off a
+   * background rescan to reconcile sizes / counts. Path comparison is
+   * case-insensitive on Windows-friendly normalised forward-slash form so
+   * the caller doesn't have to worry about backslashes.
+   */
+  removeEntryOptimistic(absolutePath: string): void {
+    const key = absolutePath.replace(/\\/g, '/').toLowerCase()
+    entries = entries.filter(
+      (e) => e.path.replace(/\\/g, '/').toLowerCase() !== key
+    )
+    void fetchOnce()
+  },
   /** Used after destructive ops (e.g. delete from vault) when we know the cache is stale. */
   invalidate(): void {
     loaded = false

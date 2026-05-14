@@ -32,6 +32,13 @@ export interface DownloadOptions {
    * containment unit.
    */
   noWrapDataDir?: boolean
+  /**
+   * Glob patterns (cruft-filter syntax) for files that must NOT be written
+   * to disk. Files matching any pattern are reported in the result with
+   * `skipped: true` but don't count toward `bytesTotal` / `filesTotal`, so
+   * progress reflects only files that will actually be assembled.
+   */
+  skipPatterns?: string[]
 }
 
 export interface DownloadProgress {

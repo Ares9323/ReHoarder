@@ -74,6 +74,8 @@ export interface AppSettings {
   exitOnLaunchUnreal: boolean
   compilePluginsOnInstall: boolean
   deleteExtraVaultPlatforms: boolean
+  skipCruftAtDownload: boolean
+  cruftPatterns: string[]
   downloadThreads: number
   maxConcurrentDownloads: number
   imageSize: ImageSize
@@ -116,6 +118,25 @@ export interface VaultDeleteResult {
   ok: boolean
   error?: string
   downloadRowsRemoved?: number
+}
+
+export interface VaultCruftMatch {
+  relPath: string
+  size: number
+}
+
+export interface VaultCruftScanResult {
+  ok: boolean
+  error?: string
+  matches?: VaultCruftMatch[]
+  totalBytes?: number
+}
+
+export interface VaultCruftCleanResult {
+  ok: boolean
+  error?: string
+  deletedFiles?: number
+  freedBytes?: number
 }
 
 export interface EngineInfo {
@@ -388,7 +409,11 @@ const api = {
     openInExplorer: (absolutePath: string): Promise<VaultOpenResult> =>
       ipcRenderer.invoke('vault:open-in-explorer', absolutePath),
     deleteEntry: (absolutePath: string): Promise<VaultDeleteResult> =>
-      ipcRenderer.invoke('vault:delete', absolutePath)
+      ipcRenderer.invoke('vault:delete', absolutePath),
+    scanCruft: (absolutePath: string): Promise<VaultCruftScanResult> =>
+      ipcRenderer.invoke('vault:scan-cruft', absolutePath),
+    cleanCruft: (absolutePath: string): Promise<VaultCruftCleanResult> =>
+      ipcRenderer.invoke('vault:clean-cruft', absolutePath)
   },
   engines: {
     list: (): Promise<EnginesListResult> => ipcRenderer.invoke('engines:list'),

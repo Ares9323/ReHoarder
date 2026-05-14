@@ -30,6 +30,32 @@
   let sortBy = $state<SortKey>('lastModified')
   let sortDir = $state<SortDir>('desc')
 
+  // Search uses a debounced "active" value so typing fast doesn't re-derive
+  // the filtered list on every keystroke. 250ms matches the Assets tab.
+  let searchInput = $state('')
+  let searchActive = $state('')
+  let searchTimer: ReturnType<typeof setTimeout> | null = null
+  function onSearchInput(v: string): void {
+    searchInput = v
+    if (searchTimer !== null) clearTimeout(searchTimer)
+    searchTimer = setTimeout(() => {
+      searchTimer = null
+      searchActive = v
+    }, 250)
+  }
+
+  function matchesSearch(e: LocalVaultEntry, q: string): boolean {
+    if (q === '') return true
+    const haystack = `${e.friendlyName ?? ''} ${e.name} ${e.path}`.toLowerCase()
+    return haystack.includes(q)
+  }
+
+  const filteredEntries = $derived.by(() => {
+    const q = searchActive.trim().toLowerCase()
+    if (q === '') return entries
+    return entries.filter((e) => matchesSearch(e, q))
+  })
+
   /**
    * Sort the entries by the active column, in the active direction. We
    * `[...entries].sort()` (no in-place mutation) so the derived doesn't
@@ -57,7 +83,7 @@
     })
     return list
   }
-  const sortedEntries = $derived(sortEntries(entries))
+  const sortedEntries = $derived(sortEntries(filteredEntries))
   const sortedEntriesByRoot = $derived.by(() => {
     const map = new Map<string, LocalVaultEntry[]>()
     for (const root of vaultDirs) map.set(root, [])
@@ -155,20 +181,90 @@
   }
   async function confirmDelete(): Promise<void> {
     if (!pendingDelete) return
+    const target = pendingDelete
     deleting = true
     deleteError = null
     try {
-      const r = await window.api.vault.deleteEntry(pendingDelete.path)
+      const r = await window.api.vault.deleteEntry(target.path)
       if (!r.ok) {
         deleteError = r.error ?? 'Delete failed'
         return
       }
+      // Optimistic UI: drop the row immediately so the user doesn't see the
+      // entry hanging around during the rescan, and so a second delete click
+      // can't accidentally land on the same (now-gone) entry.
+      vaultStore.removeEntryOptimistic(target.path)
       pendingDelete = null
-      await vaultStore.rescan()
     } catch (err) {
       deleteError = err instanceof Error ? err.message : String(err)
     } finally {
       deleting = false
+    }
+  }
+
+  /** Cruft-cleanup dialog state. Holds the target entry + the scan result we
+   *  display to the user before letting them confirm the actual deletion. */
+  interface CruftMatch {
+    relPath: string
+    size: number
+  }
+  let cruftTarget = $state<LocalVaultEntry | null>(null)
+  let cruftMatches = $state<CruftMatch[]>([])
+  let cruftTotalBytes = $state(0)
+  let cruftScanning = $state(false)
+  let cruftCleaning = $state(false)
+  let cruftError = $state<string | null>(null)
+
+  async function askCleanCruft(entry: LocalVaultEntry): Promise<void> {
+    cruftTarget = entry
+    cruftMatches = []
+    cruftTotalBytes = 0
+    cruftError = null
+    cruftScanning = true
+    try {
+      const r = await window.api.vault.scanCruft(entry.path)
+      if (!r.ok) {
+        cruftError = r.error ?? 'Scan failed'
+        return
+      }
+      cruftMatches = r.matches ?? []
+      cruftTotalBytes = r.totalBytes ?? 0
+    } catch (err) {
+      cruftError = err instanceof Error ? err.message : String(err)
+    } finally {
+      cruftScanning = false
+    }
+  }
+
+  function cancelCleanCruft(): void {
+    if (cruftCleaning) return
+    cruftTarget = null
+    cruftMatches = []
+    cruftTotalBytes = 0
+    cruftError = null
+  }
+
+  async function confirmCleanCruft(): Promise<void> {
+    if (!cruftTarget) return
+    cruftCleaning = true
+    cruftError = null
+    try {
+      const r = await window.api.vault.cleanCruft(cruftTarget.path)
+      if (!r.ok) {
+        cruftError = r.error ?? 'Clean failed'
+        return
+      }
+      cruftTarget = null
+      cruftMatches = []
+      cruftTotalBytes = 0
+      // Background rescan: the entry stays in the table but its file count /
+      // size need refreshing. Closing the dialog is the priority — the user
+      // shouldn't wait on the filesystem walk.
+      void vaultStore.rescan()
+    } catch (err) {
+      cruftError = err instanceof Error ? err.message : String(err)
+    } finally {
+      cruftCleaning = false
     }
   }
 
@@ -189,7 +285,17 @@
       </div>
     </div>
     <div class="stats">
-      <span>{entries.length} {entries.length === 1 ? 'asset' : 'assets'}</span>
+      <input
+        type="search"
+        class="vault-search"
+        placeholder="Search…"
+        value={searchInput}
+        oninput={(e) => onSearchInput((e.currentTarget as HTMLInputElement).value)}
+      />
+      <span>
+        {#if searchActive !== ''}{filteredEntries.length} / {/if}{entries.length}
+        {entries.length === 1 ? 'asset' : 'assets'}
+      </span>
       <span>·</span>
       <span>{totalFiles()} files</span>
       <span>·</span>
@@ -224,6 +330,61 @@
     {@render tableFor(sortedEntries)}
   {/if}
 </section>
+
+{#if cruftTarget}
+  {@const target = cruftTarget}
+  <div
+    class="confirm-backdrop"
+    role="presentation"
+    onclick={(e) => {
+      if ((e.target as HTMLElement).classList.contains('confirm-backdrop')) cancelCleanCruft()
+    }}
+  >
+    <div class="confirm-popup" role="dialog" aria-modal="true" aria-label="Clean cruft from asset">
+      <h3>Clean cruft from this asset?</h3>
+      <p>
+        Scanning <code>{target.path}</code> for files matching your current cruft
+        rules (defaults + extras + off-platform binaries when enabled).
+      </p>
+      {#if cruftScanning}
+        <div class="state">Scanning…</div>
+      {:else if cruftError}
+        <div class="confirm-error">{cruftError}</div>
+      {:else if cruftMatches.length === 0}
+        <p>Nothing matched the current cruft rules. This asset is already clean.</p>
+      {:else}
+        <p>
+          Found <strong>{cruftMatches.length}</strong> file{cruftMatches.length === 1 ? '' : 's'}
+          totalling <strong>{formatBytes(cruftTotalBytes)}</strong>. Empty parent
+          directories are removed afterwards.
+        </p>
+        <ul class="cruft-list">
+          {#each cruftMatches.slice(0, 30) as m (m.relPath)}
+            <li><code>{m.relPath}</code> <span class="cruft-size">{formatBytes(m.size)}</span></li>
+          {/each}
+          {#if cruftMatches.length > 30}
+            <li class="cruft-more">…and {cruftMatches.length - 30} more</li>
+          {/if}
+        </ul>
+      {/if}
+      <div class="confirm-actions">
+        <button type="button" class="ghost" onclick={cancelCleanCruft} disabled={cruftCleaning}>
+          {cruftMatches.length === 0 || cruftError ? 'Close' : 'Cancel'}
+        </button>
+        {#if cruftMatches.length > 0 && !cruftError}
+          <button
+            type="button"
+            class="danger-primary"
+            onclick={confirmCleanCruft}
+            disabled={cruftCleaning || cruftScanning}
+          >
+            {cruftCleaning ? 'Cleaning…' : `Delete ${cruftMatches.length} files`}
+          </button>
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
 
 {#if pendingDelete}
   {@const target = pendingDelete}
@@ -307,6 +468,15 @@
           <td class="date">{formatDate(e.lastModified)}</td>
           <td class="actions">
             <button type="button" onclick={() => reveal(e)}>Open</button>
+            <button
+              type="button"
+              class="icon-btn"
+              onclick={() => askCleanCruft(e)}
+              aria-label="Clean cruft from this asset"
+              title="Clean cruft (docs, vendor PDFs, off-platform binaries…)"
+            >
+              🧹
+            </button>
             <button
               type="button"
               class="danger icon-btn"
@@ -415,6 +585,23 @@
   .stats button:disabled {
     opacity: 0.5;
     cursor: progress;
+  }
+  .vault-search {
+    background: #1a1a1a;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #e0e0e0;
+    padding: 0.3rem 0.6rem;
+    font-family: inherit;
+    font-size: 0.8rem;
+    width: 220px;
+  }
+  .vault-search::placeholder {
+    color: #666;
+  }
+  .vault-search:focus {
+    outline: none;
+    border-color: #c084fc;
   }
   .state {
     background: #242424;
@@ -592,6 +779,41 @@
   }
   .confirm-actions .danger-primary:hover:not(:disabled) {
     filter: brightness(1.08);
+  }
+  .cruft-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 0.8rem 0;
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    background: #161616;
+  }
+  .cruft-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.6rem;
+    padding: 0.25rem 0.55rem;
+    font-size: 0.8rem;
+    border-bottom: 1px solid #222;
+  }
+  .cruft-list li:last-child {
+    border-bottom: none;
+  }
+  .cruft-list code {
+    color: #c0c0c0;
+    overflow-wrap: anywhere;
+  }
+  .cruft-size {
+    color: #888;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+  .cruft-more {
+    color: #888;
+    font-style: italic;
+    justify-content: center;
   }
   .confirm-actions button:disabled {
     opacity: 0.5;

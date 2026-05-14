@@ -132,6 +132,8 @@ export interface AppSettings {
   exitOnLaunchUnreal: boolean
   compilePluginsOnInstall: boolean
   deleteExtraVaultPlatforms: boolean
+  skipCruftAtDownload: boolean
+  cruftPatterns: string[]
   downloadThreads: number
   maxConcurrentDownloads: number
   imageSize: ImageSize
@@ -180,10 +182,31 @@ export interface VaultDeleteResult {
   downloadRowsRemoved?: number
 }
 
+export interface VaultCruftMatch {
+  relPath: string
+  size: number
+}
+
+export interface VaultCruftScanResult {
+  ok: boolean
+  error?: string
+  matches?: VaultCruftMatch[]
+  totalBytes?: number
+}
+
+export interface VaultCruftCleanResult {
+  ok: boolean
+  error?: string
+  deletedFiles?: number
+  freedBytes?: number
+}
+
 export interface VaultApi {
   list(): Promise<VaultListResult>
   openInExplorer(absolutePath: string): Promise<VaultOpenResult>
   deleteEntry(absolutePath: string): Promise<VaultDeleteResult>
+  scanCruft(absolutePath: string): Promise<VaultCruftScanResult>
+  cleanCruft(absolutePath: string): Promise<VaultCruftCleanResult>
 }
 
 export interface EngineInfo {
