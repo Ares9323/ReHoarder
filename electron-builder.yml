@@ -2,6 +2,13 @@ appId: studio.rehoarder.app
 productName: ReHoarder
 copyright: Copyright (c) 2026 Ares9323
 
+# Override the package.json `description` for the bundled app: electron-builder
+# feeds the in-bundle description into the Win32 `FileDescription` resource via
+# rcedit, and Windows Task Manager renders that as the per-process name. Without
+# this the long marketing string from package.json ends up on the row label.
+extraMetadata:
+  description: ReHoarder
+
 directories:
   buildResources: resources
   output: release/${version}

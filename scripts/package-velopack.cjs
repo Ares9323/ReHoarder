@@ -16,7 +16,12 @@ const { execSync, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 
-const PACK_ID = 'studio.rehoarder.app'
+// Velopack uses `packId` as both the app identifier *and* the filename prefix
+// for the generated artefacts (Setup.exe, nupkg, Portable.zip). Keep it as the
+// user-facing product name so the installer downloaded from GitHub is called
+// `ReHoarder-win-Setup.exe`, not the reverse-domain `studio.rehoarder.app-…`.
+// The Windows AppUserModelId stays `studio.rehoarder.app` via electron-builder.
+const PACK_ID = 'ReHoarder'
 const PACK_TITLE = 'ReHoarder'
 const PACK_AUTHORS = 'Ares9323'
 const MAIN_EXE = 'ReHoarder.exe'
@@ -49,7 +54,7 @@ function run(cmd, args) {
   }
 }
 
-function main() {
+async function main() {
   if (process.platform !== 'win32') {
     console.error('[velopack] Windows-only for now; Linux/macOS targets land later.')
     process.exit(1)
@@ -66,10 +71,44 @@ function main() {
   run('npx', ['electron-vite', 'build'])
   run('npx', ['electron-builder', '--win', '--dir'])
 
-  const unpackedDir = path.resolve('release', 'win-unpacked')
+  // electron-builder.yml's `directories.output: release/${version}` puts the
+  // unpacked tree at release/<version>/win-unpacked, not release/win-unpacked.
+  const unpackedDir = path.resolve('release', version, 'win-unpacked')
   if (!fs.existsSync(unpackedDir)) {
     console.error(`[velopack] expected ${unpackedDir} from electron-builder --dir; not found.`)
     process.exit(1)
+  }
+
+  // Belt-and-suspenders: electron-builder's Version Info population from
+  // package.json `description` has been unreliable for us — Windows Task
+  // Manager kept showing the long marketing string. Force-set FileDescription
+  // + ProductName via rcedit so the per-process label is just "ReHoarder",
+  // regardless of how electron-builder mapped the metadata.
+  const rcedit = require('rcedit')
+  const exePath = path.join(unpackedDir, MAIN_EXE)
+  try {
+    await rcedit(exePath, {
+      'product-name': PACK_TITLE,
+      'product-version': version,
+      'file-description': PACK_TITLE,
+      'company-name': PACK_AUTHORS
+    })
+    console.log(`[velopack] rebranded ${exePath} → FileDescription="${PACK_TITLE}"`)
+  } catch (err) {
+    console.warn(`[velopack] rcedit FileDescription patch failed: ${err && err.message ? err.message : err}`)
+  }
+
+  // Extract release notes for this version from CHANGELOG.md (writes
+  // ./release-notes.md). Non-fatal if missing: vpk will just produce a
+  // .nupkg without embedded notes.
+  let releaseNotesPath = null
+  const notesProbe = spawnSync(process.execPath, ['scripts/extract-release-notes.cjs'], {
+    stdio: 'inherit'
+  })
+  if (notesProbe.status === 0 && fs.existsSync('release-notes.md')) {
+    releaseNotesPath = path.resolve('release-notes.md')
+  } else {
+    console.warn('[velopack] no CHANGELOG entry for this version — packing without release notes.')
   }
 
   // Stage 2: vpk pack on the unpacked app.
@@ -85,9 +124,15 @@ function main() {
   if (fs.existsSync(ICON)) {
     vpkArgs.push('--icon', ICON)
   }
+  if (releaseNotesPath) {
+    vpkArgs.push('--releaseNotes', releaseNotesPath)
+  }
   run('vpk', vpkArgs)
 
   console.log(`\n[velopack] Done. Artefacts in ./Releases/`)
 }
 
-main()
+main().catch((err) => {
+  console.error('[velopack] unhandled error:', err)
+  process.exit(1)
+})

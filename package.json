@@ -1,7 +1,7 @@
 {
   "name": "rehoarder",
-  "version": "0.1.0-dev",
-  "description": "Open-source desktop manager for your Unreal Engine asset library (Fab, Epic Vault, legacy Marketplace).",
+  "version": "0.1.0",
+  "description": "ReHoarder",
   "main": "./out/main/index.js",
   "author": "Ares9323",
   "license": "MIT",

@@ -11,12 +11,16 @@ build/
 
 # Electron packaging
 release/
+Releases/
 *.exe
 *.dmg
 *.AppImage
 *.deb
 *.snap
 *.flatpak
+
+# Velopack release notes (generated from CHANGELOG.md by scripts/extract-release-notes.cjs)
+release-notes.md
 
 # Local caches and user data
 .cache/
