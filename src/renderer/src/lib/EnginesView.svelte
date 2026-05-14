@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { settingsVersion } from '../stores/settings-events.svelte'
   import { enginesStore } from '../stores/engines.svelte'
+  import EnginePluginsPanel from './EnginePluginsPanel.svelte'
 
   interface EngineInfo {
     name: string
@@ -19,6 +20,12 @@
   const loading = $derived(enginesStore.loading)
   const error = $derived(enginesStore.error)
 
+  /** The engine currently selected for the plugin panel below. Null until
+   *  the user clicks a row or picks "Toggle plugins…" from the menu. */
+  let focusedEngine = $state<EngineInfo | null>(null)
+  /** Right-click menu position + target. Null = closed. */
+  let contextMenu = $state<{ x: number; y: number; engine: EngineInfo } | null>(null)
+
   onMount(() => {
     void enginesStore.ensureLoaded()
   })
@@ -33,16 +40,61 @@
     void enginesStore.rescan()
   })
 
-  async function reveal(engine: EngineInfo): Promise<void> {
+  async function openInExplorer(engine: EngineInfo): Promise<void> {
     await window.api.engines.openInExplorer(engine.path)
   }
 
-  async function revealPlugins(engine: EngineInfo): Promise<void> {
-    // path.resolve() in the main process normalises separators, so a forward
-    // slash works on every platform — the guard checks startsWith on the
-    // resolved engine roots, which still passes for this subpath.
+  async function openPluginFolder(engine: EngineInfo): Promise<void> {
     await window.api.engines.openInExplorer(engine.path + '/Engine/Plugins/Marketplace')
   }
+
+  function focusEngine(engine: EngineInfo): void {
+    focusedEngine = engine
+  }
+
+  function openContextMenu(e: MouseEvent, engine: EngineInfo): void {
+    e.preventDefault()
+    contextMenu = { x: e.clientX, y: e.clientY, engine }
+  }
+
+  function closeContextMenu(): void {
+    contextMenu = null
+  }
+
+  function ctxOpen(): void {
+    if (!contextMenu) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    void openInExplorer(eng)
+  }
+
+  function ctxOpenPluginFolder(): void {
+    if (!contextMenu) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    void openPluginFolder(eng)
+  }
+
+  function ctxTogglePlugins(): void {
+    if (!contextMenu) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    focusEngine(eng)
+  }
+
+  $effect(() => {
+    if (!contextMenu) return
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (e.key === 'Escape') closeContextMenu()
+    }
+    const onMouseDown = (): void => closeContextMenu()
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('mousedown', onMouseDown)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onMouseDown)
+    }
+  })
 
   /**
    * Turn Epic's perforce-style branch name (`++UE5+Release-5.5`) into something
@@ -102,12 +154,18 @@
           <th class="branch">Branch</th>
           <th class="num">Changelist</th>
           <th class="editor">Editor</th>
-          <th class="actions"></th>
         </tr>
       </thead>
       <tbody>
         {#each engines as e (e.path)}
-          <tr class:no-editor={!e.hasEditor}>
+          <tr
+            class="row"
+            class:no-editor={!e.hasEditor}
+            class:focused={focusedEngine?.path === e.path}
+            onclick={() => focusEngine(e)}
+            oncontextmenu={(ev) => openContextMenu(ev, e)}
+            title="Click to manage plugins · right-click for more"
+          >
             <td class="name">
               <span class="engine-name">{e.name}</span>
               <span class="path-hint">{e.path}</span>
@@ -122,16 +180,38 @@
                 <span class="bad-pill">missing</span>
               {/if}
             </td>
-            <td class="actions">
-              <button type="button" onclick={() => reveal(e)}>Open</button>
-              <button type="button" onclick={() => revealPlugins(e)}>Plugins</button>
-            </td>
           </tr>
         {/each}
       </tbody>
     </table>
   {/if}
+
+  {#if focusedEngine}
+    {@const f = focusedEngine}
+    <EnginePluginsPanel engine={f} onClose={() => (focusedEngine = null)} />
+  {/if}
 </section>
+
+{#if contextMenu}
+  {@const cm = contextMenu}
+  <div
+    class="ctx-menu"
+    role="menu"
+    style:left="{cm.x}px"
+    style:top="{cm.y}px"
+    onmousedown={(e) => e.stopPropagation()}
+  >
+    <button type="button" role="menuitem" onclick={ctxOpen}>
+      Open in Explorer
+    </button>
+    <button type="button" role="menuitem" onclick={ctxOpenPluginFolder}>
+      Open plugin folder
+    </button>
+    <button type="button" role="menuitem" onclick={ctxTogglePlugins}>
+      Toggle plugins enabled by default
+    </button>
+  </div>
+{/if}
 
 <style>
   section {
@@ -245,6 +325,50 @@
   }
   tr.no-editor td {
     opacity: 0.65;
+  }
+  /* Make the row affordance for click + right-click discoverable.
+     Hover gives a subtle highlight; the focused engine gets a stronger one
+     plus an accent strip on the left so the user knows which engine the
+     plugin panel below is targeting. */
+  tr.row {
+    cursor: context-menu;
+    transition: background-color 0.08s ease;
+  }
+  tr.row:hover td {
+    background: #2d2d2d;
+  }
+  tr.row.focused td {
+    background: #2a213a;
+  }
+  tr.row.focused td:first-child {
+    box-shadow: inset 3px 0 0 0 #c084fc;
+  }
+  .ctx-menu {
+    position: fixed;
+    z-index: 400;
+    min-width: 240px;
+    background: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    padding: 0.25rem;
+    display: flex;
+    flex-direction: column;
+  }
+  .ctx-menu button {
+    background: transparent;
+    color: #d0d0d0;
+    border: none;
+    padding: 0.45rem 0.7rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .ctx-menu button:hover {
+    background: #2a2a2a;
+    color: #fff;
   }
   .num {
     color: #b0b0b0;

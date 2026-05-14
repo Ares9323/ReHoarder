@@ -250,9 +250,44 @@ export interface EnginesOpenResult {
   error?: string
 }
 
+export interface EnginePluginRich {
+  name: string
+  friendlyName: string
+  description: string
+  category: string
+  versionName: string
+  upluginPath: string
+  relativePath: string
+  bucket: string
+  iconUrl: string | null
+  enabledByDefault: boolean
+  installed: boolean
+}
+
+export interface EnginePluginsListResult {
+  ok: boolean
+  error?: string
+  plugins?: EnginePluginRich[]
+}
+
+export interface SetPluginStateRequest {
+  upluginPath: string
+  enabledByDefault?: boolean
+  installed?: boolean
+}
+
+export interface SetPluginStateResult {
+  ok: boolean
+  error?: string
+  enabledByDefault?: boolean
+  installed?: boolean
+}
+
 export interface EnginesApi {
   list(): Promise<EnginesListResult>
   openInExplorer(absolutePath: string): Promise<EnginesOpenResult>
+  listPlugins(engineRoot: string): Promise<EnginePluginsListResult>
+  setPluginState(req: SetPluginStateRequest): Promise<SetPluginStateResult>
 }
 
 export interface ProjectInfo {

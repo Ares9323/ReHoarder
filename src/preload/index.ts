@@ -179,6 +179,39 @@ export interface EnginesOpenResult {
   error?: string
 }
 
+export interface EnginePluginRich {
+  name: string
+  friendlyName: string
+  description: string
+  category: string
+  versionName: string
+  upluginPath: string
+  relativePath: string
+  bucket: string
+  iconUrl: string | null
+  enabledByDefault: boolean
+  installed: boolean
+}
+
+export interface EnginePluginsListResult {
+  ok: boolean
+  error?: string
+  plugins?: EnginePluginRich[]
+}
+
+export interface SetPluginStateRequest {
+  upluginPath: string
+  enabledByDefault?: boolean
+  installed?: boolean
+}
+
+export interface SetPluginStateResult {
+  ok: boolean
+  error?: string
+  enabledByDefault?: boolean
+  installed?: boolean
+}
+
 export interface ProjectInfo {
   name: string
   uprojectPath: string
@@ -456,7 +489,11 @@ const api = {
   engines: {
     list: (): Promise<EnginesListResult> => ipcRenderer.invoke('engines:list'),
     openInExplorer: (absolutePath: string): Promise<EnginesOpenResult> =>
-      ipcRenderer.invoke('engines:open-in-explorer', absolutePath)
+      ipcRenderer.invoke('engines:open-in-explorer', absolutePath),
+    listPlugins: (engineRoot: string): Promise<EnginePluginsListResult> =>
+      ipcRenderer.invoke('engines:list-plugins', engineRoot),
+    setPluginState: (req: SetPluginStateRequest): Promise<SetPluginStateResult> =>
+      ipcRenderer.invoke('engines:set-plugin-state', req)
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),
