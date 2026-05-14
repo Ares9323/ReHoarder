@@ -90,15 +90,18 @@ export function registerProjectsIpc(
       const cfg = settings.load()
       const projects = await scanProjects(cfg.projectPaths)
       // Splice in the thumbnail URL for ReHoarder-created projects: the
-      // `.rehoarder.json` marker traced them back to (source, sourceId), now
-      // we look up `assets.image_url` for that pair.
+      // `.rehoarder.json` marker traced them back to (source, sourceId), so
+      // we replace the local auto-screenshot with the Fab thumbnail when one
+      // is available. If the asset row has no image_url we keep whatever the
+      // scanner already found (the local AutoScreenshot.png), so the row
+      // never *loses* a usable thumbnail by being linked to an asset.
       for (const p of projects) {
         if (!p.rehoarderSource || !p.rehoarderSourceId) continue
         const asset = assetsRepo.findById(
           p.rehoarderSource as AssetSource,
           p.rehoarderSourceId
         )
-        p.imageUrl = asset?.imageUrl ?? null
+        if (asset?.imageUrl) p.imageUrl = asset.imageUrl
       }
       return { ok: true, scannedPaths: cfg.projectPaths, projects }
     } catch (err) {

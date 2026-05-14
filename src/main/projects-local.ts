@@ -135,6 +135,7 @@ async function readProjectInfo(
   const nameNoExt = base.replace(/\.uproject$/i, '')
   const hasCode = Array.isArray(d.Modules) && d.Modules.length > 0
   const marker = await readRehoarderMarker(projectDir)
+  const autoScreenshot = await findProjectAutoScreenshot(projectDir)
   return {
     name: nameNoExt,
     uprojectPath,
@@ -147,9 +148,52 @@ async function readProjectInfo(
     lastModified: stat.mtimeMs,
     rehoarderSource: marker?.source ?? null,
     rehoarderSourceId: marker?.sourceId ?? null,
-    // Resolved (or left null) by the IPC layer with access to the assets repo.
-    imageUrl: null
+    // Start with the local Unreal auto-screenshot when present (this is what
+    // AMS shows). The IPC layer may later replace it with the Fab thumbnail
+    // when a `.rehoarder.json` marker links the project to its source asset.
+    imageUrl: autoScreenshot
   }
+}
+
+/**
+ * Look for an Unreal-generated thumbnail inside the project's `Saved/` tree.
+ * UE writes `Saved/AutoScreenshot.png` on certain editor operations; some
+ * versions place it under `Saved/Thumbnails/` instead. Returns a `rh-file://`
+ * URL the renderer can drop straight into an `<img>` tag, or `null` if no
+ * candidate file is found.
+ */
+async function findProjectAutoScreenshot(projectDir: string): Promise<string | null> {
+  const candidates = [
+    path.join(projectDir, 'Saved', 'AutoScreenshot.png'),
+    path.join(projectDir, 'Saved', 'Thumbnails', 'AutoScreenshot.png')
+  ]
+  for (const candidate of candidates) {
+    try {
+      await fsp.access(candidate)
+      return toRhFileUrl(candidate)
+    } catch {
+      // not present
+    }
+  }
+  return null
+}
+
+/**
+ * Convert an absolute filesystem path into a `rh-file://` URL the renderer
+ * can drop into an `<img>` tag.
+ *
+ * The scheme is registered as `standard`, so Chromium's WHATWG URL parser
+ * treats `rh-file://<authority>/<path>` like an http URL — the segment
+ * between `//` and the next `/` is the host. If we put the drive letter
+ * there (`rh-file:///O:/path`), Chromium parses host=`O`, lowercases it to
+ * `o`, and strips the drive from the path. We dodge that entirely by using
+ * a fixed host (`local`) so the drive letter always lives in the pathname,
+ * where `:` is just a literal character.
+ */
+export function toRhFileUrl(absolutePath: string): string {
+  const urlPath = absolutePath.replace(/\\/g, '/')
+  const withLeadingSlash = urlPath.startsWith('/') ? urlPath : '/' + urlPath
+  return 'rh-file://local' + encodeURI(withLeadingSlash)
 }
 
 /**

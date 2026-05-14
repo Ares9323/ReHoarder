@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { projectsStore } from '../stores/projects.svelte'
 
   interface Props {
     assetTitle: string
@@ -104,6 +105,10 @@
           // swallow: not blocking the success flow
         })
       }
+      // The Projects-tab cache hasn't seen the new folder yet (and even an
+      // already-listed folder gains a .rehoarder.json marker that resolves to
+      // a thumbnail), so force a rescan now.
+      void projectsStore.rescan()
       onCreated?.(done)
       window.setTimeout(onClose, 1100)
     } catch (err) {

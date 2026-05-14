@@ -116,9 +116,32 @@
   )
   const projectPaths = $derived(projectsStore.scannedPaths)
 
+  // Settings → Image size drives the asset grid density. Lazy-loaded once on
+  // mount, refreshed when Settings save fires.
+  let imageSize = $state<'small' | 'medium' | 'large'>('small')
+  async function loadAssetSettings(): Promise<void> {
+    try {
+      const s = await window.api.settings.get()
+      imageSize = s.imageSize
+    } catch {
+      // best-effort: stay on the default
+    }
+  }
+
   onMount(() => {
     void enginesStore.ensureLoaded()
     void projectsStore.ensureLoaded()
+    void loadAssetSettings()
+  })
+
+  let firstAssetSettingsTick = true
+  $effect(() => {
+    settingsVersion()
+    if (firstAssetSettingsTick) {
+      firstAssetSettingsTick = false
+      return
+    }
+    void loadAssetSettings()
   })
 
   // The "Only Downloaded" Source filter cross-references vault folder names
@@ -460,7 +483,7 @@
   </div>
 </div>
 
-<div class="grid">
+<div class="grid grid-{imageSize}">
   {#each assets as a (a.source + ':' + a.sourceId)}
     {@const versions = engineVersionsFor(a)}
     {@const plugin = isPlugin(a)}
@@ -612,9 +635,24 @@
 
   .grid {
     display: grid;
+    /* `minmax` is set by the size modifier below; the default falls back to
+       the medium preset so the layout doesn't collapse if imageSize hasn't
+       been read from Settings yet on first paint. */
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
     gap: 1rem;
     padding: 1.25rem 1.25rem 6rem;
+  }
+  .grid.grid-small {
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.75rem;
+  }
+  .grid.grid-medium {
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1rem;
+  }
+  .grid.grid-large {
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 1.25rem;
   }
 
   .empty-note {

@@ -106,6 +106,21 @@
   }
 
   onMount(load)
+
+  // Ctrl+S / Cmd+S — common reflex for "save" forms. Only fires while the
+  // panel is mounted (effect cleanup removes the listener on unmount). We
+  // call `preventDefault` so the browser's own Save dialog doesn't pop up.
+  $effect(() => {
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      const isSave = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's'
+      if (!isSave) return
+      e.preventDefault()
+      if (!dirty || saving || loading) return
+      void save()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 </script>
 
 <section>

@@ -27,24 +27,36 @@ It connects to your Epic Games account, indexes everything you've ever acquired 
 ### What works today
 
 - ✅ **Epic OAuth login** — `authorization_code` flow with refresh token, same scheme used by Legendary/Heroic.
-- ✅ **Vault sync** — `/launcher/api/public/assets/Windows?label=Live` + parallel bulk catalog fetch (6 concurrent batches).
+- ✅ **Vault sync** — `/launcher/api/public/assets/Windows?label=Live` + parallel bulk catalog fetch (6 concurrent batches). Listing in the UI is hidden by default until Epic re-opens the download scope (`launcher:download:Live-Windows:<appName>`), which was removed for third-party clients in 2026.
 - ✅ **Fab UE library sync** — `/e/accounts/{id}/ue/library`, paginated, incremental (early-stop on already-known IDs → seconds for repeat syncs).
 - ✅ **Fab Other library sync** — `/i/library/search?source=acquired&asset_formats=…` for non-UE assets (Blender, Maya, FBX, MetaHuman, Unity, etc.).
 - ✅ **Cloudflare-aware Fab handshake** — explicit 5-step OAuth dance over Fab + Epic, with `useSessionCookies: true` for Chromium-native cookie management.
-- ✅ **SQLite catalog** — assets, tags, sync_state. Hide flag (UI toggle only; download skip pending the downloader).
-- ✅ **Search + source filter** in the asset grid.
+- ✅ **Multi-source dedup** — assets that appear under both Epic Vault and Fab are reconciled via `legacyItemId` so the library shows a single card per asset.
 - ✅ **Epic Chunked Manifest parser** (v0a) — full binary parser for Epic's `0x44BEC00C` format. Pure TypeScript, no new deps. 35 unit tests.
 - ✅ **Fab manifest client** (v0b) — POST `/e/artifacts/{artifactId}/manifest`, CDN blob download with SHA1 verify across distribution points, hands off to the parser. 17 unit tests.
-- ✅ **Chunk download + file assembly** (v0c) — fetch each `.chunk` from the CDN, verify Poly64 + SHA1, decompress (zlib), assemble files atomically on disk with file-level SHA1 verification. Persistent chunk cache + in-flight URL dedup. 29 unit tests. Real downloads work end-to-end via the debug IPC; the per-asset "Download" button in the UI lands in v0d.
+- ✅ **Chunk download + file assembly** (v0c) — fetch each `.chunk` from the CDN, verify Poly64 + SHA1, decompress (zlib), assemble files atomically on disk with file-level SHA1 verification. Persistent chunk cache + in-flight URL dedup. 29 unit tests.
+- ✅ **Downloads tab** (v0d) — per-asset Download button, persistent queue, live progress bars, per-version chip state in the asset grid (idle / queued / busy / error / downloaded / updatable).
+- ✅ **Assets browser** — search, source filter, listing-type filter, category filter, "only downloaded" / "only updatable" / "only bookmarked" toggles. Bookmarks + per-card context menu (open on Fab, copy id, hide, …). Image-size picker.
+- ✅ **Vault tab** — list of locally cached assets with friendly names, size, last-modified, sortable headers, optional thumbnails, delete-with-confirm (cascades to clear the chip on the Assets tab).
+- ✅ **Projects tab** — recursive scan of configured project roots for `*.uproject`, descriptor metadata (engine association, description, category, code-vs-blueprint), Saved/AutoScreenshot thumbnail (with Fab thumbnail fallback for ReHoarder-created projects), open in Explorer, Launch editor (via `UnrealVersionSelector`), Run game with custom CLI params.
+- ✅ **Create project / Add to project** — copy a Fab project template into a new folder under a configured root, or merge an asset pack's `Content/` into an existing project (with skip/overwrite conflict mode). Stamps a `.rehoarder.json` marker so the project is traceable back to its source asset.
+- ✅ **Install from vault** — if the artifact is already in a vault path, plugin install into engine/project copies straight from disk without re-downloading. Path-prefix stripping handles the `Engine/Plugins/Marketplace/` indirection cleanly.
+- ✅ **Custom install menu** — modal with searchbar, three-tier compatibility (requested-version exact match / older-version dimmed / incompatible hidden), "show N older projects" toggle, and engine-version disambiguation.
+- ✅ **Engines tab** — scan for `UE_*/Engine/Build/Build.version`, expose Editor / Run / shell-open per row, branch-name cleanup (`++UE5+Release-5.5` → `UE5 Release 5.5`).
+- ✅ **uproject editor** — JSON editor panel with atomic write + `.uproject.bak` backup; reads & writes `EngineAssociation`, `Description`, `Category`, `Modules`, `Plugins`, `AdditionalDependencies` etc.
+- ✅ **Settings panel** — project / engine / vault paths, image size, downloads pane (threads, compile plugins on install, skip non-current-platform binaries), per-tab "separate by path" and "show thumbnails" toggles, `Ctrl+S` save shortcut.
+- ✅ **Custom `rh-file://` protocol** — restricted local-file scheme for showing on-disk thumbnails (project auto-screenshots, engine icons) without weakening the renderer CSP. Allow-list of roots = configured project / engine / vault paths.
+- ✅ **Singleton renderer stores** — Vault, Projects, Engines and Downloads each live in a single Svelte store at module scope, so tab switches are free (no rescan unless the user asks for one).
+- ✅ **SQLite catalog** — assets, tags, sync_state, downloads, bookmarks. Schema migrations via `PRAGMA user_version` for one-shot fixes (category re-tagging, listing-type backfill, …).
 
 ### What's next
 
-- 🚧 **Download UI** (v0d) — "Download" button per asset + Downloads tab with progress per item. The orchestrator is ready; just needs the wiring.
-- 📋 **Plugin install + UBT compile** (v0d-e) — copy plugin into engine, optionally `RunUAT BuildPlugin`.
-- 📋 **Auto-update detection** — flag assets when `modifiedDate` changes server-side.
-- 📋 **Selective engine components** — per-component checkboxes (Source / Android / iOS / etc.) at download time.
-- 📋 **Multi-source dedup** — same asset can appear in both the Epic Vault and Fab; ReHoarder will link them via the `legacyItemId` Fab exposes and show a single unified card.
-- 📋 See project boards for the full roadmap.
+- 📋 **Concurrent downloads** — `downloadThreads` is wired through Settings but the worker pool currently runs serially.
+- 📋 **Engine downloads** — fetch UE binaries from the Epic launcher manifest with a components picker (Core / Templates / Source / MetaHuman / Editor Symbols / Target Platforms).
+- 📋 **Source-build engines** — detect installs registered under `HKCU\Software\Epic Games\Unreal Engine\Builds\<GUID>` so the Projects tab can resolve `EngineAssociation = "{GUID}"`.
+- 📋 **Auto-claim Fab freebies** — never miss a monthly free drop again.
+- 📋 **Auto-update detection** — flag assets when `modifiedDate` changes server-side (the data is already in the catalog).
+- 📋 **Linux/macOS pass** — the download pipeline is platform-agnostic but plugin-compile and engine-launch flows still assume Windows path conventions in spots.
 
 ## Why another asset manager?
 
@@ -110,15 +122,28 @@ src/
 ├── main/        Node-side process: window, DB, IPC handlers
 │   ├── auth/        OAuth + Epic web session
 │   ├── cloudflare/  cf_clearance warmup
-│   ├── db/          SQLite schema + repos
-│   ├── download/    Manifest parser (v0a), manifest client (v0b)
+│   ├── db/          SQLite schema + repos (assets, downloads, kv)
+│   ├── download/    Manifest parser (v0a), manifest client (v0b), chunk download + assembly (v0c)
 │   ├── fab/         Fab session handshake + library client
 │   ├── http/        cookie jar, electron-fetch adapter, user-agents
-│   ├── sync/        Orchestrator + normalize
-│   └── vault/       Epic Launcher Vault client
+│   ├── sync/        Orchestrator + normalize (Fab UE + Other, Vault, dedup)
+│   ├── vault/       Epic Launcher Vault client
+│   ├── engines-*    Engine scan + IPC
+│   ├── projects-*   Project scan, descriptor read/write, create/add-to, install-from-vault
+│   ├── downloads-*  Persistent download queue, broadcasts, IPC
+│   └── settings*    User settings (paths, toggles) via SQLite KV
 ├── preload/     Bridge: exposes safe APIs to renderer via contextBridge
 └── renderer/    Svelte 5 UI (sandboxed Chromium)
+    ├── lib/         Components: AssetCard, CustomInstallMenu, CreateProjectDialog, UProjectEditorPanel, ...
+    ├── stores/      Singleton runes stores (vault, projects, engines, downloads, settings-events)
+    └── views/       Top-level tab views (Assets, Vault, Projects, Engines, Downloads, Settings)
 ```
+
+### Dev exe rebrand (Windows)
+
+By default `npm run dev` launches Electron's bundled `electron.exe`, so Windows' Task Manager shows the helper processes as "Electron". The `predev` hook runs `scripts/brand-dev-electron.cjs`, which uses [`rcedit`](https://www.npmjs.com/package/rcedit) to rewrite the Win32 version-info on the local `node_modules/electron/dist/electron.exe` so it shows up as "ReHoarder" instead. The script is idempotent (stamps a `.rehoarder-branded` marker next to the exe) and re-runs automatically whenever `npm install` replaces the binary. It's a no-op on Linux/macOS; on Windows you only need to make sure `npm install` has been run after the `rcedit` devDep was added.
+
+For packaged builds (`npm run build:win` / `:linux` / `:mac`) the rebrand is unnecessary — `electron-builder.yml`'s `productName: ReHoarder` already names the distributed binary correctly.
 
 ### Debug commands (DevTools console)
 

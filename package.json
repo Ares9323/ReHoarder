@@ -11,7 +11,7 @@
     "url": "https://github.com/Ares9323/ReHoarder.git"
   },
   "scripts": {
-    "predev": "electron-builder install-app-deps",
+    "predev": "electron-builder install-app-deps && node scripts/brand-dev-electron.cjs",
     "dev": "electron-vite dev",
     "prebuild": "electron-builder install-app-deps",
     "build": "electron-vite build",
@@ -49,6 +49,7 @@
     "eslint-plugin-svelte": "^2.46.1",
     "prettier": "^3.4.2",
     "prettier-plugin-svelte": "^3.3.2",
+    "rcedit": "^4.0.1",
     "svelte": "^5.16.0",
     "svelte-check": "^4.1.1",
     "typescript": "^5.7.2",
