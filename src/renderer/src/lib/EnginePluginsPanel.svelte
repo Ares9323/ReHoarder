@@ -77,6 +77,129 @@
     error: string | null
   }>({ path: null, source: null, entries: [], error: null })
 
+  /** O(1) lookup of plugins currently in the preset, keyed by lowercase name. */
+  const presetNames = $derived.by(() => {
+    const s = new Set<string>()
+    for (const e of preset.entries) s.add(e.name.toLowerCase())
+    return s
+  })
+
+  /** Right-click context menu on a plugin row. Tracks which plugin was the
+   *  click target so the menu items can act on it after the user moves the
+   *  cursor onto the menu itself. */
+  let pluginContextMenu = $state<{ x: number; y: number; plugin: EnginePluginRich } | null>(null)
+  let uninstallTarget = $state<EnginePluginRich | null>(null)
+  let uninstalling = $state(false)
+  let statusToast = $state<string | null>(null)
+  let statusToastTimer: ReturnType<typeof setTimeout> | null = null
+
+  function flashStatus(msg: string): void {
+    statusToast = msg
+    if (statusToastTimer !== null) clearTimeout(statusToastTimer)
+    statusToastTimer = setTimeout(() => {
+      statusToast = null
+      statusToastTimer = null
+    }, 3000)
+  }
+
+  function openPluginContextMenu(e: MouseEvent, p: EnginePluginRich): void {
+    e.preventDefault()
+    pluginContextMenu = { x: e.clientX, y: e.clientY, plugin: p }
+  }
+  function closePluginContextMenu(): void {
+    pluginContextMenu = null
+  }
+  $effect(() => {
+    if (!pluginContextMenu) return
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (e.key === 'Escape') closePluginContextMenu()
+    }
+    const onMouseDown = (): void => closePluginContextMenu()
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('mousedown', onMouseDown)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('mousedown', onMouseDown)
+    }
+  })
+
+  async function ctxAddToConfig(): Promise<void> {
+    if (!pluginContextMenu) return
+    const p = pluginContextMenu.plugin
+    closePluginContextMenu()
+    const r = await window.api.engines.presetAddPlugin(engine.path, {
+      name: p.name,
+      enabledByDefault: p.enabledByDefault,
+      installed: p.installed
+    })
+    if (!r.ok) {
+      error = r.error ?? 'Preset write failed'
+      return
+    }
+    flashStatus(`Added "${p.friendlyName}" to preset (${r.source})`)
+    // Refresh preset entries so "Remove from config" toggles visibility.
+    const presetRes = await window.api.engines.getPreset(engine.path)
+    if (presetRes.ok) {
+      preset = {
+        path: presetRes.path ?? null,
+        source: presetRes.source ?? null,
+        entries: presetRes.entries ?? [],
+        error: null
+      }
+    }
+  }
+
+  async function ctxRemoveFromConfig(): Promise<void> {
+    if (!pluginContextMenu) return
+    const p = pluginContextMenu.plugin
+    closePluginContextMenu()
+    const r = await window.api.engines.presetRemovePlugin(engine.path, p.name)
+    if (!r.ok) {
+      error = r.error ?? 'Preset write failed'
+      return
+    }
+    flashStatus(
+      r.removed ? `Removed "${p.friendlyName}" from preset` : `"${p.friendlyName}" wasn't in the preset`
+    )
+    const presetRes = await window.api.engines.getPreset(engine.path)
+    if (presetRes.ok) {
+      preset = {
+        path: presetRes.path ?? null,
+        source: presetRes.source ?? null,
+        entries: presetRes.entries ?? [],
+        error: null
+      }
+    }
+  }
+
+  function ctxUninstall(): void {
+    if (!pluginContextMenu) return
+    const p = pluginContextMenu.plugin
+    closePluginContextMenu()
+    uninstallTarget = p
+  }
+
+  async function confirmUninstall(): Promise<void> {
+    if (!uninstallTarget || uninstalling) return
+    const p = uninstallTarget
+    uninstalling = true
+    try {
+      const r = await window.api.engines.uninstallPlugin(p.upluginPath)
+      if (!r.ok) {
+        error = r.error ?? 'Uninstall failed'
+        return
+      }
+      flashStatus(`Uninstalled "${p.friendlyName}"`)
+      uninstallTarget = null
+      // Reload the plugin list — the row needs to disappear.
+      await load()
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err)
+    } finally {
+      uninstalling = false
+    }
+  }
+
   /** Map of upluginPath → expected baseline flags, recomputed when the
    *  baseline reloads. O(1) lookup keeps the divergence count cheap even
    *  with hundreds of plugins. */
@@ -552,7 +675,12 @@
       <tbody>
         {#each filteredPlugins as p (p.upluginPath)}
           {@const modified = isPluginModified(p)}
-          <tr class:modified>
+          <tr
+            class="plugin-row"
+            class:modified
+            oncontextmenu={(e) => openPluginContextMenu(e, p)}
+            title="Right-click for preset / uninstall actions"
+          >
             <td class="thumb">
               {#if p.iconUrl}
                 <img src={p.iconUrl} alt="" loading="lazy" />
@@ -600,6 +728,79 @@
     </table>
   {/if}
 </section>
+
+{#if pluginContextMenu}
+  {@const cm = pluginContextMenu}
+  {@const inPreset = presetNames.has(cm.plugin.name.toLowerCase())}
+  {@const isMarketplace = cm.plugin.bucket.toLowerCase() === 'marketplace'}
+  <div
+    class="ctx-menu"
+    role="menu"
+    tabindex="-1"
+    style:left="{cm.x}px"
+    style:top="{cm.y}px"
+    onmousedown={(e) => e.stopPropagation()}
+  >
+    <button type="button" role="menuitem" onclick={() => void ctxAddToConfig()}>
+      Add to config
+    </button>
+    {#if inPreset}
+      <button type="button" role="menuitem" onclick={() => void ctxRemoveFromConfig()}>
+        Remove from config
+      </button>
+    {/if}
+    {#if isMarketplace}
+      <div class="ctx-sep"></div>
+      <button type="button" role="menuitem" class="danger" onclick={ctxUninstall}>
+        Uninstall plugin
+      </button>
+    {/if}
+  </div>
+{/if}
+
+{#if uninstallTarget}
+  {@const u = uninstallTarget}
+  <div
+    class="confirm-backdrop"
+    role="presentation"
+    onclick={(e) => {
+      if (
+        (e.target as HTMLElement).classList.contains('confirm-backdrop') &&
+        !uninstalling
+      ) {
+        uninstallTarget = null
+      }
+    }}
+  >
+    <div class="confirm-popup" role="dialog" aria-modal="true" aria-label="Uninstall plugin">
+      <h3>Uninstall plugin?</h3>
+      <p>
+        Permanently delete <strong>{u.friendlyName}</strong> from
+        <code>{engine.name}</code>?
+      </p>
+      <p class="hint">
+        Folder to remove: <code>{u.upluginPath.replace(/[/\\][^/\\]+\.uplugin$/i, '')}</code>
+      </p>
+      <div class="confirm-actions">
+        <button type="button" class="ghost" disabled={uninstalling} onclick={() => (uninstallTarget = null)}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="danger-primary"
+          disabled={uninstalling}
+          onclick={() => void confirmUninstall()}
+        >
+          {uninstalling ? 'Uninstalling…' : 'Uninstall'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if statusToast}
+  <div class="status-toast" role="status">{statusToast}</div>
+{/if}
 
 {#if restoreConfirmOpen}
   <div
@@ -965,6 +1166,61 @@
   }
   tr.modified td {
     background: #1f1d28;
+  }
+  tr.plugin-row {
+    cursor: context-menu;
+  }
+  .ctx-menu {
+    position: fixed;
+    z-index: 400;
+    min-width: 220px;
+    background: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+    padding: 0.25rem;
+    display: flex;
+    flex-direction: column;
+  }
+  .ctx-menu button {
+    background: transparent;
+    color: #d0d0d0;
+    border: none;
+    padding: 0.45rem 0.7rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-align: left;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .ctx-menu button:hover {
+    background: #2a2a2a;
+    color: #fff;
+  }
+  .ctx-menu button.danger {
+    color: #fca5a5;
+  }
+  .ctx-menu button.danger:hover {
+    background: #3a1818;
+    color: #fff;
+  }
+  .ctx-sep {
+    height: 1px;
+    margin: 0.25rem 0;
+    background: #2e2e2e;
+  }
+  .status-toast {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 350;
+    background: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    padding: 0.55rem 0.9rem;
+    font-size: 0.82rem;
+    color: #d0d0d0;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
   }
   td.thumb,
   th.thumb {

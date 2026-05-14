@@ -4,9 +4,11 @@ import { scanEngines, type EngineInfo } from './engines-local'
 import {
   listEnginePluginsRich,
   setEnginePluginState,
+  uninstallEnginePlugin,
   type EnginePluginRich,
   type SetPluginStateRequest,
-  type SetPluginStateResult
+  type SetPluginStateResult,
+  type UninstallPluginResult
 } from './engine-plugins'
 import {
   ensureBaseline,
@@ -15,7 +17,10 @@ import {
   type BaselineInfo
 } from './engine-plugin-baselines'
 import {
+  addPluginToPreset,
+  removePluginFromPreset,
   resolvePresetForEngine,
+  resolvePresetTargetPath,
   readPresetFile,
   type PluginPresetEntry
 } from './engine-plugin-preset'
@@ -75,6 +80,17 @@ export interface ApplyPresetToAllResult {
   enginesProcessed?: number
   pluginsChanged?: number
   failures?: Array<{ engine: string; name: string; error: string }>
+}
+
+export interface PresetMutationResult {
+  ok: boolean
+  error?: string
+  /** Absolute path of the preset file the change landed on. */
+  presetPath?: string
+  /** Where the resolved path came from. */
+  source?: 'per-engine' | 'global'
+  /** True when remove actually deleted an entry (false when it wasn't there). */
+  removed?: boolean
 }
 
 /**
@@ -277,6 +293,56 @@ export function registerEnginesIpc(settings: SettingsStore): void {
         }
       }
       return { ok: true, enginesProcessed, pluginsChanged, failures }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:preset-add-plugin',
+    async (_e, engineRoot: string, entry: PluginPresetEntry): Promise<PresetMutationResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      const target = resolvePresetTargetPath(path.resolve(engineRoot), settings.load())
+      if ('error' in target) return { ok: false, error: target.error }
+      try {
+        await addPluginToPreset(target.path, entry)
+        return { ok: true, presetPath: target.path, source: target.source }
+      } catch (err) {
+        return {
+          ok: false,
+          error: `Could not write preset: ${err instanceof Error ? err.message : String(err)}`
+        }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:preset-remove-plugin',
+    async (_e, engineRoot: string, name: string): Promise<PresetMutationResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      const target = resolvePresetTargetPath(path.resolve(engineRoot), settings.load())
+      if ('error' in target) return { ok: false, error: target.error }
+      try {
+        const removed = await removePluginFromPreset(target.path, name)
+        return { ok: true, presetPath: target.path, source: target.source, removed }
+      } catch (err) {
+        return {
+          ok: false,
+          error: `Could not update preset: ${err instanceof Error ? err.message : String(err)}`
+        }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:uninstall-plugin',
+    async (_e, upluginPath: string): Promise<UninstallPluginResult> => {
+      if (!isInsideEngineRoots(upluginPath)) {
+        return { ok: false, error: 'Plugin path is outside the configured engine roots' }
+      }
+      return await uninstallEnginePlugin(upluginPath)
     }
   )
 

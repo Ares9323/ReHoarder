@@ -335,6 +335,20 @@ export interface ApplyPresetToAllResult {
   failures?: Array<{ engine: string; name: string; error: string }>
 }
 
+export interface PresetMutationResult {
+  ok: boolean
+  error?: string
+  presetPath?: string
+  source?: 'per-engine' | 'global'
+  removed?: boolean
+}
+
+export interface UninstallPluginResult {
+  ok: boolean
+  error?: string
+  pluginDir?: string
+}
+
 export interface EnginesApi {
   list(): Promise<EnginesListResult>
   openInExplorer(absolutePath: string): Promise<EnginesOpenResult>
@@ -349,6 +363,9 @@ export interface EnginesApi {
   ): Promise<{ ok: boolean; error?: string }>
   pickPresetFile(): Promise<PickFileResult>
   applyPresetToAll(presetPath: string): Promise<ApplyPresetToAllResult>
+  presetAddPlugin(engineRoot: string, entry: PluginPresetEntry): Promise<PresetMutationResult>
+  presetRemovePlugin(engineRoot: string, name: string): Promise<PresetMutationResult>
+  uninstallPlugin(upluginPath: string): Promise<UninstallPluginResult>
 }
 
 export interface ProjectInfo {

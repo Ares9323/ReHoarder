@@ -79,6 +79,86 @@ function pickPerEnginePath(
  * shape; entries with missing/wrong types are dropped silently so a small
  * typo in one row doesn't reject the whole file.
  */
+/**
+ * Resolve the absolute path to the preset file that should be written for
+ * `engineRoot`. Per-engine overrides win; otherwise the global fallback;
+ * otherwise `null` with the reason in `error` so the caller can surface a
+ * concrete UI message.
+ */
+export function resolvePresetTargetPath(
+  engineRoot: string,
+  settings: AppSettings
+): { path: string; source: 'per-engine' | 'global' } | { error: string } {
+  const resolvedEngine = path.resolve(engineRoot)
+  const perEnginePath = pickPerEnginePath(resolvedEngine, settings.pluginPresetPerEngine)
+  if (perEnginePath) return { path: perEnginePath, source: 'per-engine' }
+  if (settings.pluginPresetGlobalPath && settings.pluginPresetGlobalPath.trim().length > 0) {
+    return { path: settings.pluginPresetGlobalPath.trim(), source: 'global' }
+  }
+  return { error: 'No preset configured — set a global path in Settings or a per-engine override.' }
+}
+
+/**
+ * Write `entry` into the preset at `presetPath`. Creates the file (and its
+ * parent directory) if missing. If an entry with the same `name` already
+ * exists it's replaced — last-write-wins keeps the file deterministic across
+ * repeated "Add to config" clicks.
+ */
+export async function addPluginToPreset(
+  presetPath: string,
+  entry: PluginPresetEntry
+): Promise<void> {
+  const existing = await safeLoadPresetEntries(presetPath)
+  const filtered = existing.filter((e) => !sameName(e.name, entry.name))
+  filtered.push(entry)
+  await writePresetAtomically(presetPath, filtered)
+}
+
+/**
+ * Remove an entry by name. No-op when the file or the entry doesn't exist.
+ * Returns `true` when something was actually removed so the renderer can
+ * decide whether to surface a "not found" notice.
+ */
+export async function removePluginFromPreset(
+  presetPath: string,
+  name: string
+): Promise<boolean> {
+  const existing = await safeLoadPresetEntries(presetPath)
+  const next = existing.filter((e) => !sameName(e.name, name))
+  if (next.length === existing.length) return false
+  await writePresetAtomically(presetPath, next)
+  return true
+}
+
+function sameName(a: string, b: string): boolean {
+  return a.localeCompare(b, undefined, { sensitivity: 'accent' }) === 0
+}
+
+/**
+ * Read the preset file's entries, tolerating "file doesn't exist yet" and
+ * "file is corrupt" — both fall back to an empty list so writes can still
+ * succeed (the corrupt body is overwritten with the new payload, which
+ * matches the user's intent of "I'm building my preset from scratch").
+ */
+async function safeLoadPresetEntries(presetPath: string): Promise<PluginPresetEntry[]> {
+  try {
+    return await readPresetFile(presetPath)
+  } catch {
+    return []
+  }
+}
+
+async function writePresetAtomically(
+  presetPath: string,
+  entries: PluginPresetEntry[]
+): Promise<void> {
+  await fsp.mkdir(path.dirname(presetPath), { recursive: true })
+  const payload: PluginPreset = { plugins: entries }
+  const tmp = presetPath + '.tmp'
+  await fsp.writeFile(tmp, JSON.stringify(payload, null, 2) + '\n', 'utf-8')
+  await fsp.rename(tmp, presetPath)
+}
+
 export async function readPresetFile(absolutePath: string): Promise<PluginPresetEntry[]> {
   const raw = await fsp.readFile(absolutePath, 'utf-8')
   let parsed: unknown

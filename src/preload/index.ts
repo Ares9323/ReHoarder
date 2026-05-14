@@ -264,6 +264,20 @@ export interface ApplyPresetToAllResult {
   failures?: Array<{ engine: string; name: string; error: string }>
 }
 
+export interface PresetMutationResult {
+  ok: boolean
+  error?: string
+  presetPath?: string
+  source?: 'per-engine' | 'global'
+  removed?: boolean
+}
+
+export interface UninstallPluginResult {
+  ok: boolean
+  error?: string
+  pluginDir?: string
+}
+
 export interface ProjectInfo {
   name: string
   uprojectPath: string
@@ -560,7 +574,13 @@ const api = {
     pickPresetFile: (): Promise<PickFileResult> =>
       ipcRenderer.invoke('engines:pick-preset-file'),
     applyPresetToAll: (presetPath: string): Promise<ApplyPresetToAllResult> =>
-      ipcRenderer.invoke('engines:apply-preset-to-all', presetPath)
+      ipcRenderer.invoke('engines:apply-preset-to-all', presetPath),
+    presetAddPlugin: (engineRoot: string, entry: PluginPresetEntry): Promise<PresetMutationResult> =>
+      ipcRenderer.invoke('engines:preset-add-plugin', engineRoot, entry),
+    presetRemovePlugin: (engineRoot: string, name: string): Promise<PresetMutationResult> =>
+      ipcRenderer.invoke('engines:preset-remove-plugin', engineRoot, name),
+    uninstallPlugin: (upluginPath: string): Promise<UninstallPluginResult> =>
+      ipcRenderer.invoke('engines:uninstall-plugin', upluginPath)
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),

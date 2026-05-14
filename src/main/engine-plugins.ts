@@ -407,3 +407,50 @@ function extractBool(content: string, key: string): boolean {
   const m = re.exec(content)
   return m ? m[1].toLowerCase() === 'true' : false
 }
+
+export interface UninstallPluginResult {
+  ok: boolean
+  error?: string
+  /** Absolute path of the directory that was removed (or attempted to). */
+  pluginDir?: string
+}
+
+/**
+ * Permanently delete a plugin's folder from disk. Only allowed for plugins
+ * shipped under `Engine/Plugins/Marketplace/` — engine-default plugins
+ * (Runtime, Editor, etc.) are part of the install image and removing them
+ * would corrupt the engine.
+ *
+ * Safety:
+ *   - Refuses any path that isn't a `.uplugin`
+ *   - Refuses unless the plugin folder lives under
+ *     `<engine>/Engine/Plugins/Marketplace/<PluginFolder>/`
+ *   - Refuses when the resolved directory would be the Marketplace folder
+ *     itself or any of its ancestors
+ */
+export async function uninstallEnginePlugin(upluginPath: string): Promise<UninstallPluginResult> {
+  if (!upluginPath.toLowerCase().endsWith('.uplugin')) {
+    return { ok: false, error: 'Target file is not a .uplugin' }
+  }
+  const pluginDir = path.dirname(path.resolve(upluginPath))
+  const norm = pluginDir.replace(/\\/g, '/').toLowerCase()
+  // Must contain `/engine/plugins/marketplace/<something>/` — the trailing
+  // segment is the plugin folder itself, so the marketplace token must NOT
+  // be the last segment (that'd be the Marketplace dir itself).
+  const m = /\/engine\/plugins\/marketplace\/([^/]+)\/?$/.exec(norm)
+  if (!m) {
+    return {
+      ok: false,
+      error: 'Only Marketplace plugins can be uninstalled from here.'
+    }
+  }
+  try {
+    await fsp.rm(pluginDir, { recursive: true, force: true })
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Could not remove plugin directory: ${errMsg(err)}`
+    }
+  }
+  return { ok: true, pluginDir }
+}
