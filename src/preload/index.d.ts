@@ -349,6 +349,59 @@ export interface UninstallPluginResult {
   pluginDir?: string
 }
 
+export interface EditorSettingsInfo {
+  engineIniPath: string
+  hasSentinel: boolean
+  hasBackup: boolean
+  masterHash: string | null
+}
+
+export interface EditorSettingsInfoResult extends EditorSettingsInfo {
+  ok: boolean
+  error?: string
+}
+
+export interface ApplyEditorSettingsResult {
+  ok: boolean
+  error?: string
+  engineIniPath?: string
+  backupPath?: string
+  backupWritten?: boolean
+  summary?: string
+}
+
+export interface RestoreEditorSettingsResult {
+  ok: boolean
+  error?: string
+  engineIniPath?: string
+}
+
+export interface ApplyEditorSettingsToAllResult {
+  ok: boolean
+  error?: string
+  enginesProcessed?: number
+  summaries?: Array<{ engine: string; summary: string }>
+  failures?: Array<{ engine: string; error: string }>
+}
+
+export interface DiffOp {
+  kind: 'same' | 'remove' | 'add'
+  text: string
+  leftLine?: number
+  rightLine?: number
+}
+
+export interface PreviewEditorSettingsResult {
+  ok: boolean
+  error?: string
+  current?: string
+  proposed?: string
+  diff?: DiffOp[]
+  summary?: string
+  willCaptureBaseline?: boolean
+  warnings?: string[]
+}
+
 export interface EnginesApi {
   list(): Promise<EnginesListResult>
   openInExplorer(absolutePath: string): Promise<EnginesOpenResult>
@@ -367,6 +420,14 @@ export interface EnginesApi {
   presetRemovePlugin(engineRoot: string, name: string): Promise<PresetMutationResult>
   uninstallPlugin(upluginPath: string): Promise<UninstallPluginResult>
   openPresetFile(presetPath: string): Promise<EnginesOpenResult>
+  editorSettingsInfo(engineRoot: string): Promise<EditorSettingsInfoResult>
+  applyEditorSettings(engineRoot: string): Promise<ApplyEditorSettingsResult>
+  previewEditorSettings(engineRoot: string): Promise<PreviewEditorSettingsResult>
+  restoreEditorSettings(engineRoot: string): Promise<RestoreEditorSettingsResult>
+  applyEditorSettingsToAll(): Promise<ApplyEditorSettingsToAllResult>
+  pickMasterIniFile(): Promise<PickFileResult>
+  createMasterTemplate(variant?: 'basic' | 'aresRecommended'): Promise<PickFileResult>
+  openMasterIniFile(masterPath: string): Promise<EnginesOpenResult>
 }
 
 export interface ProjectInfo {

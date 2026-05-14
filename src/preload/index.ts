@@ -278,6 +278,59 @@ export interface UninstallPluginResult {
   pluginDir?: string
 }
 
+export interface EditorSettingsInfo {
+  engineIniPath: string
+  hasSentinel: boolean
+  hasBackup: boolean
+  masterHash: string | null
+}
+
+export interface EditorSettingsInfoResult extends EditorSettingsInfo {
+  ok: boolean
+  error?: string
+}
+
+export interface ApplyEditorSettingsResult {
+  ok: boolean
+  error?: string
+  engineIniPath?: string
+  backupPath?: string
+  backupWritten?: boolean
+  summary?: string
+}
+
+export interface RestoreEditorSettingsResult {
+  ok: boolean
+  error?: string
+  engineIniPath?: string
+}
+
+export interface ApplyEditorSettingsToAllResult {
+  ok: boolean
+  error?: string
+  enginesProcessed?: number
+  summaries?: Array<{ engine: string; summary: string }>
+  failures?: Array<{ engine: string; error: string }>
+}
+
+export interface DiffOp {
+  kind: 'same' | 'remove' | 'add'
+  text: string
+  leftLine?: number
+  rightLine?: number
+}
+
+export interface PreviewEditorSettingsResult {
+  ok: boolean
+  error?: string
+  current?: string
+  proposed?: string
+  diff?: DiffOp[]
+  summary?: string
+  willCaptureBaseline?: boolean
+  warnings?: string[]
+}
+
 export interface ProjectInfo {
   name: string
   uprojectPath: string
@@ -582,7 +635,23 @@ const api = {
     uninstallPlugin: (upluginPath: string): Promise<UninstallPluginResult> =>
       ipcRenderer.invoke('engines:uninstall-plugin', upluginPath),
     openPresetFile: (presetPath: string): Promise<EnginesOpenResult> =>
-      ipcRenderer.invoke('engines:open-preset-file', presetPath)
+      ipcRenderer.invoke('engines:open-preset-file', presetPath),
+    editorSettingsInfo: (engineRoot: string): Promise<EditorSettingsInfoResult> =>
+      ipcRenderer.invoke('engines:editor-settings-info', engineRoot),
+    applyEditorSettings: (engineRoot: string): Promise<ApplyEditorSettingsResult> =>
+      ipcRenderer.invoke('engines:apply-editor-settings', engineRoot),
+    previewEditorSettings: (engineRoot: string): Promise<PreviewEditorSettingsResult> =>
+      ipcRenderer.invoke('engines:preview-editor-settings', engineRoot),
+    restoreEditorSettings: (engineRoot: string): Promise<RestoreEditorSettingsResult> =>
+      ipcRenderer.invoke('engines:restore-editor-settings', engineRoot),
+    applyEditorSettingsToAll: (): Promise<ApplyEditorSettingsToAllResult> =>
+      ipcRenderer.invoke('engines:apply-editor-settings-to-all'),
+    pickMasterIniFile: (): Promise<PickFileResult> =>
+      ipcRenderer.invoke('engines:pick-master-ini-file'),
+    createMasterTemplate: (variant: 'basic' | 'aresRecommended' = 'basic'): Promise<PickFileResult> =>
+      ipcRenderer.invoke('engines:create-master-template', variant),
+    openMasterIniFile: (masterPath: string): Promise<EnginesOpenResult> =>
+      ipcRenderer.invoke('engines:open-master-ini-file', masterPath)
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),

@@ -24,6 +24,7 @@
     showProjectThumbnails: boolean
     pluginPresetGlobalPath: string
     pluginPresetPerEngine: Record<string, string>
+    editorSettingsMasterPath: string
     gameLaunchParams: string[]
   }
 
@@ -52,13 +53,115 @@
     const r = await window.api.engines.pickPresetFile()
     if (!r.ok || !r.path) return
     settings.pluginPresetGlobalPath = r.path
-    markDirty()
+    await autoSave()
   }
 
-  function clearGlobalPreset(): void {
+  async function clearGlobalPreset(): Promise<void> {
     if (!settings) return
     settings.pluginPresetGlobalPath = ''
+    await autoSave()
+  }
+
+  /** Open the global preset file with the system editor (whitelisted main-side). */
+  async function openGlobalPresetFile(): Promise<void> {
+    if (!settings?.pluginPresetGlobalPath) return
+    const r = await window.api.engines.openPresetFile(settings.pluginPresetGlobalPath)
+    if (!r.ok) error = r.error ?? 'Could not open preset file'
+  }
+
+  /**
+   * Auto-save after a Pick / Create / Clear so the user doesn't need to
+   * remember to hit Save afterwards. Wraps the existing save() path, which
+   * already flushes every dirty field (textareas included) — same payload,
+   * same IPC, just triggered for them.
+   */
+  async function autoSave(): Promise<void> {
     markDirty()
+    await save()
+  }
+
+  /** Editor-settings master state — mirrors the pattern used for the plugin
+   *  preset so the user can apply a curated BaseEditorPerProjectUserSettings.ini
+   *  across every installed engine in one click. */
+  let applyEditorSettingsBusy = $state(false)
+  let applyEditorSettingsSummary = $state<string | null>(null)
+  let applyEditorSettingsError = $state<string | null>(null)
+
+  async function pickEditorSettingsMaster(): Promise<void> {
+    if (!settings) return
+    const r = await window.api.engines.pickMasterIniFile()
+    if (!r.ok || !r.path) return
+    settings.editorSettingsMasterPath = r.path
+    await autoSave()
+  }
+
+  /** Write a master template to disk + set it as the active master path. The
+   *  basic variant doubles as documentation (every supported merge mode shown
+   *  with a comment); the 'aresRecommended' variant ships a curated baseline
+   *  for users who want a battle-tested starting point. */
+  async function createSampleEditorMaster(variant: 'basic' | 'aresRecommended'): Promise<void> {
+    if (!settings) return
+    const r = await window.api.engines.createMasterTemplate(variant)
+    if (!r.ok) {
+      applyEditorSettingsError = r.error ?? 'Could not create sample'
+      return
+    }
+    if (!r.path) return
+    settings.editorSettingsMasterPath = r.path
+    await autoSave()
+    applyEditorSettingsSummary =
+      variant === 'aresRecommended'
+        ? `Ares-recommended master created at ${r.path}`
+        : `Sample master created at ${r.path}`
+  }
+
+  async function openEditorSettingsMaster(): Promise<void> {
+    if (!settings?.editorSettingsMasterPath) return
+    const r = await window.api.engines.openMasterIniFile(settings.editorSettingsMasterPath)
+    if (!r.ok) applyEditorSettingsError = r.error ?? 'Could not open master file'
+  }
+
+  async function clearEditorSettingsMaster(): Promise<void> {
+    if (!settings) return
+    settings.editorSettingsMasterPath = ''
+    await autoSave()
+  }
+
+  async function applyEditorSettingsToAll(): Promise<void> {
+    if (!settings || applyEditorSettingsBusy) return
+    if (!settings.editorSettingsMasterPath?.trim()) {
+      applyEditorSettingsError = 'Set a master ini path first.'
+      return
+    }
+    applyEditorSettingsBusy = true
+    applyEditorSettingsError = null
+    applyEditorSettingsSummary = null
+    try {
+      const r = await window.api.engines.applyEditorSettingsToAll()
+      if (!r.ok) {
+        applyEditorSettingsError = r.error ?? 'Apply-to-all failed'
+        return
+      }
+      const summaries = r.summaries ?? []
+      const failures = r.failures ?? []
+      const head = `Processed ${r.enginesProcessed ?? 0} engines.`
+      if (failures.length === 0) {
+        applyEditorSettingsSummary =
+          head + (summaries.length > 0 ? ` Examples: ${summaries[0].engine} → ${summaries[0].summary}` : '')
+      } else {
+        applyEditorSettingsSummary =
+          head + ` ${failures.length} failure${failures.length === 1 ? '' : 's'}.`
+        applyEditorSettingsError = failures
+          .slice(0, 6)
+          .map((f) => `${f.engine}: ${f.error}`)
+          .join('\n')
+        if (failures.length > 6) applyEditorSettingsError += `\n…and ${failures.length - 6} more.`
+      }
+    } catch (err) {
+      applyEditorSettingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+      applyEditorSettingsBusy = false
+    }
   }
 
   async function applyPresetToAll(): Promise<void> {
@@ -420,9 +523,12 @@
               placeholder={"Path to a JSON file with { plugins: [{ name, enabledByDefault, installed }] }"}
               spellcheck="false"
             />
+            {#if settings.pluginPresetGlobalPath}
+              <button type="button" class="ghost" onclick={() => void openGlobalPresetFile()}>Open</button>
+            {/if}
             <button type="button" class="ghost" onclick={() => void pickGlobalPreset()}>Pick…</button>
             {#if settings.pluginPresetGlobalPath}
-              <button type="button" class="ghost" onclick={clearGlobalPreset}>Clear</button>
+              <button type="button" class="ghost" onclick={() => void clearGlobalPreset()}>Clear</button>
             {/if}
           </div>
           <span class="hint">
@@ -445,6 +551,65 @@
         </div>
         {#if applyAllError}
           <pre class="apply-all-error">{applyAllError}</pre>
+        {/if}
+
+        <label class="stack">
+          <span class="lbl-block">Editor settings master ini</span>
+          <div class="preset-input">
+            <input
+              type="text"
+              class="text-input"
+              bind:value={settings.editorSettingsMasterPath}
+              oninput={markDirty}
+              placeholder={"Path to a master BaseEditorPerProjectUserSettings.ini"}
+              spellcheck="false"
+            />
+            {#if settings.editorSettingsMasterPath}
+              <button type="button" class="ghost" onclick={() => void openEditorSettingsMaster()}>Open</button>
+            {:else}
+              <button
+                type="button"
+                class="ghost"
+                onclick={() => void createSampleEditorMaster('basic')}
+                title="Save an annotated sample master ini you can use as a starting point"
+              >
+                Create sample…
+              </button>
+              <button
+                type="button"
+                class="ghost"
+                onclick={() => void createSampleEditorMaster('aresRecommended')}
+                title="Bundle Ares-recommended settings (editor styling, BP editor tweaks, monitor presets, etc.) as a starter"
+              >
+                Ares recommended…
+              </button>
+            {/if}
+            <button type="button" class="ghost" onclick={() => void pickEditorSettingsMaster()}>Pick…</button>
+            {#if settings.editorSettingsMasterPath}
+              <button type="button" class="ghost" onclick={() => void clearEditorSettingsMaster()}>Clear</button>
+            {/if}
+          </div>
+          <span class="hint">
+            Merge sections, scalars and array values from this master into every
+            <code>Engine/Config/BaseEditorPerProjectUserSettings.ini</code>. First Apply on a clean
+            engine captures the original as <code>.bak</code> for Restore.
+          </span>
+        </label>
+        <div class="apply-all-row">
+          <button
+            type="button"
+            class="primary"
+            onclick={() => void applyEditorSettingsToAll()}
+            disabled={applyEditorSettingsBusy || !settings.editorSettingsMasterPath?.trim()}
+          >
+            {applyEditorSettingsBusy ? 'Applying master…' : 'Apply editor settings master to all engines'}
+          </button>
+          {#if applyEditorSettingsSummary}
+            <span class="apply-all-ok">{applyEditorSettingsSummary}</span>
+          {/if}
+        </div>
+        {#if applyEditorSettingsError}
+          <pre class="apply-all-error">{applyEditorSettingsError}</pre>
         {/if}
       </div>
 

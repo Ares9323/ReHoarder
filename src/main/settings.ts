@@ -48,6 +48,8 @@ export interface AppSettings {
   pluginPresetGlobalPath: string
   /** Per-engine override map (engineRoot → preset path). Takes precedence over `pluginPresetGlobalPath` when an entry is present. */
   pluginPresetPerEngine: Record<string, string>
+  /** Absolute path to a master `BaseEditorPerProjectUserSettings.ini` that the user maintains; applied to every engine's Editor settings on demand. Empty disables the feature. */
+  editorSettingsMasterPath: string
 }
 
 const SETTINGS_KEY = 'app_settings_v1'
@@ -103,7 +105,8 @@ export function defaultSettings(): AppSettings {
     showProjectThumbnails: true,
     gameLaunchParams: ['-log', '-windowed', '-ResX=1280', '-ResY=720'],
     pluginPresetGlobalPath: '',
-    pluginPresetPerEngine: {}
+    pluginPresetPerEngine: {},
+    editorSettingsMasterPath: ''
   }
 }
 
@@ -191,7 +194,11 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
       typeof partial.pluginPresetGlobalPath === 'string'
         ? partial.pluginPresetGlobalPath.trim()
         : d.pluginPresetGlobalPath,
-    pluginPresetPerEngine: sanitizeStringRecord(partial.pluginPresetPerEngine) ?? d.pluginPresetPerEngine
+    pluginPresetPerEngine: sanitizeStringRecord(partial.pluginPresetPerEngine) ?? d.pluginPresetPerEngine,
+    editorSettingsMasterPath:
+      typeof partial.editorSettingsMasterPath === 'string'
+        ? partial.editorSettingsMasterPath.trim()
+        : d.editorSettingsMasterPath
   }
 }
 

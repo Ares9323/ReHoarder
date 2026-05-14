@@ -24,6 +24,18 @@ import {
   readPresetFile,
   type PluginPresetEntry
 } from './engine-plugin-preset'
+import {
+  applyEditorSettings,
+  readEditorSettingsInfo,
+  restoreEditorSettings,
+  pickMasterTemplate,
+  type ApplyEditorSettingsResult,
+  type EditorSettingsInfo,
+  type MasterTemplateVariant,
+  type RestoreEditorSettingsResult
+} from './engine-editor-settings'
+import { diffLines, type DiffOp } from './text-diff'
+import { promises as fsp } from 'node:fs'
 import type { AppSettings, SettingsStore } from './settings'
 
 export interface EnginesListResult {
@@ -91,6 +103,35 @@ export interface PresetMutationResult {
   source?: 'per-engine' | 'global'
   /** True when remove actually deleted an entry (false when it wasn't there). */
   removed?: boolean
+}
+
+export interface EditorSettingsInfoResult extends EditorSettingsInfo {
+  ok: boolean
+  error?: string
+}
+
+export interface ApplyEditorSettingsToAllResult {
+  ok: boolean
+  error?: string
+  enginesProcessed?: number
+  summaries?: Array<{ engine: string; summary: string }>
+  failures?: Array<{ engine: string; error: string }>
+}
+
+export interface PreviewEditorSettingsResult {
+  ok: boolean
+  error?: string
+  /** Current engine ini content (sentinel header stripped) — left column. */
+  current?: string
+  /** Proposed merged content with the new sentinel — right column. */
+  proposed?: string
+  /** Pre-computed diff ops so the renderer only needs to lay them out. */
+  diff?: DiffOp[]
+  /** Patch summary (counts of overrides / additions / etc). */
+  summary?: string
+  /** True if a real Apply on the current engine would capture a fresh baseline. */
+  willCaptureBaseline?: boolean
+  warnings?: string[]
 }
 
 /**
@@ -293,6 +334,175 @@ export function registerEnginesIpc(settings: SettingsStore): void {
         }
       }
       return { ok: true, enginesProcessed, pluginsChanged, failures }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:editor-settings-info',
+    async (_e, engineRoot: string): Promise<EditorSettingsInfoResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return {
+          ok: false,
+          hasSentinel: false,
+          hasBackup: false,
+          engineIniPath: '',
+          masterHash: null,
+          error: 'Engine path is outside the configured engine roots'
+        }
+      }
+      const info = await readEditorSettingsInfo(path.resolve(engineRoot))
+      return { ok: true, ...info }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:preview-editor-settings',
+    async (_e, engineRoot: string): Promise<PreviewEditorSettingsResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      const cfg = settings.load()
+      const master = cfg.editorSettingsMasterPath?.trim()
+      if (!master) {
+        return {
+          ok: false,
+          error: 'No master ini configured — set the path under Settings → Engines.'
+        }
+      }
+      const r = await applyEditorSettings(path.resolve(engineRoot), master, { dryRun: true })
+      if (!r.ok) return { ok: false, error: r.error }
+      const current = r.currentContent ?? ''
+      const proposed = r.proposedContent ?? ''
+      return {
+        ok: true,
+        current,
+        proposed,
+        diff: diffLines(current, proposed),
+        summary: r.summary,
+        willCaptureBaseline: r.backupWritten ?? false,
+        warnings: r.patch?.warnings ?? []
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:apply-editor-settings',
+    async (_e, engineRoot: string): Promise<ApplyEditorSettingsResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      const cfg = settings.load()
+      const master = cfg.editorSettingsMasterPath?.trim()
+      if (!master) {
+        return {
+          ok: false,
+          error: 'No master ini configured — set the path under Settings → Engines.'
+        }
+      }
+      return await applyEditorSettings(path.resolve(engineRoot), master)
+    }
+  )
+
+  ipcMain.handle(
+    'engines:restore-editor-settings',
+    async (_e, engineRoot: string): Promise<RestoreEditorSettingsResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      return await restoreEditorSettings(path.resolve(engineRoot))
+    }
+  )
+
+  ipcMain.handle(
+    'engines:apply-editor-settings-to-all',
+    async (): Promise<ApplyEditorSettingsToAllResult> => {
+      const cfg = settings.load()
+      const master = cfg.editorSettingsMasterPath?.trim()
+      if (!master) {
+        return {
+          ok: false,
+          error: 'No master ini configured — set the path under Settings → Engines.'
+        }
+      }
+      const engines = await scanEngines(cfg.enginePaths)
+      const summaries: Array<{ engine: string; summary: string }> = []
+      const failures: Array<{ engine: string; error: string }> = []
+      for (const engine of engines) {
+        const r = await applyEditorSettings(engine.path, master)
+        if (r.ok && r.summary) summaries.push({ engine: engine.name, summary: r.summary })
+        else failures.push({ engine: engine.name, error: r.error ?? 'unknown error' })
+      }
+      return { ok: true, enginesProcessed: engines.length, summaries, failures }
+    }
+  )
+
+  ipcMain.handle('engines:pick-master-ini-file', async (): Promise<PickFileResult> => {
+    const r = await dialog.showOpenDialog({
+      title: 'Pick master BaseEditorPerProjectUserSettings.ini',
+      properties: ['openFile'],
+      filters: [
+        { name: 'INI', extensions: ['ini'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    })
+    if (r.canceled || r.filePaths.length === 0) return { ok: true, path: null }
+    return { ok: true, path: r.filePaths[0] }
+  })
+
+  ipcMain.handle(
+    'engines:create-master-template',
+    async (_e, variant: MasterTemplateVariant = 'basic'): Promise<PickFileResult> => {
+      const defaultName =
+        variant === 'aresRecommended'
+          ? 'BaseEditorPerProjectUserSettings-AresRecommended.ini'
+          : 'BaseEditorPerProjectUserSettings.ini'
+      const r = await dialog.showSaveDialog({
+        title:
+          variant === 'aresRecommended'
+            ? 'Save Ares-recommended master ini'
+            : 'Save sample master ini',
+        defaultPath: defaultName,
+        filters: [
+          { name: 'INI', extensions: ['ini'] },
+          { name: 'All files', extensions: ['*'] }
+        ]
+      })
+      if (r.canceled || !r.filePath) return { ok: true, path: null }
+      try {
+        await fsp.writeFile(r.filePath, pickMasterTemplate(variant), 'utf-8')
+        return { ok: true, path: r.filePath }
+      } catch (err) {
+        return {
+          ok: false,
+          error: `Could not write template: ${err instanceof Error ? err.message : String(err)}`
+        }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:open-master-ini-file',
+    async (_e, masterPath: string): Promise<EnginesOpenResult> => {
+      // Whitelist guard — only honour the currently-configured master path.
+      const cfg = settings.load()
+      const resolved = path.resolve(masterPath)
+      const configured = cfg.editorSettingsMasterPath
+        ? path.resolve(cfg.editorSettingsMasterPath)
+        : null
+      const fold = process.platform === 'win32'
+      const same =
+        configured !== null &&
+        (fold ? configured.toLowerCase() === resolved.toLowerCase() : configured === resolved)
+      if (!same) {
+        return { ok: false, error: 'Master ini path is not registered in Settings' }
+      }
+      try {
+        const err = await shell.openPath(resolved)
+        if (err) return { ok: false, error: err }
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
     }
   )
 

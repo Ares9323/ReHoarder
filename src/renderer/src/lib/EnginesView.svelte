@@ -3,6 +3,7 @@
   import { settingsVersion } from '../stores/settings-events.svelte'
   import { enginesStore } from '../stores/engines.svelte'
   import EnginePluginsPanel from './EnginePluginsPanel.svelte'
+  import EditorSettingsPreviewDialog from './EditorSettingsPreviewDialog.svelte'
 
   interface EngineInfo {
     name: string
@@ -24,7 +25,18 @@
    *  the user clicks a row or picks "Toggle plugins…" from the menu. */
   let focusedEngine = $state<EngineInfo | null>(null)
   /** Right-click menu position + target. Null = closed. */
-  let contextMenu = $state<{ x: number; y: number; engine: EngineInfo } | null>(null)
+  let contextMenu = $state<{
+    x: number
+    y: number
+    engine: EngineInfo
+    /** Snapshotted at open time so the menu items can show/hide Restore. */
+    editorSettings: { hasBackup: boolean; hasSentinel: boolean } | null
+  } | null>(null)
+  let editorSettingsStatus = $state<string | null>(null)
+  let editorSettingsError = $state<string | null>(null)
+  let editorSettingsBusy = $state(false)
+  /** Engine currently being previewed; non-null means the dialog is open. */
+  let previewingEngine = $state<EngineInfo | null>(null)
 
   onMount(() => {
     void enginesStore.ensureLoaded()
@@ -52,9 +64,23 @@
     focusedEngine = engine
   }
 
-  function openContextMenu(e: MouseEvent, engine: EngineInfo): void {
+  async function openContextMenu(e: MouseEvent, engine: EngineInfo): Promise<void> {
     e.preventDefault()
-    contextMenu = { x: e.clientX, y: e.clientY, engine }
+    contextMenu = { x: e.clientX, y: e.clientY, engine, editorSettings: null }
+    // Best-effort: fetch editor-settings status for this engine so the menu
+    // can hide Restore when there's nothing to restore from. Doesn't block
+    // the menu from opening — if the call fails we just show the option.
+    try {
+      const r = await window.api.engines.editorSettingsInfo(engine.path)
+      if (contextMenu && contextMenu.engine.path === engine.path) {
+        contextMenu = {
+          ...contextMenu,
+          editorSettings: r.ok ? { hasBackup: r.hasBackup, hasSentinel: r.hasSentinel } : null
+        }
+      }
+    } catch {
+      /* ignore — menu still works without the hint */
+    }
   }
 
   function closeContextMenu(): void {
@@ -80,6 +106,40 @@
     const eng = contextMenu.engine
     closeContextMenu()
     focusEngine(eng)
+  }
+
+  function flashEditorStatus(msg: string): void {
+    editorSettingsStatus = msg
+    window.setTimeout(() => {
+      if (editorSettingsStatus === msg) editorSettingsStatus = null
+    }, 4000)
+  }
+
+  function ctxPreviewEditorSettings(): void {
+    if (!contextMenu) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    previewingEngine = eng
+  }
+
+  async function ctxRestoreEditorSettings(): Promise<void> {
+    if (!contextMenu || editorSettingsBusy) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    editorSettingsBusy = true
+    editorSettingsError = null
+    try {
+      const r = await window.api.engines.restoreEditorSettings(eng.path)
+      if (!r.ok) {
+        editorSettingsError = r.error ?? 'Restore failed'
+        return
+      }
+      flashEditorStatus(`Editor settings restored on ${eng.name}`)
+    } catch (err) {
+      editorSettingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+      editorSettingsBusy = false
+    }
   }
 
   $effect(() => {
@@ -211,7 +271,50 @@
     <button type="button" role="menuitem" onclick={ctxTogglePlugins}>
       Toggle plugins enabled by default
     </button>
+    <div class="ctx-sep"></div>
+    <button
+      type="button"
+      role="menuitem"
+      onclick={ctxPreviewEditorSettings}
+      disabled={editorSettingsBusy}
+    >
+      Preview editor settings master…
+    </button>
+    {#if cm.editorSettings?.hasBackup}
+      <button
+        type="button"
+        role="menuitem"
+        onclick={() => void ctxRestoreEditorSettings()}
+        disabled={editorSettingsBusy}
+      >
+        Restore editor settings from baseline
+      </button>
+    {/if}
   </div>
+{/if}
+
+{#if editorSettingsStatus}
+  <div class="status-toast" role="status">{editorSettingsStatus}</div>
+{/if}
+{#if editorSettingsError}
+  <div class="error-toast" role="alert">
+    <span>{editorSettingsError}</span>
+    <button type="button" onclick={() => (editorSettingsError = null)}>×</button>
+  </div>
+{/if}
+
+{#if previewingEngine}
+  {@const eng = previewingEngine}
+  <EditorSettingsPreviewDialog
+    engine={eng}
+    onClose={() => (previewingEngine = null)}
+    onApplied={(info) => {
+      const summary = info.summary ?? ''
+      flashEditorStatus(
+        summary ? `Editor settings applied to ${eng.name} — ${summary}` : `Editor settings applied to ${eng.name}`
+      )
+    }}
+  />
 {/if}
 
 <style>
@@ -367,8 +470,54 @@
     border-radius: 4px;
     cursor: pointer;
   }
-  .ctx-menu button:hover {
+  .ctx-menu button:hover:not(:disabled) {
     background: #2a2a2a;
+    color: #fff;
+  }
+  .ctx-menu button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .ctx-sep {
+    height: 1px;
+    margin: 0.25rem 0;
+    background: #2e2e2e;
+  }
+  .status-toast,
+  .error-toast {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 350;
+    border-radius: 6px;
+    padding: 0.55rem 0.9rem;
+    font-size: 0.82rem;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.55);
+    max-width: 480px;
+  }
+  .status-toast {
+    background: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    color: #d0d0d0;
+  }
+  .error-toast {
+    background: #3a1818;
+    border: 1px solid #5a2727;
+    color: #fca5a5;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+  }
+  .error-toast button {
+    background: transparent;
+    color: #fca5a5;
+    border: none;
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+  }
+  .error-toast button:hover {
     color: #fff;
   }
   .num {
