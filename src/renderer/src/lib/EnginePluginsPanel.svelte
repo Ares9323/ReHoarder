@@ -126,6 +126,10 @@
   async function ctxAddToConfig(): Promise<void> {
     if (!pluginContextMenu) return
     const p = pluginContextMenu.plugin
+    // True if no preset was configured yet — the backend will create the
+    // default file and we surface a clearer first-time toast so the user
+    // knows where it landed.
+    const firstTime = !preset.path
     closePluginContextMenu()
     const r = await window.api.engines.presetAddPlugin(engine.path, {
       name: p.name,
@@ -136,7 +140,11 @@
       error = r.error ?? 'Preset write failed'
       return
     }
-    flashStatus(`Added "${p.friendlyName}" to preset (${r.source})`)
+    if (firstTime && r.presetPath) {
+      flashStatus(`Created preset at ${r.presetPath} and added "${p.friendlyName}"`)
+    } else {
+      flashStatus(`Added "${p.friendlyName}" to preset (${r.source})`)
+    }
     // Refresh preset entries so "Remove from config" toggles visibility.
     const presetRes = await window.api.engines.getPreset(engine.path)
     if (presetRes.ok) {
@@ -313,6 +321,14 @@
       await load()
     } else {
       error = sr.error ?? 'Could not set per-engine preset path'
+    }
+  }
+
+  async function openPresetFile(): Promise<void> {
+    if (!preset.path) return
+    const r = await window.api.engines.openPresetFile(preset.path)
+    if (!r.ok) {
+      error = r.error ?? 'Could not open preset file'
     }
   }
 
@@ -548,6 +564,17 @@
       {/if}
     </div>
     <div class="preset-actions">
+      {#if preset.path}
+        <button
+          type="button"
+          class="ghost-small"
+          onclick={() => void openPresetFile()}
+          disabled={saving || restoring}
+          title="Open the preset JSON in your system's default editor"
+        >
+          Open file
+        </button>
+      {/if}
       <button
         type="button"
         class="ghost-small"

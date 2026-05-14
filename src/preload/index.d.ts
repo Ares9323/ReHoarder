@@ -366,6 +366,7 @@ export interface EnginesApi {
   presetAddPlugin(engineRoot: string, entry: PluginPresetEntry): Promise<PresetMutationResult>
   presetRemovePlugin(engineRoot: string, name: string): Promise<PresetMutationResult>
   uninstallPlugin(upluginPath: string): Promise<UninstallPluginResult>
+  openPresetFile(presetPath: string): Promise<EnginesOpenResult>
 }
 
 export interface ProjectInfo {

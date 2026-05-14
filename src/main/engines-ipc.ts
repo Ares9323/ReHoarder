@@ -1,4 +1,4 @@
-import { ipcMain, shell, dialog } from 'electron'
+import { ipcMain, shell, dialog, app } from 'electron'
 import * as path from 'node:path'
 import { scanEngines, type EngineInfo } from './engines-local'
 import {
@@ -297,13 +297,56 @@ export function registerEnginesIpc(settings: SettingsStore): void {
   )
 
   ipcMain.handle(
+    'engines:open-preset-file',
+    async (_e, presetPath: string): Promise<EnginesOpenResult> => {
+      // Whitelist guard: only honour requests for paths the user has actually
+      // configured somewhere in settings. Stops a stray IPC call from being
+      // coerced into shell-opening an arbitrary file on disk.
+      const cfg = settings.load()
+      const resolved = path.resolve(presetPath)
+      const allowed: string[] = []
+      if (cfg.pluginPresetGlobalPath) allowed.push(path.resolve(cfg.pluginPresetGlobalPath))
+      for (const v of Object.values(cfg.pluginPresetPerEngine ?? {})) {
+        if (v) allowed.push(path.resolve(v))
+      }
+      const match = allowed.some(
+        (p) =>
+          (process.platform === 'win32'
+            ? p.toLowerCase() === resolved.toLowerCase()
+            : p === resolved)
+      )
+      if (!match) {
+        return { ok: false, error: 'Preset path is not registered in Settings' }
+      }
+      try {
+        const err = await shell.openPath(resolved)
+        if (err) return { ok: false, error: err }
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
     'engines:preset-add-plugin',
     async (_e, engineRoot: string, entry: PluginPresetEntry): Promise<PresetMutationResult> => {
       if (!isInsideEngineRoots(engineRoot)) {
         return { ok: false, error: 'Engine path is outside the configured engine roots' }
       }
-      const target = resolvePresetTargetPath(path.resolve(engineRoot), settings.load())
-      if ('error' in target) return { ok: false, error: target.error }
+      let cfg = settings.load()
+      let target = resolvePresetTargetPath(path.resolve(engineRoot), cfg)
+      // Zero-config bootstrap: if no preset is configured anywhere, plant a
+      // default global preset under userData so the first "Add to config"
+      // click just works. The user can move it later (Settings → Engines)
+      // or override it per-engine.
+      if ('error' in target) {
+        const defaultPath = path.join(app.getPath('userData'), 'plugin-preset.json')
+        settings.saveAll({ ...cfg, pluginPresetGlobalPath: defaultPath })
+        cfg = settings.load()
+        target = resolvePresetTargetPath(path.resolve(engineRoot), cfg)
+        if ('error' in target) return { ok: false, error: target.error }
+      }
       try {
         await addPluginToPreset(target.path, entry)
         return { ok: true, presetPath: target.path, source: target.source }

@@ -580,7 +580,9 @@ const api = {
     presetRemovePlugin: (engineRoot: string, name: string): Promise<PresetMutationResult> =>
       ipcRenderer.invoke('engines:preset-remove-plugin', engineRoot, name),
     uninstallPlugin: (upluginPath: string): Promise<UninstallPluginResult> =>
-      ipcRenderer.invoke('engines:uninstall-plugin', upluginPath)
+      ipcRenderer.invoke('engines:uninstall-plugin', upluginPath),
+    openPresetFile: (presetPath: string): Promise<EnginesOpenResult> =>
+      ipcRenderer.invoke('engines:open-preset-file', presetPath)
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),
