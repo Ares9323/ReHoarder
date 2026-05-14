@@ -22,6 +22,8 @@
     separateVaultsByPath: boolean
     showVaultThumbnails: boolean
     showProjectThumbnails: boolean
+    pluginPresetGlobalPath: string
+    pluginPresetPerEngine: Record<string, string>
     gameLaunchParams: string[]
   }
 
@@ -39,6 +41,60 @@
   let error = $state<string | null>(null)
   let savedFlash = $state(false)
   let dirty = $state(false)
+
+  /** Bulk-apply state surfaced under the global preset field. */
+  let applyAllBusy = $state(false)
+  let applyAllSummary = $state<string | null>(null)
+  let applyAllError = $state<string | null>(null)
+
+  async function pickGlobalPreset(): Promise<void> {
+    if (!settings) return
+    const r = await window.api.engines.pickPresetFile()
+    if (!r.ok || !r.path) return
+    settings.pluginPresetGlobalPath = r.path
+    markDirty()
+  }
+
+  function clearGlobalPreset(): void {
+    if (!settings) return
+    settings.pluginPresetGlobalPath = ''
+    markDirty()
+  }
+
+  async function applyPresetToAll(): Promise<void> {
+    if (!settings || applyAllBusy) return
+    const presetPath = settings.pluginPresetGlobalPath?.trim()
+    if (!presetPath) {
+      applyAllError = 'Set a global preset path first.'
+      return
+    }
+    applyAllBusy = true
+    applyAllError = null
+    applyAllSummary = null
+    try {
+      const r = await window.api.engines.applyPresetToAll(presetPath)
+      if (!r.ok) {
+        applyAllError = r.error ?? 'Apply-to-all failed'
+        return
+      }
+      const failures = r.failures ?? []
+      const head = `Processed ${r.enginesProcessed ?? 0} engines — ${r.pluginsChanged ?? 0} plugin write${r.pluginsChanged === 1 ? '' : 's'}.`
+      if (failures.length === 0) {
+        applyAllSummary = head
+      } else {
+        applyAllSummary = head + ` ${failures.length} failure${failures.length === 1 ? '' : 's'}.`
+        applyAllError = failures
+          .slice(0, 6)
+          .map((f) => `${f.engine} / ${f.name}: ${f.error}`)
+          .join('\n')
+        if (failures.length > 6) applyAllError += `\n…and ${failures.length - 6} more.`
+      }
+    } catch (err) {
+      applyAllError = err instanceof Error ? err.message : String(err)
+    } finally {
+      applyAllBusy = false
+    }
+  }
 
   // Updates pane state — populated lazily on mount. `updateState` walks:
   //   idle → checking → available | up-to-date | error
@@ -163,7 +219,11 @@
         enginePaths: toArray(enginePathsText),
         vaultPaths: toArray(vaultPathsText),
         gameLaunchParams: toArgs(gameLaunchParamsText),
-        cruftPatterns: toArray(cruftPatternsText)
+        cruftPatterns: toArray(cruftPatternsText),
+        // `$state` wraps nested objects in Proxies; Electron's IPC uses the
+        // structured-clone algorithm which throws on Proxy values. Snapshot
+        // the Record into a plain object before the round-trip.
+        pluginPresetPerEngine: $state.snapshot(settings.pluginPresetPerEngine)
       }
       const saved = await window.api.settings.set(payload)
       settings = saved
@@ -345,6 +405,47 @@
             title={'Minimal glob syntax:\n  *  → zero or more characters (no slash)\n  ?  → one character (no slash)\n  ** → zero or more path segments (slashes included)\n  Paths are case-insensitive and accept both / and \\\n\nExamples:\n  **/*.fbx           → every .fbx anywhere\n  Samples/**         → the whole Samples/ folder at the root\n  **/Documentation/**→ Documentation folder at any depth\n  Content/*.uasset   → only .uasset directly inside Content (not Content/Sub/)'}
           >Glob syntax: <code>*</code>, <code>?</code>, <code>**</code> — hover for details. Applied on top of the built-in cruft list.</span>
         </label>
+      </div>
+
+      <div class="group">
+        <h3>Engines</h3>
+        <label class="stack">
+          <span class="lbl-block">Global plugin preset</span>
+          <div class="preset-input">
+            <input
+              type="text"
+              class="text-input"
+              bind:value={settings.pluginPresetGlobalPath}
+              oninput={markDirty}
+              placeholder={"Path to a JSON file with { plugins: [{ name, enabledByDefault, installed }] }"}
+              spellcheck="false"
+            />
+            <button type="button" class="ghost" onclick={() => void pickGlobalPreset()}>Pick…</button>
+            {#if settings.pluginPresetGlobalPath}
+              <button type="button" class="ghost" onclick={clearGlobalPreset}>Clear</button>
+            {/if}
+          </div>
+          <span class="hint">
+            Fallback applied to engines without a per-engine override (set those from the
+            Engines tab). Each engine can point at a different file.
+          </span>
+        </label>
+        <div class="apply-all-row">
+          <button
+            type="button"
+            class="primary"
+            onclick={() => void applyPresetToAll()}
+            disabled={applyAllBusy || !settings.pluginPresetGlobalPath?.trim()}
+          >
+            {applyAllBusy ? 'Applying preset…' : 'Apply global preset to all engines'}
+          </button>
+          {#if applyAllSummary}
+            <span class="apply-all-ok">{applyAllSummary}</span>
+          {/if}
+        </div>
+        {#if applyAllError}
+          <pre class="apply-all-error">{applyAllError}</pre>
+        {/if}
       </div>
 
       <div class="group">
@@ -703,6 +804,38 @@
   .lbl-block {
     color: #b0b0b0;
     font-size: 0.85rem;
+  }
+  .preset-input {
+    display: flex;
+    gap: 0.4rem;
+    align-items: stretch;
+  }
+  .preset-input input {
+    flex: 1;
+    min-width: 0;
+  }
+  .apply-all-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    margin-top: 0.6rem;
+  }
+  .apply-all-ok {
+    color: #86efac;
+    font-size: 0.8rem;
+  }
+  .apply-all-error {
+    margin: 0.4rem 0 0;
+    padding: 0.5rem 0.7rem;
+    background: #3a1818;
+    border: 1px solid #5a2727;
+    border-radius: 4px;
+    color: #fca5a5;
+    font-size: 0.78rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
   }
   select {
     background: #1a1a1a;

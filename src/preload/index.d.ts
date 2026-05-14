@@ -307,6 +307,34 @@ export interface RestoreBaselineResult {
   failures?: Array<{ name: string; error: string }>
 }
 
+export interface PluginPresetEntry {
+  name: string
+  enabledByDefault: boolean
+  installed: boolean
+}
+
+export interface PresetResult {
+  ok: boolean
+  error?: string
+  path?: string | null
+  source?: 'per-engine' | 'global'
+  entries?: PluginPresetEntry[]
+}
+
+export interface PickFileResult {
+  ok: boolean
+  path?: string | null
+  error?: string
+}
+
+export interface ApplyPresetToAllResult {
+  ok: boolean
+  error?: string
+  enginesProcessed?: number
+  pluginsChanged?: number
+  failures?: Array<{ engine: string; name: string; error: string }>
+}
+
 export interface EnginesApi {
   list(): Promise<EnginesListResult>
   openInExplorer(absolutePath: string): Promise<EnginesOpenResult>
@@ -314,6 +342,13 @@ export interface EnginesApi {
   setPluginState(req: SetPluginStateRequest): Promise<SetPluginStateResult>
   readBaselineInfo(engineRoot: string): Promise<BaselineInfoResult>
   restoreBaseline(engineRoot: string): Promise<RestoreBaselineResult>
+  getPreset(engineRoot: string): Promise<PresetResult>
+  setPresetPathPerEngine(
+    engineRoot: string,
+    presetPath: string | null
+  ): Promise<{ ok: boolean; error?: string }>
+  pickPresetFile(): Promise<PickFileResult>
+  applyPresetToAll(presetPath: string): Promise<ApplyPresetToAllResult>
 }
 
 export interface ProjectInfo {

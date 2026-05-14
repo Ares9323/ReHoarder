@@ -236,6 +236,34 @@ export interface RestoreBaselineResult {
   failures?: Array<{ name: string; error: string }>
 }
 
+export interface PluginPresetEntry {
+  name: string
+  enabledByDefault: boolean
+  installed: boolean
+}
+
+export interface PresetResult {
+  ok: boolean
+  error?: string
+  path?: string | null
+  source?: 'per-engine' | 'global'
+  entries?: PluginPresetEntry[]
+}
+
+export interface PickFileResult {
+  ok: boolean
+  path?: string | null
+  error?: string
+}
+
+export interface ApplyPresetToAllResult {
+  ok: boolean
+  error?: string
+  enginesProcessed?: number
+  pluginsChanged?: number
+  failures?: Array<{ engine: string; name: string; error: string }>
+}
+
 export interface ProjectInfo {
   name: string
   uprojectPath: string
@@ -521,7 +549,18 @@ const api = {
     readBaselineInfo: (engineRoot: string): Promise<BaselineInfoResult> =>
       ipcRenderer.invoke('engines:read-baseline-info', engineRoot),
     restoreBaseline: (engineRoot: string): Promise<RestoreBaselineResult> =>
-      ipcRenderer.invoke('engines:restore-baseline', engineRoot)
+      ipcRenderer.invoke('engines:restore-baseline', engineRoot),
+    getPreset: (engineRoot: string): Promise<PresetResult> =>
+      ipcRenderer.invoke('engines:get-preset', engineRoot),
+    setPresetPathPerEngine: (
+      engineRoot: string,
+      presetPath: string | null
+    ): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('engines:set-preset-path-per-engine', engineRoot, presetPath),
+    pickPresetFile: (): Promise<PickFileResult> =>
+      ipcRenderer.invoke('engines:pick-preset-file'),
+    applyPresetToAll: (presetPath: string): Promise<ApplyPresetToAllResult> =>
+      ipcRenderer.invoke('engines:apply-preset-to-all', presetPath)
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),

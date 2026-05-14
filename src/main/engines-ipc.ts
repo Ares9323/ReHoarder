@@ -1,4 +1,4 @@
-import { ipcMain, shell } from 'electron'
+import { ipcMain, shell, dialog } from 'electron'
 import * as path from 'node:path'
 import { scanEngines, type EngineInfo } from './engines-local'
 import {
@@ -14,7 +14,12 @@ import {
   readBaselineInfo,
   type BaselineInfo
 } from './engine-plugin-baselines'
-import type { SettingsStore } from './settings'
+import {
+  resolvePresetForEngine,
+  readPresetFile,
+  type PluginPresetEntry
+} from './engine-plugin-preset'
+import type { AppSettings, SettingsStore } from './settings'
 
 export interface EnginesListResult {
   ok: boolean
@@ -46,6 +51,30 @@ export interface RestoreBaselineResult {
   restored?: number
   /** Failures, one entry per plugin that could not be reverted. */
   failures?: Array<{ name: string; error: string }>
+}
+
+export interface PresetResult {
+  ok: boolean
+  error?: string
+  /** Absolute path of the active preset for this engine — null when none configured. */
+  path?: string | null
+  source?: 'per-engine' | 'global'
+  entries?: PluginPresetEntry[]
+}
+
+export interface PickFileResult {
+  ok: boolean
+  /** Cancelled = ok:true + path:null. */
+  path?: string | null
+  error?: string
+}
+
+export interface ApplyPresetToAllResult {
+  ok: boolean
+  error?: string
+  enginesProcessed?: number
+  pluginsChanged?: number
+  failures?: Array<{ engine: string; name: string; error: string }>
 }
 
 /**
@@ -158,6 +187,133 @@ export function registerEnginesIpc(settings: SettingsStore): void {
       return { ok: true, ...info }
     }
   )
+
+  ipcMain.handle(
+    'engines:get-preset',
+    async (_e, engineRoot: string): Promise<PresetResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      const resolved = await resolvePresetForEngine(path.resolve(engineRoot), settings.load())
+      if (resolved === null) {
+        return { ok: true, path: null, entries: [] }
+      }
+      if ('error' in resolved) {
+        return { ok: false, error: resolved.error }
+      }
+      return { ok: true, path: resolved.path, source: resolved.source, entries: resolved.entries }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:set-preset-path-per-engine',
+    async (_e, engineRoot: string, presetPath: string | null): Promise<{ ok: boolean; error?: string }> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      const cfg = settings.load()
+      const overrides = { ...cfg.pluginPresetPerEngine }
+      const key = path.resolve(engineRoot)
+      if (presetPath && presetPath.trim().length > 0) {
+        overrides[key] = presetPath.trim()
+      } else {
+        delete overrides[key]
+      }
+      settings.saveAll({ ...cfg, pluginPresetPerEngine: overrides })
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:pick-preset-file',
+    async (): Promise<PickFileResult> => {
+      // The native picker keeps focus / styling consistent with the OS.
+      // The renderer can't reach `dialog` directly, so we proxy it.
+      const r = await dialog.showOpenDialog({
+        title: 'Pick plugin preset JSON',
+        properties: ['openFile'],
+        filters: [{ name: 'JSON', extensions: ['json'] }]
+      })
+      if (r.canceled || r.filePaths.length === 0) return { ok: true, path: null }
+      return { ok: true, path: r.filePaths[0] }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:apply-preset-to-all',
+    async (_e, presetPath: string): Promise<ApplyPresetToAllResult> => {
+      const cfg = settings.load()
+      let entries: PluginPresetEntry[]
+      try {
+        entries = await readPresetFile(presetPath)
+      } catch (err) {
+        return {
+          ok: false,
+          error: `Could not read preset: ${err instanceof Error ? err.message : String(err)}`
+        }
+      }
+      const presetByName = new Map(entries.map((e) => [e.name, e]))
+      const failures: Array<{ engine: string; name: string; error: string }> = []
+      let enginesProcessed = 0
+      let pluginsChanged = 0
+      const engines = await scanEngines(cfg.enginePaths)
+      for (const engine of engines) {
+        enginesProcessed++
+        // Snapshot the engine's plugins now so each setPluginState only fires
+        // when the preset actually wants a different value (skip no-op writes).
+        const plugins = await listEnginePluginsRich(engine.path)
+        for (const p of plugins) {
+          const wanted = presetByName.get(p.name)
+          if (!wanted) continue
+          if (
+            p.enabledByDefault === wanted.enabledByDefault &&
+            p.installed === wanted.installed
+          ) {
+            continue
+          }
+          const r = await applyPresetToPluginViaIpc(p, wanted)
+          if (r.ok) pluginsChanged++
+          else failures.push({ engine: engine.name, name: p.name, error: r.error ?? 'unknown' })
+        }
+      }
+      return { ok: true, enginesProcessed, pluginsChanged, failures }
+    }
+  )
+
+  /**
+   * Internal helper for `apply-preset-to-all` — calls into the same path the
+   * single-plugin IPC uses so baseline capture + .bak rollback all apply.
+   */
+  async function applyPresetToPluginViaIpc(
+    plugin: EnginePluginRich,
+    wanted: PluginPresetEntry
+  ): Promise<SetPluginStateResult> {
+    const engineRoot = inferEngineRootFromPluginPath(plugin.upluginPath)
+    if (engineRoot) {
+      try {
+        const info = await readBaselineInfo(engineRoot)
+        if (!info.exists) {
+          const all = await listEnginePluginsRich(engineRoot)
+          await ensureBaseline(
+            engineRoot,
+            all.map((q) => ({
+              name: q.name,
+              upluginPath: q.upluginPath,
+              enabledByDefault: q.enabledByDefault,
+              installed: q.installed
+            }))
+          )
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
+    return setEnginePluginState({
+      upluginPath: plugin.upluginPath,
+      enabledByDefault: wanted.enabledByDefault,
+      installed: wanted.installed
+    })
+  }
 
   ipcMain.handle(
     'engines:restore-baseline',

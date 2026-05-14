@@ -197,6 +197,7 @@
   <div
     class="ctx-menu"
     role="menu"
+    tabindex="-1"
     style:left="{cm.x}px"
     style:top="{cm.y}px"
     onmousedown={(e) => e.stopPropagation()}
@@ -392,27 +393,6 @@
   .editor {
     width: 1%;
     white-space: nowrap;
-  }
-  .actions {
-    width: 1%;
-    text-align: right;
-    white-space: nowrap;
-  }
-  .actions button {
-    background: transparent;
-    color: #a0a0a0;
-    border: 1px solid #3a3a3a;
-    border-radius: 4px;
-    padding: 0.2rem 0.6rem;
-    font-size: 0.72rem;
-    cursor: pointer;
-  }
-  .actions button + button {
-    margin-left: 0.35rem;
-  }
-  .actions button:hover {
-    color: #fff;
-    border-color: #555;
   }
   .engine-name {
     color: #e0e0e0;

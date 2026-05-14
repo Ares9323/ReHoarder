@@ -64,6 +64,19 @@
   let restoreConfirmOpen = $state(false)
   let restoring = $state(false)
 
+  /** Active preset for the focused engine (per-engine override → global → null). */
+  interface PresetEntry {
+    name: string
+    enabledByDefault: boolean
+    installed: boolean
+  }
+  let preset = $state<{
+    path: string | null
+    source: 'per-engine' | 'global' | null
+    entries: PresetEntry[]
+    error: string | null
+  }>({ path: null, source: null, entries: [], error: null })
+
   /** Map of upluginPath → expected baseline flags, recomputed when the
    *  baseline reloads. O(1) lookup keeps the divergence count cheap even
    *  with hundreds of plugins. */
@@ -135,6 +148,25 @@
         pluginCount: info.pluginCount,
         plugins: info.plugins ?? []
       }
+      // Preset resolution is independent of baseline — it just tells us which
+      // file (if any) the user pointed at for this engine, and surfaces its
+      // entries so "Apply preset" can populate pending edits.
+      const presetRes = await window.api.engines.getPreset(engine.path)
+      if (presetRes.ok) {
+        preset = {
+          path: presetRes.path ?? null,
+          source: presetRes.source ?? null,
+          entries: presetRes.entries ?? [],
+          error: null
+        }
+      } else {
+        preset = {
+          path: null,
+          source: null,
+          entries: [],
+          error: presetRes.error ?? 'Preset error'
+        }
+      }
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
     } finally {
@@ -145,6 +177,51 @@
   function formatBaselineDate(ms: number | undefined): string {
     if (ms === undefined) return ''
     return new Date(ms).toLocaleString()
+  }
+
+  /** Replace the per-engine preset path with the file the user picks (or
+   *  clear it when they cancel `unset` is called explicitly). Reloads the
+   *  panel afterwards so the resolved-preset banner reflects the change. */
+  async function pickPerEnginePreset(): Promise<void> {
+    const r = await window.api.engines.pickPresetFile()
+    if (!r.ok || !r.path) return
+    const sr = await window.api.engines.setPresetPathPerEngine(engine.path, r.path)
+    if (sr.ok) {
+      await load()
+    } else {
+      error = sr.error ?? 'Could not set per-engine preset path'
+    }
+  }
+
+  async function clearPerEnginePreset(): Promise<void> {
+    const sr = await window.api.engines.setPresetPathPerEngine(engine.path, null)
+    if (sr.ok) {
+      await load()
+    } else {
+      error = sr.error ?? 'Could not clear per-engine preset path'
+    }
+  }
+
+  /**
+   * Populate pending edits from the active preset. For each preset entry, look
+   * up the matching plugin by name and overwrite its flags in the local
+   * `plugins` array — the user reviews via the Modified filter, then commits
+   * with Apply changes. Plugins not mentioned in the preset are left alone.
+   */
+  function applyPresetToPending(): void {
+    if (preset.entries.length === 0) return
+    const byName = new Map<string, PresetEntry>(preset.entries.map((e) => [e.name, e]))
+    plugins = plugins.map((p) => {
+      const wanted = byName.get(p.name)
+      if (!wanted) return p
+      if (
+        p.enabledByDefault === wanted.enabledByDefault &&
+        p.installed === wanted.installed
+      ) {
+        return p
+      }
+      return { ...p, enabledByDefault: wanted.enabledByDefault, installed: wanted.installed }
+    })
   }
 
   async function doRestore(): Promise<void> {
@@ -329,6 +406,54 @@
       <button type="button" onclick={onClose} disabled={saving} title="Close the plugin panel">×</button>
     </div>
   </header>
+
+  <div class="preset-row" class:no-preset={!preset.path}>
+    <div class="preset-info">
+      {#if preset.error}
+        <span class="preset-error">Preset: {preset.error}</span>
+      {:else if preset.path}
+        <span>
+          Preset ({preset.source}):
+          <code class="preset-path" title={preset.path}>{preset.path}</code>
+          · {preset.entries.length} entr{preset.entries.length === 1 ? 'y' : 'ies'}
+        </span>
+      {:else}
+        <span class="muted">
+          No preset configured. Set one per-engine, or define a global fallback in
+          Settings → Engines.
+        </span>
+      {/if}
+    </div>
+    <div class="preset-actions">
+      <button
+        type="button"
+        class="ghost-small"
+        onclick={() => void pickPerEnginePreset()}
+        disabled={saving || restoring}
+      >
+        {preset.source === 'per-engine' ? 'Change per-engine…' : 'Set per-engine…'}
+      </button>
+      {#if preset.source === 'per-engine'}
+        <button
+          type="button"
+          class="ghost-small"
+          onclick={() => void clearPerEnginePreset()}
+          disabled={saving || restoring}
+        >
+          Clear override
+        </button>
+      {/if}
+      <button
+        type="button"
+        class="ghost-small primary-small"
+        onclick={applyPresetToPending}
+        disabled={!preset.path || preset.entries.length === 0 || saving || restoring}
+        title="Stage the preset's flags as pending edits — review with the Modified filter, then Apply changes."
+      >
+        Apply preset
+      </button>
+    </div>
+  </div>
 
   {#if baseline.exists && baselineDivergenceCount > 0}
     <div class="baseline-row">
@@ -586,6 +711,57 @@
   .modified-count {
     color: #c084fc;
     font-weight: 600;
+  }
+  .preset-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.8rem;
+    margin-bottom: 0.5rem;
+    padding: 0.45rem 0.7rem;
+    background: #1a1a22;
+    border: 1px solid #2c2c3a;
+    border-radius: 4px;
+    color: #b0b0b0;
+    font-size: 0.78rem;
+    flex-wrap: wrap;
+  }
+  .preset-row.no-preset {
+    background: #1a1a1a;
+    border-color: #2a2a2a;
+  }
+  .preset-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .preset-info code.preset-path {
+    background: #2a2a2a;
+    padding: 0 0.3em;
+    border-radius: 3px;
+    color: #c0c0c0;
+    font-size: 0.74rem;
+    overflow-wrap: anywhere;
+  }
+  .preset-error {
+    color: #fca5a5;
+  }
+  .muted {
+    color: #777;
+  }
+  .preset-actions {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+  }
+  .primary-small {
+    background: linear-gradient(135deg, #c084fc, #f472b6);
+    color: #fff;
+    border: none;
+  }
+  .primary-small:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: linear-gradient(135deg, #6a4878, #75435c);
   }
   .baseline-row {
     display: flex;

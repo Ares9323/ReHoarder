@@ -44,6 +44,10 @@ export interface AppSettings {
   showProjectThumbnails: boolean
   /** Extra args appended after `-game` when the user clicks "Run" on a project. `-game` is always added implicitly. */
   gameLaunchParams: string[]
+  /** Absolute path to a JSON file used as the engine-wide plugin preset (format: `{plugins:[{name, enabledByDefault, installed}]}`). Empty string disables the fallback. */
+  pluginPresetGlobalPath: string
+  /** Per-engine override map (engineRoot → preset path). Takes precedence over `pluginPresetGlobalPath` when an entry is present. */
+  pluginPresetPerEngine: Record<string, string>
 }
 
 const SETTINGS_KEY = 'app_settings_v1'
@@ -97,7 +101,9 @@ export function defaultSettings(): AppSettings {
     separateVaultsByPath: false,
     showVaultThumbnails: true,
     showProjectThumbnails: true,
-    gameLaunchParams: ['-log', '-windowed', '-ResX=1280', '-ResY=720']
+    gameLaunchParams: ['-log', '-windowed', '-ResX=1280', '-ResY=720'],
+    pluginPresetGlobalPath: '',
+    pluginPresetPerEngine: {}
   }
 }
 
@@ -180,8 +186,29 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
         : d.showProjectThumbnails,
     gameLaunchParams: partial.gameLaunchParams
       ? sanitizePaths(partial.gameLaunchParams)
-      : d.gameLaunchParams
+      : d.gameLaunchParams,
+    pluginPresetGlobalPath:
+      typeof partial.pluginPresetGlobalPath === 'string'
+        ? partial.pluginPresetGlobalPath.trim()
+        : d.pluginPresetGlobalPath,
+    pluginPresetPerEngine: sanitizeStringRecord(partial.pluginPresetPerEngine) ?? d.pluginPresetPerEngine
   }
+}
+
+/**
+ * Sanitise a `Record<string, string>` from an untrusted payload. Strips
+ * non-string keys / values and trims whitespace. Returns `null` when the
+ * input isn't a plain object so the caller can fall back to the default.
+ */
+function sanitizeStringRecord(raw: unknown): Record<string, string> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof k === 'string' && k.length > 0 && typeof v === 'string' && v.trim().length > 0) {
+      out[k] = v.trim()
+    }
+  }
+  return out
 }
 
 /**

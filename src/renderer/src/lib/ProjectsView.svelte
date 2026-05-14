@@ -401,6 +401,7 @@
   <div
     class="ctx-menu"
     role="menu"
+    tabindex="-1"
     style:left="{cm.x}px"
     style:top="{cm.y}px"
     onmousedown={(e) => e.stopPropagation()}

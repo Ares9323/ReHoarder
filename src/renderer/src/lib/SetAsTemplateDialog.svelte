@@ -51,7 +51,7 @@
   }
 
   let templateName = $state(untrack(() => suggestedTemplateName(projectName, !hasCode)))
-  let displayName = $state(projectName)
+  let displayName = $state(untrack(() => projectName))
   let description = $state('')
   let categoryText = $state('Games')
   let selectedEnginePath = $state<string>('')
