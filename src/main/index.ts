@@ -39,6 +39,7 @@ import { DownloadsManager } from './downloads-manager'
 import {
   broadcastDownloadProgress,
   broadcastDownloads,
+  broadcastEngineInstalled,
   registerDownloadsIpc
 } from './downloads-ipc'
 
@@ -214,7 +215,8 @@ app.whenReady().then(async () => {
       fabFetch
     },
     broadcast: broadcastDownloads,
-    broadcastProgress: broadcastDownloadProgress
+    broadcastProgress: broadcastDownloadProgress,
+    broadcastEngineInstalled
   })
   registerEngineDownloadsIpc(session, downloadsManager)
   registerDownloadsIpc(downloadsManager, settingsStore)

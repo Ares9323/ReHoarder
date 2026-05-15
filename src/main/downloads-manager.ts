@@ -9,6 +9,10 @@ import type { AppSettings, SettingsStore } from './settings'
 import { DownloadCancelledError } from './download/download-types'
 import type { EngineInstallPlan } from './engine-downloads/engine-catalog-client'
 import { runEngineDownload } from './engine-downloads/engine-runner'
+import {
+  finalizeEngineInstall,
+  type PostInstallResult
+} from './engine-downloads/engine-post-install'
 
 function buildSkipPatterns(cfg: AppSettings): string[] {
   return composeSkipPatterns({
@@ -50,6 +54,14 @@ export interface DownloadsManagerDeps {
   broadcast: (rows: DownloadRow[]) => void
   /** Optional broadcast for fine-grained progress (decoupled from the full list refresh). */
   broadcastProgress?: (id: string, row: DownloadRow) => void
+  /** Fired once an engine install finishes and post-install bookkeeping
+   *  (registry write + enginePaths append) has run, so the Engines tab
+   *  can rescan + show a toast without polling the downloads list. */
+  broadcastEngineInstalled?: (info: {
+    appName: string
+    installDir: string
+    postInstall: PostInstallResult
+  }) => void
 }
 
 /**
@@ -475,6 +487,26 @@ export class DownloadsManager {
         }
       })
       this.deps.repo.setStatus(row.id, 'done', { finishedAt: Date.now(), currentFile: null })
+      // Post-install bookkeeping: add to enginePaths + register with UVS
+      // (on Windows). Failures are surfaced through the result but never
+      // mark the download itself failed — the chunks are on disk and the
+      // user can recover by adding the path manually.
+      try {
+        const postInstall = await finalizeEngineInstall(
+          this.deps.settings,
+          row.installTargetPath
+        )
+        this.deps.broadcastEngineInstalled?.({
+          appName: row.sourceId,
+          installDir: row.installTargetPath,
+          postInstall
+        })
+      } catch (err) {
+        console.error(
+          `[engines:${row.id.slice(0, 8)}] post-install bookkeeping failed:`,
+          err instanceof Error ? err.message : String(err)
+        )
+      }
     } catch (err) {
       const cancelled = err instanceof DownloadCancelledError
       const msg = err instanceof Error ? err.message : String(err)

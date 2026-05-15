@@ -67,6 +67,32 @@
     void enginesStore.ensureLoaded()
   })
 
+  // Listen for "engine just finished installing" from main — the
+  // post-install bookkeeping there has already appended the parent dir
+  // to `enginePaths`, so we just have to invalidate caches + rescan.
+  $effect(() => {
+    const unsub = window.api.engineDownloads.onInstalled((info) => {
+      installerOwnedEngines = null
+      void enginesStore.rescan()
+      const reg = info.postInstall.registryStatus
+      const regNote =
+        reg === 'ok'
+          ? ' Registered with UnrealVersionSelector.'
+          : reg === 'skipped'
+            ? ''
+            : reg && typeof reg === 'object' && 'error' in reg
+              ? ` Registry write failed: ${reg.error}`
+              : ''
+      const pathNote = info.postInstall.enginePathAlreadyConfigured
+        ? ''
+        : ` Added ${info.postInstall.enginePathAdded} to engine paths.`
+      flashInstaller(
+        `${info.appName} installed at ${info.installDir}.${pathNote}${regNote}`
+      )
+    })
+    return unsub
+  })
+
   let firstSettingsTick = true
   $effect(() => {
     settingsVersion()

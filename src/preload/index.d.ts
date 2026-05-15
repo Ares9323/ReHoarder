@@ -226,6 +226,17 @@ export interface EngineDownloadsPickDirResult {
   path?: string | null
 }
 
+export interface EngineInstalledEvent {
+  appName: string
+  installDir: string
+  postInstall: {
+    enginePathAdded: string
+    enginePathAlreadyConfigured: boolean
+    guid: string | null
+    registryStatus: 'ok' | 'skipped' | { error: string } | null
+  }
+}
+
 export interface EngineDownloadsApi {
   listOwned(): Promise<EngineDownloadsListOwnedResult>
   fetchInstallPlan(sku: {
@@ -239,6 +250,7 @@ export interface EngineDownloadsApi {
     selectedTags: string[]
     installDir: string
   }): Promise<EngineDownloadsInstallResult>
+  onInstalled(handler: (info: EngineInstalledEvent) => void): () => void
 }
 
 export interface DebugApi {

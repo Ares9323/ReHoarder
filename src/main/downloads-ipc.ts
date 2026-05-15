@@ -90,6 +90,22 @@ export function broadcastDownloads(rows: DownloadRow[]): void {
   }
 }
 
+/**
+ * Broadcast helper for the "engine just finished installing" event.
+ * The Engines tab listens for this and triggers a settings reload + rescan
+ * so the freshly-installed engine appears in the list without a manual
+ * refresh.
+ */
+export function broadcastEngineInstalled(info: {
+  appName: string
+  installDir: string
+  postInstall: unknown
+}): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('engine-downloads:installed', info)
+  }
+}
+
 export function broadcastDownloadProgress(_id: string, row: DownloadRow): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('downloads:progress', row)

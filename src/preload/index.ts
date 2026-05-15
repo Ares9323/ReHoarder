@@ -717,6 +717,17 @@ export interface EngineDownloadsPickDirResult {
   path?: string | null
 }
 
+export interface EngineInstalledEvent {
+  appName: string
+  installDir: string
+  postInstall: {
+    enginePathAdded: string
+    enginePathAlreadyConfigured: boolean
+    guid: string | null
+    registryStatus: 'ok' | 'skipped' | { error: string } | null
+  }
+}
+
 const api = {
   auth: {
     getState: (): Promise<AuthState> => ipcRenderer.invoke('auth:get-state'),
@@ -886,7 +897,15 @@ const api = {
       selectedTags: string[]
       installDir: string
     }): Promise<EngineDownloadsInstallResult> =>
-      ipcRenderer.invoke('engine-downloads:install', args)
+      ipcRenderer.invoke('engine-downloads:install', args),
+    onInstalled: (
+      handler: (info: EngineInstalledEvent) => void
+    ): (() => void) => {
+      const listener = (_e: IpcRendererEvent, info: EngineInstalledEvent): void =>
+        handler(info)
+      ipcRenderer.on('engine-downloads:installed', listener)
+      return () => ipcRenderer.removeListener('engine-downloads:installed', listener)
+    }
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),
