@@ -1,0 +1,5 @@
+{
+  "label": "Empty",
+  "description": "Start from a blank preset. Use \"Add to config\" on individual plugin rows to populate it incrementally.",
+  "plugins": []
+}

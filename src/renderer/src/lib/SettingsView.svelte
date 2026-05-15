@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { bumpSettingsVersion } from '../stores/settings-events.svelte'
+  import PresetChooserDialog from './PresetChooserDialog.svelte'
+  import { enginesStore } from '../stores/engines.svelte'
 
   type ImageSize = 'small' | 'medium' | 'large'
   interface AppSettings {
@@ -25,6 +27,7 @@
     pluginPresetGlobalPath: string
     pluginPresetPerEngine: Record<string, string>
     editorSettingsMasterPath: string
+    editorKeyBindingsMasterPath: string
     gameLaunchParams: string[]
   }
 
@@ -47,6 +50,14 @@
   let applyAllBusy = $state(false)
   let applyAllSummary = $state<string | null>(null)
   let applyAllError = $state<string | null>(null)
+  let presetChooserOpen = $state(false)
+  let presetTemplateFlash = $state<string | null>(null)
+  let editorSettingsChooserOpen = $state(false)
+  let keybindingsChooserOpen = $state(false)
+  /** Which "Apply to all" is awaiting confirmation; `null` means no modal up.
+   *  These actions mutate every installed engine in one shot — a confirm step
+   *  is the cheap way to avoid expensive misclicks. */
+  let confirmingApply = $state<'plugin' | 'editor-settings' | 'keybindings' | null>(null)
 
   async function pickGlobalPreset(): Promise<void> {
     if (!settings) return
@@ -95,26 +106,6 @@
     await autoSave()
   }
 
-  /** Write a master template to disk + set it as the active master path. The
-   *  basic variant doubles as documentation (every supported merge mode shown
-   *  with a comment); the 'aresRecommended' variant ships a curated baseline
-   *  for users who want a battle-tested starting point. */
-  async function createSampleEditorMaster(variant: 'basic' | 'aresRecommended'): Promise<void> {
-    if (!settings) return
-    const r = await window.api.engines.createMasterTemplate(variant)
-    if (!r.ok) {
-      applyEditorSettingsError = r.error ?? 'Could not create sample'
-      return
-    }
-    if (!r.path) return
-    settings.editorSettingsMasterPath = r.path
-    await autoSave()
-    applyEditorSettingsSummary =
-      variant === 'aresRecommended'
-        ? `Ares-recommended master created at ${r.path}`
-        : `Sample master created at ${r.path}`
-  }
-
   async function openEditorSettingsMaster(): Promise<void> {
     if (!settings?.editorSettingsMasterPath) return
     const r = await window.api.engines.openMasterIniFile(settings.editorSettingsMasterPath)
@@ -125,6 +116,79 @@
     if (!settings) return
     settings.editorSettingsMasterPath = ''
     await autoSave()
+  }
+
+  // -------- Keybindings master (mirrors editor-settings flow) --------
+
+  let applyKeybindingsBusy = $state(false)
+  let applyKeybindingsSummary = $state<string | null>(null)
+  let applyKeybindingsError = $state<string | null>(null)
+
+  async function pickKeybindingsMaster(): Promise<void> {
+    if (!settings) return
+    const r = await window.api.engines.pickKeybindingsFile()
+    if (!r.ok || !r.path) return
+    settings.editorKeyBindingsMasterPath = r.path
+    await autoSave()
+  }
+
+  async function clearKeybindingsMaster(): Promise<void> {
+    if (!settings) return
+    settings.editorKeyBindingsMasterPath = ''
+    await autoSave()
+  }
+
+  async function openKeybindingsMaster(): Promise<void> {
+    if (!settings?.editorKeyBindingsMasterPath) return
+    const r = await window.api.engines.openKeybindingsFile(settings.editorKeyBindingsMasterPath)
+    if (!r.ok) applyKeybindingsError = r.error ?? 'Could not open keybindings master'
+  }
+
+  async function applyKeybindingsToAll(): Promise<void> {
+    if (!settings || applyKeybindingsBusy) return
+    if (!settings.editorKeyBindingsMasterPath?.trim()) {
+      applyKeybindingsError = 'Set a keybindings master path first.'
+      return
+    }
+    applyKeybindingsBusy = true
+    applyKeybindingsError = null
+    applyKeybindingsSummary = null
+    try {
+      const r = await window.api.engines.applyKeybindingsToAll()
+      if (!r.ok) {
+        applyKeybindingsError = r.error ?? 'Apply-to-all failed'
+        return
+      }
+      const summaries = r.summaries ?? []
+      const failures = r.failures ?? []
+      const head = `Processed ${r.versionsProcessed ?? 0} unique engine version${r.versionsProcessed === 1 ? '' : 's'}.`
+      if (failures.length === 0) {
+        applyKeybindingsSummary =
+          head + (summaries.length > 0 ? ` Examples: ${summaries[0].version} → ${summaries[0].summary}` : '')
+      } else {
+        applyKeybindingsSummary =
+          head + ` ${failures.length} failure${failures.length === 1 ? '' : 's'}.`
+        applyKeybindingsError = failures
+          .slice(0, 6)
+          .map((f) => `${f.version}: ${f.error}`)
+          .join('\n')
+        if (failures.length > 6) applyKeybindingsError += `\n…and ${failures.length - 6} more.`
+      }
+    } catch (err) {
+      applyKeybindingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+      applyKeybindingsBusy = false
+    }
+  }
+
+  /** Dispatch the Apply-to-all worker for the kind currently in `confirmingApply`,
+   *  then close the modal. Bound to the confirm dialog's primary button. */
+  function runConfirmedApply(): void {
+    const kind = confirmingApply
+    confirmingApply = null
+    if (kind === 'plugin') void applyPresetToAll()
+    else if (kind === 'editor-settings') void applyEditorSettingsToAll()
+    else if (kind === 'keybindings') void applyKeybindingsToAll()
   }
 
   async function applyEditorSettingsToAll(): Promise<void> {
@@ -352,6 +416,10 @@
 
   onMount(async () => {
     await load()
+    // Background-load engine count so the "Apply to all" confirm can name how
+    // many installs will be patched. Best-effort: failing scan just hides the
+    // count, the confirm copy still makes sense.
+    void enginesStore.ensureLoaded()
     try {
       currentVersion = await window.api.updates.currentVersion()
     } catch {
@@ -437,6 +505,48 @@
           Focus Freebies tab at startup if unclaimed
           <span class="hint">(opens the Freebies tab on launch when this month's free assets haven't been claimed)</span>
         </label>
+
+        <div class="sub-divider"></div>
+        <p class="explain">
+          Current version: <code>{currentVersion || '—'}</code>
+          {#if updateState === 'up-to-date'}<span class="ok">· up to date</span>{/if}
+          {#if updateState === 'available' && updateTargetVersion}<span class="up">· {updateTargetVersion} available</span>{/if}
+          {#if updateState === 'ready'}<span class="up">· update ready</span>{/if}
+        </p>
+        <div class="updates-row">
+          {#if updateState === 'idle' || updateState === 'up-to-date' || updateState === 'error'}
+            <button type="button" class="ghost" onclick={checkForUpdates}>
+              Check for updates
+            </button>
+          {:else if updateState === 'checking'}
+            <button type="button" class="ghost" disabled>Checking…</button>
+          {:else if updateState === 'available'}
+            <button type="button" class="primary" onclick={downloadUpdate}>
+              Download {updateTargetVersion ?? 'update'}
+            </button>
+            <button type="button" class="ghost" onclick={checkForUpdates}>Re-check</button>
+          {:else if updateState === 'downloading'}
+            <button type="button" class="ghost" disabled>
+              Downloading… {Math.round(updateProgress)}%
+            </button>
+          {:else if updateState === 'ready'}
+            <button type="button" class="primary" onclick={applyUpdate}>
+              Install &amp; restart
+            </button>
+          {/if}
+        </div>
+        {#if updateState === 'downloading'}
+          <div class="progress"><div class="progress-fill" style:width="{updateProgress}%"></div></div>
+        {/if}
+        {#if updateError}
+          <span class="hint hint-error">{updateError}</span>
+        {/if}
+        {#if updateNotes && updateState === 'available'}
+          <details class="notes">
+            <summary>Release notes</summary>
+            <pre>{updateNotes}</pre>
+          </details>
+        {/if}
       </div>
 
       <div class="group">
@@ -508,9 +618,18 @@
             title={'Minimal glob syntax:\n  *  → zero or more characters (no slash)\n  ?  → one character (no slash)\n  ** → zero or more path segments (slashes included)\n  Paths are case-insensitive and accept both / and \\\n\nExamples:\n  **/*.fbx           → every .fbx anywhere\n  Samples/**         → the whole Samples/ folder at the root\n  **/Documentation/**→ Documentation folder at any depth\n  Content/*.uasset   → only .uasset directly inside Content (not Content/Sub/)'}
           >Glob syntax: <code>*</code>, <code>?</code>, <code>**</code> — hover for details. Applied on top of the built-in cruft list.</span>
         </label>
+        <label class="row">
+          <span class="lbl">Image size</span>
+          <select bind:value={settings.imageSize} onchange={markDirty}>
+            <option value="small">Small</option>
+            <option value="medium">Medium</option>
+            <option value="large">Large</option>
+          </select>
+          <span class="hint">(thumbnail / cover size used across asset grids)</span>
+        </label>
       </div>
 
-      <div class="group">
+      <div class="group full">
         <h3>Engines</h3>
         <label class="stack">
           <span class="lbl-block">Global plugin preset</span>
@@ -526,32 +645,42 @@
             {#if settings.pluginPresetGlobalPath}
               <button type="button" class="ghost" onclick={() => void openGlobalPresetFile()}>Open</button>
             {/if}
+            <button
+              type="button"
+              class="ghost"
+              onclick={() => (presetChooserOpen = true)}
+              title="Pick a built-in template (Empty, Ares recommended, …) and use it as the global preset"
+            >
+              Use template…
+            </button>
             <button type="button" class="ghost" onclick={() => void pickGlobalPreset()}>Pick…</button>
             {#if settings.pluginPresetGlobalPath}
               <button type="button" class="ghost" onclick={() => void clearGlobalPreset()}>Clear</button>
             {/if}
+            <button
+              type="button"
+              class="primary primary-inline"
+              onclick={() => (confirmingApply = 'plugin')}
+              disabled={applyAllBusy || !settings.pluginPresetGlobalPath?.trim()}
+              title="Apply this preset to every engine without a per-engine override"
+            >
+              {applyAllBusy ? 'Applying…' : 'Apply to all'}
+            </button>
           </div>
           <span class="hint">
             Fallback applied to engines without a per-engine override (set those from the
             Engines tab). Each engine can point at a different file.
           </span>
-        </label>
-        <div class="apply-all-row">
-          <button
-            type="button"
-            class="primary"
-            onclick={() => void applyPresetToAll()}
-            disabled={applyAllBusy || !settings.pluginPresetGlobalPath?.trim()}
-          >
-            {applyAllBusy ? 'Applying preset…' : 'Apply global preset to all engines'}
-          </button>
+          {#if presetTemplateFlash}
+            <span class="apply-all-ok">{presetTemplateFlash}</span>
+          {/if}
           {#if applyAllSummary}
             <span class="apply-all-ok">{applyAllSummary}</span>
           {/if}
-        </div>
-        {#if applyAllError}
-          <pre class="apply-all-error">{applyAllError}</pre>
-        {/if}
+          {#if applyAllError}
+            <pre class="apply-all-error">{applyAllError}</pre>
+          {/if}
+        </label>
 
         <label class="stack">
           <span class="lbl-block">Editor settings master ini</span>
@@ -566,107 +695,90 @@
             />
             {#if settings.editorSettingsMasterPath}
               <button type="button" class="ghost" onclick={() => void openEditorSettingsMaster()}>Open</button>
-            {:else}
-              <button
-                type="button"
-                class="ghost"
-                onclick={() => void createSampleEditorMaster('basic')}
-                title="Save an annotated sample master ini you can use as a starting point"
-              >
-                Create sample…
-              </button>
-              <button
-                type="button"
-                class="ghost"
-                onclick={() => void createSampleEditorMaster('aresRecommended')}
-                title="Bundle Ares-recommended settings (editor styling, BP editor tweaks, monitor presets, etc.) as a starter"
-              >
-                Ares recommended…
-              </button>
             {/if}
+            <button
+              type="button"
+              class="ghost"
+              onclick={() => (editorSettingsChooserOpen = true)}
+              title="Pick a built-in template (Empty, Annotated starter, Ares Recommended, …) and use it as the master"
+            >
+              Use template…
+            </button>
             <button type="button" class="ghost" onclick={() => void pickEditorSettingsMaster()}>Pick…</button>
             {#if settings.editorSettingsMasterPath}
               <button type="button" class="ghost" onclick={() => void clearEditorSettingsMaster()}>Clear</button>
             {/if}
+            <button
+              type="button"
+              class="primary primary-inline"
+              onclick={() => (confirmingApply = 'editor-settings')}
+              disabled={applyEditorSettingsBusy || !settings.editorSettingsMasterPath?.trim()}
+              title="Apply this master to every engine's BaseEditorPerProjectUserSettings.ini"
+            >
+              {applyEditorSettingsBusy ? 'Applying…' : 'Apply to all'}
+            </button>
           </div>
           <span class="hint">
             Merge sections, scalars and array values from this master into every
             <code>Engine/Config/BaseEditorPerProjectUserSettings.ini</code>. First Apply on a clean
             engine captures the original as <code>.bak</code> for Restore.
           </span>
-        </label>
-        <div class="apply-all-row">
-          <button
-            type="button"
-            class="primary"
-            onclick={() => void applyEditorSettingsToAll()}
-            disabled={applyEditorSettingsBusy || !settings.editorSettingsMasterPath?.trim()}
-          >
-            {applyEditorSettingsBusy ? 'Applying master…' : 'Apply editor settings master to all engines'}
-          </button>
           {#if applyEditorSettingsSummary}
             <span class="apply-all-ok">{applyEditorSettingsSummary}</span>
           {/if}
-        </div>
-        {#if applyEditorSettingsError}
-          <pre class="apply-all-error">{applyEditorSettingsError}</pre>
-        {/if}
-      </div>
-
-      <div class="group">
-        <h3>Appearance</h3>
-        <label class="row">
-          <span class="lbl">Image size</span>
-          <select bind:value={settings.imageSize} onchange={markDirty}>
-            <option value="small">Small</option>
-            <option value="medium">Medium</option>
-            <option value="large">Large</option>
-          </select>
-        </label>
-      </div>
-
-      <div class="group">
-        <h3>About &amp; updates</h3>
-        <p class="explain">
-          Current version: <code>{currentVersion || '—'}</code>
-          {#if updateState === 'up-to-date'}<span class="ok">· up to date</span>{/if}
-          {#if updateState === 'available' && updateTargetVersion}<span class="up">· {updateTargetVersion} available</span>{/if}
-          {#if updateState === 'ready'}<span class="up">· update ready</span>{/if}
-        </p>
-        <div class="updates-row">
-          {#if updateState === 'idle' || updateState === 'up-to-date' || updateState === 'error'}
-            <button type="button" class="ghost" onclick={checkForUpdates}>
-              Check for updates
-            </button>
-          {:else if updateState === 'checking'}
-            <button type="button" class="ghost" disabled>Checking…</button>
-          {:else if updateState === 'available'}
-            <button type="button" class="primary" onclick={downloadUpdate}>
-              Download {updateTargetVersion ?? 'update'}
-            </button>
-            <button type="button" class="ghost" onclick={checkForUpdates}>Re-check</button>
-          {:else if updateState === 'downloading'}
-            <button type="button" class="ghost" disabled>
-              Downloading… {Math.round(updateProgress)}%
-            </button>
-          {:else if updateState === 'ready'}
-            <button type="button" class="primary" onclick={applyUpdate}>
-              Install &amp; restart
-            </button>
+          {#if applyEditorSettingsError}
+            <pre class="apply-all-error">{applyEditorSettingsError}</pre>
           {/if}
-        </div>
-        {#if updateState === 'downloading'}
-          <div class="progress"><div class="progress-fill" style:width="{updateProgress}%"></div></div>
-        {/if}
-        {#if updateError}
-          <span class="hint hint-error">{updateError}</span>
-        {/if}
-        {#if updateNotes && updateState === 'available'}
-          <details class="notes">
-            <summary>Release notes</summary>
-            <pre>{updateNotes}</pre>
-          </details>
-        {/if}
+        </label>
+
+        <label class="stack">
+          <span class="lbl-block">Editor keybindings master</span>
+          <div class="preset-input">
+            <input
+              type="text"
+              class="text-input"
+              bind:value={settings.editorKeyBindingsMasterPath}
+              oninput={markDirty}
+              placeholder={"Path to a master EditorKeyBindings.ini"}
+              spellcheck="false"
+            />
+            {#if settings.editorKeyBindingsMasterPath}
+              <button type="button" class="ghost" onclick={() => void openKeybindingsMaster()}>Open</button>
+            {/if}
+            <button
+              type="button"
+              class="ghost"
+              onclick={() => (keybindingsChooserOpen = true)}
+              title="Pick a built-in template (Empty, Annotated starter, Ares Recommended, …) and use it as the master"
+            >
+              Use template…
+            </button>
+            <button type="button" class="ghost" onclick={() => void pickKeybindingsMaster()}>Pick…</button>
+            {#if settings.editorKeyBindingsMasterPath}
+              <button type="button" class="ghost" onclick={() => void clearKeybindingsMaster()}>Clear</button>
+            {/if}
+            <button
+              type="button"
+              class="primary primary-inline"
+              onclick={() => (confirmingApply = 'keybindings')}
+              disabled={applyKeybindingsBusy || !settings.editorKeyBindingsMasterPath?.trim()}
+              title="Apply this master to every engine version's per-user EditorKeyBindings.ini"
+            >
+              {applyKeybindingsBusy ? 'Applying…' : 'Apply to all'}
+            </button>
+          </div>
+          <span class="hint">
+            Merge into each engine's per-user keybindings file at
+            <code>%LOCALAPPDATA%\\UnrealEngine\\&lt;ver&gt;\\Saved\\Config\\WindowsEditor\\EditorKeyBindings.ini</code>
+            (one file per engine version). First Apply captures the user's original as <code>.bak</code>.
+          </span>
+          {#if applyKeybindingsSummary}
+            <span class="apply-all-ok">{applyKeybindingsSummary}</span>
+          {/if}
+          {#if applyKeybindingsError}
+            <pre class="apply-all-error">{applyKeybindingsError}</pre>
+          {/if}
+        </label>
       </div>
 
       <div class="group full">
@@ -765,6 +877,142 @@
   {/if}
 </section>
 
+{#if presetChooserOpen}
+  <PresetChooserDialog
+    title="Choose a plugin preset template"
+    subtitle="Selecting one overwrites the default preset file and sets it as the global path."
+    unitLabel="plugin"
+    listFn={() => window.api.engines.listPluginPresetLibrary()}
+    useFn={(id) => window.api.engines.usePluginPresetFromLibrary(id)}
+    onClose={() => (presetChooserOpen = false)}
+    onApplied={async ({ path, label }) => {
+      if (settings) {
+        settings.pluginPresetGlobalPath = path
+        // Persist the path the IPC just stamped — keeps the input bound and
+        // ensures a refresh elsewhere picks it up. autoSave will re-save the
+        // identical value, which is fine.
+        await autoSave()
+      }
+      presetTemplateFlash = `Activated template "${label}" → ${path}`
+      // Auto-clear the flash after a few seconds so it doesn't linger.
+      setTimeout(() => {
+        presetTemplateFlash = null
+      }, 4000)
+    }}
+  />
+{/if}
+
+{#if editorSettingsChooserOpen}
+  <PresetChooserDialog
+    title="Choose an editor settings master template"
+    subtitle="Selecting one overwrites the master ini and sets it as the active editor-settings master."
+    unitLabel="override"
+    listFn={() => window.api.engines.listEditorSettingsPresetLibrary()}
+    useFn={(id) => window.api.engines.useEditorSettingsPresetFromLibrary(id)}
+    onClose={() => (editorSettingsChooserOpen = false)}
+    onApplied={async ({ path, label }) => {
+      if (settings) {
+        settings.editorSettingsMasterPath = path
+        await autoSave()
+      }
+      applyEditorSettingsSummary = `Activated template "${label}" → ${path}`
+      setTimeout(() => {
+        applyEditorSettingsSummary = null
+      }, 4000)
+    }}
+  />
+{/if}
+
+{#if keybindingsChooserOpen}
+  <PresetChooserDialog
+    title="Choose a keybindings master template"
+    subtitle="Selecting one overwrites the master ini and sets it as the active keybindings master."
+    unitLabel="chord rule"
+    listFn={() => window.api.engines.listKeybindingsPresetLibrary()}
+    useFn={(id) => window.api.engines.useKeybindingsPresetFromLibrary(id)}
+    onClose={() => (keybindingsChooserOpen = false)}
+    onApplied={async ({ path, label }) => {
+      if (settings) {
+        settings.editorKeyBindingsMasterPath = path
+        await autoSave()
+      }
+      applyKeybindingsSummary = `Activated template "${label}" → ${path}`
+      setTimeout(() => {
+        applyKeybindingsSummary = null
+      }, 4000)
+    }}
+  />
+{/if}
+
+{#if confirmingApply}
+  {@const engineCount = enginesStore.engines.length}
+  {@const versionCount = new Set(
+    enginesStore.engines.map((e) => {
+      const parts = e.version.split('.').filter((s) => s.length > 0)
+      return parts.length >= 2 ? `${parts[0]}.${parts[1]}` : parts[0] ?? e.version
+    })
+  ).size}
+  {@const kind = confirmingApply}
+  <div
+    class="confirm-backdrop"
+    role="presentation"
+    onclick={(e) => {
+      if ((e.target as HTMLElement).classList.contains('confirm-backdrop')) {
+        confirmingApply = null
+      }
+    }}
+  >
+    <div class="confirm-popup" role="dialog" aria-modal="true" aria-label="Confirm apply to all">
+      {#if kind === 'plugin'}
+        <h3>Apply plugin preset to all engines?</h3>
+        <p>
+          This will toggle plugin <code>EnabledByDefault</code> / <code>Installed</code> flags on
+          <strong>{engineCount || 'every configured'}</strong> engine{engineCount === 1 ? '' : 's'}
+          to match the preset at
+          <code>{settings?.pluginPresetGlobalPath}</code>.
+        </p>
+        <p class="hint">
+          Engines with a per-engine preset override use that file instead. A per-file
+          <code>.bak</code> is captured before each write, and the per-engine baseline
+          taken on the first toggle is preserved so Restore still works.
+        </p>
+      {:else if kind === 'editor-settings'}
+        <h3>Apply editor settings master to all engines?</h3>
+        <p>
+          This will merge the master at <code>{settings?.editorSettingsMasterPath}</code>
+          into <strong>{engineCount || 'every configured'}</strong> engine{engineCount === 1 ? '' : 's'}'
+          <code>BaseEditorPerProjectUserSettings.ini</code>.
+        </p>
+        <p class="hint">
+          First Apply on a clean engine captures the original as <code>.bak</code>; subsequent
+          Applies re-merge against the same baseline. Use Restore from baseline (Engines
+          tab → right-click) to revert.
+        </p>
+      {:else if kind === 'keybindings'}
+        <h3>Apply keybindings master to all engine versions?</h3>
+        <p>
+          This will merge the master at <code>{settings?.editorKeyBindingsMasterPath}</code>
+          into the per-user <code>EditorKeyBindings.ini</code> for
+          <strong>{versionCount || 'every detected'}</strong> unique engine version{versionCount === 1 ? '' : 's'}.
+        </p>
+        <p class="hint">
+          Multiple engine installs of the same version share one keybindings file under
+          <code>%LOCALAPPDATA%\\UnrealEngine\\&lt;ver&gt;\\…</code> — each version is patched once.
+          The user's original is captured as <code>.bak</code> on the first Apply.
+        </p>
+      {/if}
+      <div class="confirm-actions">
+        <button type="button" class="ghost" onclick={() => (confirmingApply = null)}>
+          Cancel
+        </button>
+        <button type="button" class="primary" onclick={runConfirmedApply}>
+          Apply
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   section {
     padding: 1.5rem;
@@ -807,6 +1055,77 @@
     font-family: inherit;
     cursor: pointer;
     font-weight: 500;
+  }
+  /* Compact variant for primary buttons that sit inline next to .ghost ones
+     (e.g. the "Apply to all" buttons in the Engines section, lined up after
+     Clear). Keeps the gradient/typography of .primary but matches the size
+     of the surrounding ghost buttons. */
+  .primary-inline {
+    padding: 0.4rem 0.9rem;
+    font-size: 0.82rem;
+    white-space: nowrap;
+  }
+  /* Subtle divider used to visually separate sub-sections within a single
+     `.group` panel (e.g. About+updates inside Startup & behavior). */
+  .sub-divider {
+    height: 1px;
+    background: #2c2c2c;
+    margin: 0.4rem 0 0.2rem;
+  }
+  /* Confirm modal for Apply-to-all actions. Mirrors the look used in
+     EnginePluginsPanel's uninstall / restore-baseline confirms so the app
+     speaks one visual language about destructive bulk operations. */
+  .confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    z-index: 290;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .confirm-popup {
+    width: min(520px, 92vw);
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 10px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+    padding: 1.1rem 1.25rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+  .confirm-popup h3 {
+    margin: 0 0 0.2rem;
+    color: #fff;
+    font-size: 1rem;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .confirm-popup p {
+    margin: 0;
+    color: #c0c0c0;
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  .confirm-popup p.hint {
+    color: #909090;
+    font-size: 0.78rem;
+  }
+  .confirm-popup code {
+    background: #2a2a2a;
+    border: 1px solid #333;
+    border-radius: 3px;
+    padding: 0.05rem 0.35rem;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.8em;
+    word-break: break-all;
+  }
+  .confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
   }
   .primary:disabled {
     opacity: 0.45;

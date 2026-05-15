@@ -8,25 +8,38 @@
     rightLine?: number
   }
 
-  interface EngineInfo {
-    name: string
-    path: string
-    version: string
-    majorVersion: number
-    changelist: number
-    branchName: string
-    editorExePath: string | null
-    hasEditor: boolean
+  /** Shape every preview call must return — matches the editor-settings and
+   *  keybindings IPC payloads. */
+  interface PreviewPayload {
+    ok: boolean
+    error?: string
+    diff?: DiffOp[]
+    summary?: string
+    willCaptureBaseline?: boolean
+    warnings?: string[]
+  }
+
+  /** Shape every apply call must return — matches the editor-settings and
+   *  keybindings IPC payloads. */
+  interface ApplyPayload {
+    ok: boolean
+    error?: string
+    summary?: string
   }
 
   interface Props {
-    engine: EngineInfo
+    /** Header subtitle ("Editor settings", "Keybindings", …). */
+    subjectLabel: string
+    /** Free-form label shown after the subject ("UE_5.6", "UE 5.6 user config"). */
+    targetLabel: string
+    previewFn: () => Promise<PreviewPayload>
+    applyFn: () => Promise<ApplyPayload>
     onClose: () => void
     /** Fires after a successful Apply — caller can refresh state. */
     onApplied?: (info: { summary?: string }) => void
   }
 
-  let { engine, onClose, onApplied }: Props = $props()
+  let { subjectLabel, targetLabel, previewFn, applyFn, onClose, onApplied }: Props = $props()
 
   let loading = $state(true)
   let applying = $state(false)
@@ -45,7 +58,7 @@
     loading = true
     error = null
     try {
-      const r = await window.api.engines.previewEditorSettings(engine.path)
+      const r = await previewFn()
       if (!r.ok) {
         error = r.error ?? 'Preview failed'
         return
@@ -66,7 +79,7 @@
     applying = true
     error = null
     try {
-      const r = await window.api.engines.applyEditorSettings(engine.path)
+      const r = await applyFn()
       if (!r.ok) {
         error = r.error ?? 'Apply failed'
         return
@@ -117,10 +130,10 @@
     mouseDownOnBackdrop = false
   }}
 >
-  <div class="popup" role="dialog" aria-modal="true" aria-label="Editor settings preview">
+  <div class="popup" role="dialog" aria-modal="true" aria-label="{subjectLabel} preview">
     <header>
       <div class="head-lead">
-        <h2>Editor settings diff · {engine.name}</h2>
+        <h2>{subjectLabel} diff · {targetLabel}</h2>
         {#if summary}
           <p class="subtitle" title={summary}>
             {summary}

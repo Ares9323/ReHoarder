@@ -278,6 +278,33 @@ export interface UninstallPluginResult {
   pluginDir?: string
 }
 
+export interface BuiltInPluginPresetMeta {
+  id: string
+  label: string
+  description: string | null
+  pluginCount: number
+}
+
+export interface UseBuiltInPluginResult {
+  ok: boolean
+  error?: string
+  path?: string
+}
+
+export interface IniPresetMeta {
+  id: string
+  label: string
+  description: string | null
+  /** Unit count (chord rules or settings overrides); `null` hides the column. */
+  count: number | null
+}
+
+export interface UseIniPresetResult {
+  ok: boolean
+  error?: string
+  path?: string
+}
+
 export interface EditorSettingsInfo {
   engineIniPath: string
   hasSentinel: boolean
@@ -321,6 +348,52 @@ export interface DiffOp {
 }
 
 export interface PreviewEditorSettingsResult {
+  ok: boolean
+  error?: string
+  current?: string
+  proposed?: string
+  diff?: DiffOp[]
+  summary?: string
+  willCaptureBaseline?: boolean
+  warnings?: string[]
+}
+
+export interface KeyBindingsInfo {
+  iniPath: string
+  hasSentinel: boolean
+  hasBackup: boolean
+  masterHash: string | null
+}
+
+export interface KeyBindingsInfoResult extends KeyBindingsInfo {
+  ok: boolean
+  error?: string
+}
+
+export interface ApplyKeyBindingsResult {
+  ok: boolean
+  error?: string
+  iniPath?: string
+  backupPath?: string
+  backupWritten?: boolean
+  summary?: string
+}
+
+export interface RestoreKeyBindingsResult {
+  ok: boolean
+  error?: string
+  iniPath?: string
+}
+
+export interface ApplyKeyBindingsToAllResult {
+  ok: boolean
+  error?: string
+  versionsProcessed?: number
+  summaries?: Array<{ version: string; summary: string }>
+  failures?: Array<{ version: string; error: string }>
+}
+
+export interface PreviewKeyBindingsResult {
   ok: boolean
   error?: string
   current?: string
@@ -626,6 +699,13 @@ const api = {
       ipcRenderer.invoke('engines:set-preset-path-per-engine', engineRoot, presetPath),
     pickPresetFile: (): Promise<PickFileResult> =>
       ipcRenderer.invoke('engines:pick-preset-file'),
+    listPluginPresetLibrary: (): Promise<{
+      ok: boolean
+      presets?: BuiltInPluginPresetMeta[]
+      error?: string
+    }> => ipcRenderer.invoke('engines:list-plugin-preset-library'),
+    usePluginPresetFromLibrary: (id: string): Promise<UseBuiltInPluginResult> =>
+      ipcRenderer.invoke('engines:use-plugin-preset-from-library', id),
     applyPresetToAll: (presetPath: string): Promise<ApplyPresetToAllResult> =>
       ipcRenderer.invoke('engines:apply-preset-to-all', presetPath),
     presetAddPlugin: (engineRoot: string, entry: PluginPresetEntry): Promise<PresetMutationResult> =>
@@ -648,10 +728,36 @@ const api = {
       ipcRenderer.invoke('engines:apply-editor-settings-to-all'),
     pickMasterIniFile: (): Promise<PickFileResult> =>
       ipcRenderer.invoke('engines:pick-master-ini-file'),
-    createMasterTemplate: (variant: 'basic' | 'aresRecommended' = 'basic'): Promise<PickFileResult> =>
-      ipcRenderer.invoke('engines:create-master-template', variant),
+    listEditorSettingsPresetLibrary: (): Promise<{
+      ok: boolean
+      presets?: IniPresetMeta[]
+      error?: string
+    }> => ipcRenderer.invoke('engines:list-editor-settings-preset-library'),
+    useEditorSettingsPresetFromLibrary: (id: string): Promise<UseIniPresetResult> =>
+      ipcRenderer.invoke('engines:use-editor-settings-preset-from-library', id),
     openMasterIniFile: (masterPath: string): Promise<EnginesOpenResult> =>
-      ipcRenderer.invoke('engines:open-master-ini-file', masterPath)
+      ipcRenderer.invoke('engines:open-master-ini-file', masterPath),
+    keybindingsInfo: (engineRoot: string): Promise<KeyBindingsInfoResult> =>
+      ipcRenderer.invoke('engines:keybindings-info', engineRoot),
+    previewKeybindings: (engineRoot: string): Promise<PreviewKeyBindingsResult> =>
+      ipcRenderer.invoke('engines:preview-keybindings', engineRoot),
+    applyKeybindings: (engineRoot: string): Promise<ApplyKeyBindingsResult> =>
+      ipcRenderer.invoke('engines:apply-keybindings', engineRoot),
+    restoreKeybindings: (engineRoot: string): Promise<RestoreKeyBindingsResult> =>
+      ipcRenderer.invoke('engines:restore-keybindings', engineRoot),
+    applyKeybindingsToAll: (): Promise<ApplyKeyBindingsToAllResult> =>
+      ipcRenderer.invoke('engines:apply-keybindings-to-all'),
+    pickKeybindingsFile: (): Promise<PickFileResult> =>
+      ipcRenderer.invoke('engines:pick-keybindings-file'),
+    listKeybindingsPresetLibrary: (): Promise<{
+      ok: boolean
+      presets?: IniPresetMeta[]
+      error?: string
+    }> => ipcRenderer.invoke('engines:list-keybindings-preset-library'),
+    useKeybindingsPresetFromLibrary: (id: string): Promise<UseIniPresetResult> =>
+      ipcRenderer.invoke('engines:use-keybindings-preset-from-library', id),
+    openKeybindingsFile: (masterPath: string): Promise<EnginesOpenResult> =>
+      ipcRenderer.invoke('engines:open-keybindings-file', masterPath)
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),

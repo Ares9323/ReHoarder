@@ -3,7 +3,7 @@
   import { settingsVersion } from '../stores/settings-events.svelte'
   import { enginesStore } from '../stores/engines.svelte'
   import EnginePluginsPanel from './EnginePluginsPanel.svelte'
-  import EditorSettingsPreviewDialog from './EditorSettingsPreviewDialog.svelte'
+  import IniMasterPreviewDialog from './IniMasterPreviewDialog.svelte'
 
   interface EngineInfo {
     name: string
@@ -31,12 +31,14 @@
     engine: EngineInfo
     /** Snapshotted at open time so the menu items can show/hide Restore. */
     editorSettings: { hasBackup: boolean; hasSentinel: boolean } | null
+    keybindings: { hasBackup: boolean; hasSentinel: boolean } | null
   } | null>(null)
   let editorSettingsStatus = $state<string | null>(null)
   let editorSettingsError = $state<string | null>(null)
   let editorSettingsBusy = $state(false)
-  /** Engine currently being previewed; non-null means the dialog is open. */
+  /** Preview dialog state: which engine + which subject (editor settings vs keybindings). */
   let previewingEngine = $state<EngineInfo | null>(null)
+  let previewSubject = $state<'editor-settings' | 'keybindings'>('editor-settings')
 
   onMount(() => {
     void enginesStore.ensureLoaded()
@@ -66,20 +68,29 @@
 
   async function openContextMenu(e: MouseEvent, engine: EngineInfo): Promise<void> {
     e.preventDefault()
-    contextMenu = { x: e.clientX, y: e.clientY, engine, editorSettings: null }
-    // Best-effort: fetch editor-settings status for this engine so the menu
-    // can hide Restore when there's nothing to restore from. Doesn't block
-    // the menu from opening — if the call fails we just show the option.
-    try {
-      const r = await window.api.engines.editorSettingsInfo(engine.path)
-      if (contextMenu && contextMenu.engine.path === engine.path) {
-        contextMenu = {
-          ...contextMenu,
-          editorSettings: r.ok ? { hasBackup: r.hasBackup, hasSentinel: r.hasSentinel } : null
-        }
-      }
-    } catch {
-      /* ignore — menu still works without the hint */
+    contextMenu = {
+      x: e.clientX,
+      y: e.clientY,
+      engine,
+      editorSettings: null,
+      keybindings: null
+    }
+    // Best-effort: fetch both editor-settings and keybindings status so the
+    // menu can hide Restore items when there's nothing to restore from.
+    // Either call failing is harmless — the menu still works.
+    const [esRes, kbRes] = await Promise.all([
+      window.api.engines.editorSettingsInfo(engine.path).catch(() => null),
+      window.api.engines.keybindingsInfo(engine.path).catch(() => null)
+    ])
+    if (!contextMenu || contextMenu.engine.path !== engine.path) return
+    contextMenu = {
+      ...contextMenu,
+      editorSettings: esRes?.ok
+        ? { hasBackup: esRes.hasBackup, hasSentinel: esRes.hasSentinel }
+        : null,
+      keybindings: kbRes?.ok
+        ? { hasBackup: kbRes.hasBackup, hasSentinel: kbRes.hasSentinel }
+        : null
     }
   }
 
@@ -119,6 +130,15 @@
     if (!contextMenu) return
     const eng = contextMenu.engine
     closeContextMenu()
+    previewSubject = 'editor-settings'
+    previewingEngine = eng
+  }
+
+  function ctxPreviewKeybindings(): void {
+    if (!contextMenu) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    previewSubject = 'keybindings'
     previewingEngine = eng
   }
 
@@ -135,6 +155,26 @@
         return
       }
       flashEditorStatus(`Editor settings restored on ${eng.name}`)
+    } catch (err) {
+      editorSettingsError = err instanceof Error ? err.message : String(err)
+    } finally {
+      editorSettingsBusy = false
+    }
+  }
+
+  async function ctxRestoreKeybindings(): Promise<void> {
+    if (!contextMenu || editorSettingsBusy) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    editorSettingsBusy = true
+    editorSettingsError = null
+    try {
+      const r = await window.api.engines.restoreKeybindings(eng.path)
+      if (!r.ok) {
+        editorSettingsError = r.error ?? 'Restore failed'
+        return
+      }
+      flashEditorStatus(`Keybindings restored for ${eng.name}`)
     } catch (err) {
       editorSettingsError = err instanceof Error ? err.message : String(err)
     } finally {
@@ -290,6 +330,24 @@
         Restore editor settings from baseline
       </button>
     {/if}
+    <button
+      type="button"
+      role="menuitem"
+      onclick={ctxPreviewKeybindings}
+      disabled={editorSettingsBusy}
+    >
+      Preview keybindings master…
+    </button>
+    {#if cm.keybindings?.hasBackup}
+      <button
+        type="button"
+        role="menuitem"
+        onclick={() => void ctxRestoreKeybindings()}
+        disabled={editorSettingsBusy}
+      >
+        Restore keybindings from baseline
+      </button>
+    {/if}
   </div>
 {/if}
 
@@ -305,14 +363,26 @@
 
 {#if previewingEngine}
   {@const eng = previewingEngine}
-  <EditorSettingsPreviewDialog
-    engine={eng}
+  {@const subject = previewSubject}
+  <IniMasterPreviewDialog
+    subjectLabel={subject === 'keybindings' ? 'Keybindings' : 'Editor settings'}
+    targetLabel={subject === 'keybindings' ? `${eng.name} user config` : eng.name}
+    previewFn={() =>
+      subject === 'keybindings'
+        ? window.api.engines.previewKeybindings(eng.path)
+        : window.api.engines.previewEditorSettings(eng.path)}
+    applyFn={() =>
+      subject === 'keybindings'
+        ? window.api.engines.applyKeybindings(eng.path)
+        : window.api.engines.applyEditorSettings(eng.path)}
     onClose={() => (previewingEngine = null)}
     onApplied={(info) => {
       const summary = info.summary ?? ''
-      flashEditorStatus(
-        summary ? `Editor settings applied to ${eng.name} — ${summary}` : `Editor settings applied to ${eng.name}`
-      )
+      const head =
+        subject === 'keybindings'
+          ? `Keybindings applied for ${eng.name}`
+          : `Editor settings applied to ${eng.name}`
+      flashEditorStatus(summary ? `${head} — ${summary}` : head)
     }}
   />
 {/if}

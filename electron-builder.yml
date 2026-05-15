@@ -22,6 +22,12 @@ files:
 asarUnpack:
   - '**/*.node'
 
+extraResources:
+  - from: resources/presets
+    to: presets
+    filter:
+      - '**/*'
+
 win:
   target:
     - target: nsis

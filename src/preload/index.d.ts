@@ -349,6 +349,32 @@ export interface UninstallPluginResult {
   pluginDir?: string
 }
 
+export interface BuiltInPluginPresetMeta {
+  id: string
+  label: string
+  description: string | null
+  pluginCount: number
+}
+
+export interface UseBuiltInPluginResult {
+  ok: boolean
+  error?: string
+  path?: string
+}
+
+export interface IniPresetMeta {
+  id: string
+  label: string
+  description: string | null
+  count: number | null
+}
+
+export interface UseIniPresetResult {
+  ok: boolean
+  error?: string
+  path?: string
+}
+
 export interface EditorSettingsInfo {
   engineIniPath: string
   hasSentinel: boolean
@@ -402,6 +428,52 @@ export interface PreviewEditorSettingsResult {
   warnings?: string[]
 }
 
+export interface KeyBindingsInfo {
+  iniPath: string
+  hasSentinel: boolean
+  hasBackup: boolean
+  masterHash: string | null
+}
+
+export interface KeyBindingsInfoResult extends KeyBindingsInfo {
+  ok: boolean
+  error?: string
+}
+
+export interface ApplyKeyBindingsResult {
+  ok: boolean
+  error?: string
+  iniPath?: string
+  backupPath?: string
+  backupWritten?: boolean
+  summary?: string
+}
+
+export interface RestoreKeyBindingsResult {
+  ok: boolean
+  error?: string
+  iniPath?: string
+}
+
+export interface ApplyKeyBindingsToAllResult {
+  ok: boolean
+  error?: string
+  versionsProcessed?: number
+  summaries?: Array<{ version: string; summary: string }>
+  failures?: Array<{ version: string; error: string }>
+}
+
+export interface PreviewKeyBindingsResult {
+  ok: boolean
+  error?: string
+  current?: string
+  proposed?: string
+  diff?: DiffOp[]
+  summary?: string
+  willCaptureBaseline?: boolean
+  warnings?: string[]
+}
+
 export interface EnginesApi {
   list(): Promise<EnginesListResult>
   openInExplorer(absolutePath: string): Promise<EnginesOpenResult>
@@ -415,6 +487,12 @@ export interface EnginesApi {
     presetPath: string | null
   ): Promise<{ ok: boolean; error?: string }>
   pickPresetFile(): Promise<PickFileResult>
+  listPluginPresetLibrary(): Promise<{
+    ok: boolean
+    presets?: BuiltInPluginPresetMeta[]
+    error?: string
+  }>
+  usePluginPresetFromLibrary(id: string): Promise<UseBuiltInPluginResult>
   applyPresetToAll(presetPath: string): Promise<ApplyPresetToAllResult>
   presetAddPlugin(engineRoot: string, entry: PluginPresetEntry): Promise<PresetMutationResult>
   presetRemovePlugin(engineRoot: string, name: string): Promise<PresetMutationResult>
@@ -426,8 +504,26 @@ export interface EnginesApi {
   restoreEditorSettings(engineRoot: string): Promise<RestoreEditorSettingsResult>
   applyEditorSettingsToAll(): Promise<ApplyEditorSettingsToAllResult>
   pickMasterIniFile(): Promise<PickFileResult>
-  createMasterTemplate(variant?: 'basic' | 'aresRecommended'): Promise<PickFileResult>
+  listEditorSettingsPresetLibrary(): Promise<{
+    ok: boolean
+    presets?: IniPresetMeta[]
+    error?: string
+  }>
+  useEditorSettingsPresetFromLibrary(id: string): Promise<UseIniPresetResult>
   openMasterIniFile(masterPath: string): Promise<EnginesOpenResult>
+  keybindingsInfo(engineRoot: string): Promise<KeyBindingsInfoResult>
+  previewKeybindings(engineRoot: string): Promise<PreviewKeyBindingsResult>
+  applyKeybindings(engineRoot: string): Promise<ApplyKeyBindingsResult>
+  restoreKeybindings(engineRoot: string): Promise<RestoreKeyBindingsResult>
+  applyKeybindingsToAll(): Promise<ApplyKeyBindingsToAllResult>
+  pickKeybindingsFile(): Promise<PickFileResult>
+  listKeybindingsPresetLibrary(): Promise<{
+    ok: boolean
+    presets?: IniPresetMeta[]
+    error?: string
+  }>
+  useKeybindingsPresetFromLibrary(id: string): Promise<UseIniPresetResult>
+  openKeybindingsFile(masterPath: string): Promise<EnginesOpenResult>
 }
 
 export interface ProjectInfo {

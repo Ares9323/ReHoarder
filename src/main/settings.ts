@@ -50,6 +50,8 @@ export interface AppSettings {
   pluginPresetPerEngine: Record<string, string>
   /** Absolute path to a master `BaseEditorPerProjectUserSettings.ini` that the user maintains; applied to every engine's Editor settings on demand. Empty disables the feature. */
   editorSettingsMasterPath: string
+  /** Absolute path to a master `EditorKeyBindings.ini`; applied to the per-user, per-engine-version config file. Empty disables the feature. */
+  editorKeyBindingsMasterPath: string
 }
 
 const SETTINGS_KEY = 'app_settings_v1'
@@ -106,7 +108,8 @@ export function defaultSettings(): AppSettings {
     gameLaunchParams: ['-log', '-windowed', '-ResX=1280', '-ResY=720'],
     pluginPresetGlobalPath: '',
     pluginPresetPerEngine: {},
-    editorSettingsMasterPath: ''
+    editorSettingsMasterPath: '',
+    editorKeyBindingsMasterPath: ''
   }
 }
 
@@ -198,7 +201,11 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
     editorSettingsMasterPath:
       typeof partial.editorSettingsMasterPath === 'string'
         ? partial.editorSettingsMasterPath.trim()
-        : d.editorSettingsMasterPath
+        : d.editorSettingsMasterPath,
+    editorKeyBindingsMasterPath:
+      typeof partial.editorKeyBindingsMasterPath === 'string'
+        ? partial.editorKeyBindingsMasterPath.trim()
+        : d.editorKeyBindingsMasterPath
   }
 }
 

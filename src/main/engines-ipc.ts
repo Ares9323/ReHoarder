@@ -25,15 +25,36 @@ import {
   type PluginPresetEntry
 } from './engine-plugin-preset'
 import {
+  listBuiltInPlugins,
+  useBuiltInPlugin,
+  type BuiltInPresetMeta,
+  type UseBuiltInPluginResult
+} from './plugin-preset-library'
+import {
   applyEditorSettings,
   readEditorSettingsInfo,
   restoreEditorSettings,
-  pickMasterTemplate,
   type ApplyEditorSettingsResult,
   type EditorSettingsInfo,
-  type MasterTemplateVariant,
   type RestoreEditorSettingsResult
 } from './engine-editor-settings'
+import {
+  applyKeyBindings,
+  readKeyBindingsInfo,
+  restoreKeyBindings,
+  shortEngineVersion,
+  type ApplyKeyBindingsResult,
+  type KeyBindingsInfo,
+  type RestoreKeyBindingsResult
+} from './engine-keybindings'
+import {
+  countEditorSettingsOverrides,
+  countKeybindingsChords,
+  listIniPresets,
+  useIniPreset,
+  type IniPresetMeta,
+  type UseIniPresetResult
+} from './ini-preset-library'
 import { diffLines, type DiffOp } from './text-diff'
 import { promises as fsp } from 'node:fs'
 import type { AppSettings, SettingsStore } from './settings'
@@ -134,6 +155,30 @@ export interface PreviewEditorSettingsResult {
   warnings?: string[]
 }
 
+export interface KeyBindingsInfoResult extends KeyBindingsInfo {
+  ok: boolean
+  error?: string
+}
+
+export interface PreviewKeyBindingsResult {
+  ok: boolean
+  error?: string
+  current?: string
+  proposed?: string
+  diff?: DiffOp[]
+  summary?: string
+  willCaptureBaseline?: boolean
+  warnings?: string[]
+}
+
+export interface ApplyKeyBindingsToAllResult {
+  ok: boolean
+  error?: string
+  versionsProcessed?: number
+  summaries?: Array<{ version: string; summary: string }>
+  failures?: Array<{ version: string; error: string }>
+}
+
 /**
  * Expose engine scanning to the renderer. The list of base directories
  * comes from `settings.enginePaths`; the renderer never controls which
@@ -161,6 +206,23 @@ export function registerEnginesIpc(settings: SettingsStore): void {
     const cfg = settings.load()
     const resolved = path.resolve(absolutePath)
     return cfg.enginePaths.some((root) => resolved.startsWith(path.resolve(root)))
+  }
+
+  /**
+   * Resolve an engine install path to its short version (`5.6`). Scans the
+   * configured engine paths, finds the one matching `engineRoot`, then takes
+   * `major.minor` of its detected version. Returns null when the engine
+   * isn't present in the scan (deleted? path drift?).
+   */
+  async function resolveEngineVersionShort(engineRoot: string): Promise<string | null> {
+    const cfg = settings.load()
+    const engines = await scanEngines(cfg.enginePaths)
+    const resolvedRoot = path.resolve(engineRoot)
+    const match = engines.find(
+      (e) => path.resolve(e.path).toLowerCase() === resolvedRoot.toLowerCase()
+    )
+    if (!match) return null
+    return shortEngineVersion(match.version)
   }
 
   /**
@@ -293,6 +355,31 @@ export function registerEnginesIpc(settings: SettingsStore): void {
       })
       if (r.canceled || r.filePaths.length === 0) return { ok: true, path: null }
       return { ok: true, path: r.filePaths[0] }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:list-plugin-preset-library',
+    async (): Promise<{ ok: boolean; presets?: BuiltInPresetMeta[]; error?: string }> => {
+      try {
+        const presets = await listBuiltInPlugins()
+        return { ok: true, presets }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:use-plugin-preset-from-library',
+    async (_e, id: string): Promise<UseBuiltInPluginResult> => {
+      const r = await useBuiltInPlugin(id)
+      if (!r.ok || !r.path) return r
+      // Stamp the freshly-written file as the global preset so the rest of
+      // the app (Add to config, Apply to all, …) picks it up immediately.
+      const cfg = settings.load()
+      settings.saveAll({ ...cfg, pluginPresetGlobalPath: r.path })
+      return r
     }
   )
 
@@ -436,6 +523,188 @@ export function registerEnginesIpc(settings: SettingsStore): void {
     }
   )
 
+  // -------- Keybindings master IPCs --------
+
+  ipcMain.handle(
+    'engines:keybindings-info',
+    async (
+      _e,
+      engineRoot: string
+    ): Promise<KeyBindingsInfoResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return {
+          ok: false,
+          iniPath: '',
+          hasSentinel: false,
+          hasBackup: false,
+          masterHash: null,
+          error: 'Engine path is outside the configured engine roots'
+        }
+      }
+      const ver = await resolveEngineVersionShort(engineRoot)
+      if (!ver) {
+        return {
+          ok: false,
+          iniPath: '',
+          hasSentinel: false,
+          hasBackup: false,
+          masterHash: null,
+          error: 'Could not resolve engine version'
+        }
+      }
+      const info = await readKeyBindingsInfo(ver)
+      return { ok: true, ...info }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:preview-keybindings',
+    async (_e, engineRoot: string): Promise<PreviewKeyBindingsResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      const cfg = settings.load()
+      const master = cfg.editorKeyBindingsMasterPath?.trim()
+      if (!master) {
+        return {
+          ok: false,
+          error: 'No keybindings master configured — set the path under Settings → Engines.'
+        }
+      }
+      const ver = await resolveEngineVersionShort(engineRoot)
+      if (!ver) return { ok: false, error: 'Could not resolve engine version' }
+      const r = await applyKeyBindings(ver, master, { dryRun: true })
+      if (!r.ok) return { ok: false, error: r.error }
+      const current = r.currentContent ?? ''
+      const proposed = r.proposedContent ?? ''
+      return {
+        ok: true,
+        current,
+        proposed,
+        diff: diffLines(current, proposed),
+        summary: r.summary,
+        willCaptureBaseline: r.backupWritten ?? false,
+        warnings: r.patch?.warnings ?? []
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:apply-keybindings',
+    async (_e, engineRoot: string): Promise<ApplyKeyBindingsResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      const cfg = settings.load()
+      const master = cfg.editorKeyBindingsMasterPath?.trim()
+      if (!master) {
+        return { ok: false, error: 'No keybindings master configured.' }
+      }
+      const ver = await resolveEngineVersionShort(engineRoot)
+      if (!ver) return { ok: false, error: 'Could not resolve engine version' }
+      return await applyKeyBindings(ver, master)
+    }
+  )
+
+  ipcMain.handle(
+    'engines:restore-keybindings',
+    async (_e, engineRoot: string): Promise<RestoreKeyBindingsResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      const ver = await resolveEngineVersionShort(engineRoot)
+      if (!ver) return { ok: false, error: 'Could not resolve engine version' }
+      return await restoreKeyBindings(ver)
+    }
+  )
+
+  ipcMain.handle(
+    'engines:apply-keybindings-to-all',
+    async (): Promise<ApplyKeyBindingsToAllResult> => {
+      const cfg = settings.load()
+      const master = cfg.editorKeyBindingsMasterPath?.trim()
+      if (!master) {
+        return { ok: false, error: 'No keybindings master configured.' }
+      }
+      const engines = await scanEngines(cfg.enginePaths)
+      // Multiple installs of the same version share the same per-user
+      // keybindings file — dedupe so we don't re-merge it N times.
+      const versions = Array.from(
+        new Set(engines.map((e) => shortEngineVersion(e.version)))
+      ).filter((v) => v.length > 0)
+      const summaries: Array<{ version: string; summary: string }> = []
+      const failures: Array<{ version: string; error: string }> = []
+      for (const ver of versions) {
+        const r = await applyKeyBindings(ver, master)
+        if (r.ok && r.summary) summaries.push({ version: ver, summary: r.summary })
+        else failures.push({ version: ver, error: r.error ?? 'unknown error' })
+      }
+      return { ok: true, versionsProcessed: versions.length, summaries, failures }
+    }
+  )
+
+  ipcMain.handle('engines:pick-keybindings-file', async (): Promise<PickFileResult> => {
+    const r = await dialog.showOpenDialog({
+      title: 'Pick master EditorKeyBindings.ini',
+      properties: ['openFile'],
+      filters: [
+        { name: 'INI', extensions: ['ini'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    })
+    if (r.canceled || r.filePaths.length === 0) return { ok: true, path: null }
+    return { ok: true, path: r.filePaths[0] }
+  })
+
+  ipcMain.handle(
+    'engines:list-keybindings-preset-library',
+    async (): Promise<{ ok: boolean; presets?: IniPresetMeta[]; error?: string }> => {
+      try {
+        const presets = await listIniPresets('keybindings', countKeybindingsChords)
+        return { ok: true, presets }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:use-keybindings-preset-from-library',
+    async (_e, id: string): Promise<UseIniPresetResult> => {
+      const dest = path.join(app.getPath('userData'), 'EditorKeyBindings-master.ini')
+      const r = await useIniPreset({ subdir: 'keybindings', dest, id })
+      if (!r.ok || !r.path) return r
+      const cfg = settings.load()
+      settings.saveAll({ ...cfg, editorKeyBindingsMasterPath: r.path })
+      return r
+    }
+  )
+
+  ipcMain.handle(
+    'engines:open-keybindings-file',
+    async (_e, masterPath: string): Promise<EnginesOpenResult> => {
+      const cfg = settings.load()
+      const resolved = path.resolve(masterPath)
+      const configured = cfg.editorKeyBindingsMasterPath
+        ? path.resolve(cfg.editorKeyBindingsMasterPath)
+        : null
+      const fold = process.platform === 'win32'
+      const same =
+        configured !== null &&
+        (fold ? configured.toLowerCase() === resolved.toLowerCase() : configured === resolved)
+      if (!same) {
+        return { ok: false, error: 'Keybindings master path is not registered in Settings' }
+      }
+      try {
+        const err = await shell.openPath(resolved)
+        if (err) return { ok: false, error: err }
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
   ipcMain.handle('engines:pick-master-ini-file', async (): Promise<PickFileResult> => {
     const r = await dialog.showOpenDialog({
       title: 'Pick master BaseEditorPerProjectUserSettings.ini',
@@ -450,33 +719,29 @@ export function registerEnginesIpc(settings: SettingsStore): void {
   })
 
   ipcMain.handle(
-    'engines:create-master-template',
-    async (_e, variant: MasterTemplateVariant = 'basic'): Promise<PickFileResult> => {
-      const defaultName =
-        variant === 'aresRecommended'
-          ? 'BaseEditorPerProjectUserSettings-AresRecommended.ini'
-          : 'BaseEditorPerProjectUserSettings.ini'
-      const r = await dialog.showSaveDialog({
-        title:
-          variant === 'aresRecommended'
-            ? 'Save Ares-recommended master ini'
-            : 'Save sample master ini',
-        defaultPath: defaultName,
-        filters: [
-          { name: 'INI', extensions: ['ini'] },
-          { name: 'All files', extensions: ['*'] }
-        ]
-      })
-      if (r.canceled || !r.filePath) return { ok: true, path: null }
+    'engines:list-editor-settings-preset-library',
+    async (): Promise<{ ok: boolean; presets?: IniPresetMeta[]; error?: string }> => {
       try {
-        await fsp.writeFile(r.filePath, pickMasterTemplate(variant), 'utf-8')
-        return { ok: true, path: r.filePath }
+        const presets = await listIniPresets('editor-settings', countEditorSettingsOverrides)
+        return { ok: true, presets }
       } catch (err) {
-        return {
-          ok: false,
-          error: `Could not write template: ${err instanceof Error ? err.message : String(err)}`
-        }
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:use-editor-settings-preset-from-library',
+    async (_e, id: string): Promise<UseIniPresetResult> => {
+      const dest = path.join(
+        app.getPath('userData'),
+        'BaseEditorPerProjectUserSettings-master.ini'
+      )
+      const r = await useIniPreset({ subdir: 'editor-settings', dest, id })
+      if (!r.ok || !r.path) return r
+      const cfg = settings.load()
+      settings.saveAll({ ...cfg, editorSettingsMasterPath: r.path })
+      return r
     }
   )
 
