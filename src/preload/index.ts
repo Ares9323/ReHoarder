@@ -723,6 +723,19 @@ export interface EngineDownloadsSuggestDirResult {
   path?: string
 }
 
+export interface EngineDownloadsCheckDirResult {
+  ok: boolean
+  error?: string
+  requiresAdmin: boolean
+  isElevated: boolean
+  installDir: string
+}
+
+export interface EngineDownloadsRelaunchResult {
+  ok: boolean
+  error?: string
+}
+
 export interface EngineInstalledEvent {
   appName: string
   installDir: string
@@ -898,6 +911,10 @@ const api = {
       ipcRenderer.invoke('engine-downloads:fetch-install-plan', sku),
     suggestInstallDir: (appName: string): Promise<EngineDownloadsSuggestDirResult> =>
       ipcRenderer.invoke('engine-downloads:suggest-install-dir', appName),
+    checkInstallDir: (installDir: string): Promise<EngineDownloadsCheckDirResult> =>
+      ipcRenderer.invoke('engine-downloads:check-install-dir', installDir),
+    relaunchElevated: (): Promise<EngineDownloadsRelaunchResult> =>
+      ipcRenderer.invoke('engine-downloads:relaunch-elevated'),
     pickInstallDir: (defaultPath: string | null): Promise<EngineDownloadsPickDirResult> =>
       ipcRenderer.invoke('engine-downloads:pick-install-dir', defaultPath),
     install: (args: {

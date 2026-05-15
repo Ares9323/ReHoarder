@@ -62,6 +62,16 @@
   /** Toast surfaced once a confirm fires — task #15 hooks the real queue;
    *  for this commit we just show the user what would have been queued. */
   let installerFlash = $state<string | null>(null)
+  /** Elevation prompt — set when the user picks a UAC-protected install
+   *  directory but ReHoarder isn't running elevated. `payload` keeps the
+   *  install args alive so we could re-issue them after the relaunch, but
+   *  v1 just exits without resuming; the user re-opens the dialog post-
+   *  relaunch and clicks Install again. */
+  let elevationPrompt = $state<{
+    installDir: string
+    appName: string
+  } | null>(null)
+  let relaunchingElevated = $state(false)
 
   onMount(() => {
     void enginesStore.ensureLoaded()
@@ -543,6 +553,22 @@
     sku={s}
     onClose={() => (installerSelectedSku = null)}
     onConfirm={async (payload) => {
+      // Pre-flight: if the user picked a UAC-protected location and we're
+      // not elevated, the chunk runner would EPERM on the first mkdir.
+      // Surface a relaunch prompt instead of queueing a doomed download.
+      try {
+        const check = await window.api.engineDownloads.checkInstallDir(payload.installDir)
+        if (check.ok && check.requiresAdmin && !check.isElevated) {
+          elevationPrompt = {
+            installDir: payload.installDir,
+            appName: payload.sku.appName
+          }
+          return
+        }
+      } catch {
+        // Check failure isn't fatal — proceed and let the runner surface
+        // any real error in the Downloads row.
+      }
       const r = await window.api.engineDownloads.install({
         sku: {
           namespace: payload.sku.namespace,
@@ -567,6 +593,69 @@
       installerOwnedEngines = null
     }}
   />
+{/if}
+
+{#if elevationPrompt}
+  {@const p = elevationPrompt}
+  <div
+    class="confirm-backdrop"
+    role="presentation"
+    onclick={(e) => {
+      if (
+        (e.target as HTMLElement).classList.contains('confirm-backdrop') &&
+        !relaunchingElevated
+      ) {
+        elevationPrompt = null
+      }
+    }}
+  >
+    <div class="confirm-popup" role="dialog" aria-modal="true" aria-label="Relaunch as administrator">
+      <h3>This install location needs admin</h3>
+      <p>
+        <code>{p.installDir}</code> is a UAC-protected Windows location
+        (Program Files, Windows, …). ReHoarder is running as a normal user,
+        so the chunk writer would fail with <code>EPERM</code> on the first
+        <code>mkdir</code>.
+      </p>
+      <p class="hint">
+        Relaunch ReHoarder elevated to install <strong>{p.appName}</strong>
+        there, or pick a user-writable folder (anywhere under your user
+        profile, or a top-level folder on another drive you created
+        yourself, works without admin). The downloads queue + library
+        state persist across the relaunch — only the open dialog has to
+        be reopened.
+      </p>
+      <div class="confirm-actions">
+        <button
+          type="button"
+          class="ghost"
+          disabled={relaunchingElevated}
+          onclick={() => (elevationPrompt = null)}
+        >
+          Pick another folder
+        </button>
+        <button
+          type="button"
+          class="primary"
+          disabled={relaunchingElevated}
+          onclick={async () => {
+            relaunchingElevated = true
+            const r = await window.api.engineDownloads.relaunchElevated()
+            if (!r.ok) {
+              relaunchingElevated = false
+              flashInstaller(`Could not relaunch elevated: ${r.error}`)
+              elevationPrompt = null
+            }
+            // On success the app quits — no further UI work needed; if
+            // for some reason the elevated process can't spawn, the catch
+            // above shows the error.
+          }}
+        >
+          {relaunchingElevated ? 'Relaunching…' : 'Relaunch as administrator'}
+        </button>
+      </div>
+    </div>
+  </div>
 {/if}
 
 <svelte:window

@@ -1,4 +1,5 @@
 import { app, dialog, ipcMain } from 'electron'
+import { spawn, spawnSync } from 'node:child_process'
 import * as path from 'node:path'
 import type { Session } from '../auth/session'
 import type { DownloadsManager } from '../downloads-manager'
@@ -88,6 +89,25 @@ export interface EngineDownloadsSuggestDirResult {
   path?: string
 }
 
+export interface EngineDownloadsCheckDirResult {
+  ok: boolean
+  error?: string
+  /** True when `installDir` falls under a Windows UAC-protected location
+   *  (Program Files, Program Files (x86), Windows). Always `false` on
+   *  Linux/macOS — those don't gate user writes to typical install paths. */
+  requiresAdmin: boolean
+  /** True when the running ReHoarder process is admin-elevated (per-user
+   *  Windows installs default to non-elevated). On non-Windows always true. */
+  isElevated: boolean
+  /** Echoed back so the renderer can label the confirm modal. */
+  installDir: string
+}
+
+export interface EngineDownloadsRelaunchResult {
+  ok: boolean
+  error?: string
+}
+
 export function registerEngineDownloadsIpc(
   session: Session,
   downloadsManager: DownloadsManager,
@@ -133,6 +153,32 @@ export function registerEngineDownloadsIpc(
             fetchedAt: plan.entry.fetchedAt
           }
         }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engine-downloads:check-install-dir',
+    async (_event, installDir: string): Promise<EngineDownloadsCheckDirResult> => {
+      const requiresAdmin = pathRequiresAdmin(installDir)
+      const elevated = isElevatedNow()
+      return {
+        ok: true,
+        requiresAdmin,
+        isElevated: elevated,
+        installDir
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engine-downloads:relaunch-elevated',
+    async (): Promise<EngineDownloadsRelaunchResult> => {
+      try {
+        relaunchElevatedWindows()
+        return { ok: true }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
@@ -204,6 +250,97 @@ export function registerEngineDownloadsIpc(
       }
     }
   )
+}
+
+/**
+ * Returns `true` when the path is rooted in a Windows location that
+ * requires UAC elevation for normal writes — Program Files, Program Files
+ * (x86), or the Windows folder itself. We deliberately do NOT include
+ * `C:\ProgramData\` (many apps write there as a regular user) or the bare
+ * system drive root (`C:\`) since user-created top-level folders there
+ * are usually writable.
+ */
+function pathRequiresAdmin(installDir: string): boolean {
+  if (process.platform !== 'win32') return false
+  const normalised = path.resolve(installDir).toLowerCase().replace(/\\+$/, '')
+  // `path.win32` knows about the system drive. Cover both 32-bit and 64-bit
+  // Program Files variants regardless of drive letter (rare but possible).
+  const candidates = [
+    process.env['ProgramFiles']?.toLowerCase(),
+    process.env['ProgramFiles(x86)']?.toLowerCase(),
+    process.env['ProgramW6432']?.toLowerCase(),
+    process.env.SystemRoot?.toLowerCase(),
+    process.env.windir?.toLowerCase()
+  ].filter((s): s is string => !!s && s.length > 0)
+  for (const c of candidates) {
+    const root = c.replace(/\\+$/, '')
+    if (normalised === root || normalised.startsWith(root + '\\')) return true
+  }
+  // Hard-coded English fallbacks in case env vars are missing (corporate
+  // GPO setups occasionally strip them).
+  const fallback = ['c:\\program files', 'c:\\program files (x86)', 'c:\\windows']
+  for (const root of fallback) {
+    if (normalised === root || normalised.startsWith(root + '\\')) return true
+  }
+  return false
+}
+
+/**
+ * Detect whether the current process is running with admin privileges.
+ * The canonical Windows trick is `net session`: it returns 0 when the
+ * caller has admin (the command lists local SMB sessions, a privileged
+ * operation) and non-zero with an "Access is denied" error otherwise. We
+ * suppress stdio so the user never sees the side-channel output.
+ *
+ * On non-Windows platforms we report `true` — they don't enforce admin
+ * on the typical install paths the engines feature uses.
+ */
+function isElevatedNow(): boolean {
+  if (process.platform !== 'win32') return true
+  try {
+    const r = spawnSync('net', ['session'], { windowsHide: true, stdio: 'ignore' })
+    return r.status === 0
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Re-spawn ReHoarder under a UAC elevation prompt and exit the current
+ * process. Uses PowerShell's `Start-Process -Verb RunAs`, which is the
+ * standard way to trigger UAC from a non-elevated parent without bundling
+ * a separate manifest. The relaunched copy inherits the same `userData`
+ * dir so settings + the downloads queue persist; the in-memory engine
+ * plan does NOT persist, so the user re-opens the dialog after restart.
+ */
+function relaunchElevatedWindows(): void {
+  if (process.platform !== 'win32') {
+    throw new Error('Elevation is only meaningful on Windows.')
+  }
+  // PowerShell single-quotes are literal — escape any apostrophe in the
+  // exe path by doubling it. Real-world this only matters for installs
+  // under `C:\Users\<name with '>` which is rare but cheap to handle.
+  const exe = process.execPath.replace(/'/g, "''")
+  const child = spawn(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-WindowStyle',
+      'Hidden',
+      '-Command',
+      `Start-Process -FilePath '${exe}' -Verb RunAs`
+    ],
+    {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    }
+  )
+  child.unref()
+  // Give the elevated process a beat to claim the UAC prompt before we
+  // exit — quitting too fast occasionally drops the prompt on some
+  // Windows builds (observed on 22H2 with fast-launch enabled).
+  setTimeout(() => app.quit(), 200)
 }
 
 /**
