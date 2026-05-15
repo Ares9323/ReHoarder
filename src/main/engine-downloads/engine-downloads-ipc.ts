@@ -1,6 +1,8 @@
-import { dialog, ipcMain } from 'electron'
+import { app, dialog, ipcMain } from 'electron'
+import * as path from 'node:path'
 import type { Session } from '../auth/session'
 import type { DownloadsManager } from '../downloads-manager'
+import type { SettingsStore } from '../settings'
 import {
   fetchEngineInstallPlan,
   listOwnedEngines,
@@ -79,9 +81,17 @@ export interface EngineDownloadsPickDirResult {
   path?: string | null
 }
 
+export interface EngineDownloadsSuggestDirResult {
+  ok: boolean
+  error?: string
+  /** Absolute default install path for `appName`. */
+  path?: string
+}
+
 export function registerEngineDownloadsIpc(
   session: Session,
-  downloadsManager: DownloadsManager
+  downloadsManager: DownloadsManager,
+  settings: SettingsStore
 ): void {
   ipcMain.handle(
     'engine-downloads:list-owned',
@@ -123,6 +133,17 @@ export function registerEngineDownloadsIpc(
             fetchedAt: plan.entry.fetchedAt
           }
         }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engine-downloads:suggest-install-dir',
+    async (_event, appName: string): Promise<EngineDownloadsSuggestDirResult> => {
+      try {
+        return { ok: true, path: suggestInstallDir(settings, appName) }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
@@ -183,6 +204,28 @@ export function registerEngineDownloadsIpc(
       }
     }
   )
+}
+
+/**
+ * Pick a sensible writable default install location for the engine. Priority:
+ *  1. First entry in `settings.enginePaths` — the user has already declared
+ *     where engines should live; install next to the existing ones.
+ *  2. `<userData>/EngineDownloads/<appName>` as a safe writable fallback —
+ *     `os.homedir()/Epic Games` collides too easily with an existing Epic
+ *     Games Launcher install (and on locked-down corporate setups that may
+ *     also be restricted). The userData dir is always writable.
+ *
+ * Deliberately NOT `C:\Program Files\Epic Games` even though the official
+ * launcher uses that — EGL runs elevated, ReHoarder doesn't, so writing
+ * there hits EPERM mid-mkdir.
+ */
+function suggestInstallDir(settings: SettingsStore, appName: string): string {
+  const cfg = settings.load()
+  const trimmed = (cfg.enginePaths[0] ?? '').replace(/[\\/]+$/, '').trim()
+  if (trimmed.length > 0) {
+    return path.join(trimmed, appName)
+  }
+  return path.join(app.getPath('home'), 'Epic Games', appName)
 }
 
 /** Cache lookup with auto-refresh — used by both `fetch-install-plan` (UI)

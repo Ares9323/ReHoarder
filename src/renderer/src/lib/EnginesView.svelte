@@ -541,7 +541,6 @@
   {@const s = installerSelectedSku}
   <EngineDownloadDialog
     sku={s}
-    suggestedRoot={scannedPaths[0] ?? null}
     onClose={() => (installerSelectedSku = null)}
     onConfirm={async (payload) => {
       const r = await window.api.engineDownloads.install({

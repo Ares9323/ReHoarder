@@ -218,7 +218,7 @@ app.whenReady().then(async () => {
     broadcastProgress: broadcastDownloadProgress,
     broadcastEngineInstalled
   })
-  registerEngineDownloadsIpc(session, downloadsManager)
+  registerEngineDownloadsIpc(session, downloadsManager, settingsStore)
   registerDownloadsIpc(downloadsManager, settingsStore)
   registerSettingsIpc(settingsStore, {
     onChange: () => downloadsManager.onSettingsChanged()

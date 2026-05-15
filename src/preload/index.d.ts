@@ -226,6 +226,12 @@ export interface EngineDownloadsPickDirResult {
   path?: string | null
 }
 
+export interface EngineDownloadsSuggestDirResult {
+  ok: boolean
+  error?: string
+  path?: string
+}
+
 export interface EngineInstalledEvent {
   appName: string
   installDir: string
@@ -244,6 +250,7 @@ export interface EngineDownloadsApi {
     catalogItemId: string
     appName: string
   }): Promise<EngineDownloadsFetchPlanResult>
+  suggestInstallDir(appName: string): Promise<EngineDownloadsSuggestDirResult>
   pickInstallDir(defaultPath: string | null): Promise<EngineDownloadsPickDirResult>
   install(args: {
     sku: { namespace: string; catalogItemId: string; appName: string; shortVersion: string }

@@ -22,13 +22,9 @@
 
   interface Props {
     sku: EngineSku
-    /** Existing engine install paths from settings, used to suggest a sensible
-     *  default install dir without forcing the user to browse on first run. */
-    suggestedRoot?: string | null
     onClose: () => void
-    /** Fires when the user confirms install. Task #15 wires this to the
-     *  chunk runner; in this commit the parent just shows a placeholder
-     *  toast so the dialog UX can be validated end-to-end. */
+    /** Fires when the user confirms install. Wired to the install IPC by
+     *  the parent (EnginesView). */
     onConfirm?: (payload: {
       sku: EngineSku
       selectedTags: string[]
@@ -37,7 +33,7 @@
     }) => void
   }
 
-  let { sku, suggestedRoot, onClose, onConfirm }: Props = $props()
+  let { sku, onClose, onConfirm }: Props = $props()
 
   let loading = $state(true)
   let error = $state<string | null>(null)
@@ -48,13 +44,26 @@
   } | null>(null)
   /** Selected tag set — `Set` is reactive enough through reassignment. */
   let selectedTags = $state<Set<string>>(new Set())
-  let installDir = $state(defaultInstallDir(suggestedRoot, sku.appName))
+  let installDir = $state('')
   let platformsExpanded = $state(false)
   let mouseDownOnBackdrop = $state(false)
 
   onMount(() => {
     void load()
+    void loadDefaultInstallDir()
   })
+
+  async function loadDefaultInstallDir(): Promise<void> {
+    try {
+      const r = await window.api.engineDownloads.suggestInstallDir(sku.appName)
+      // Don't clobber if the user has already typed something while we waited.
+      if (r.ok && r.path && installDir.length === 0) {
+        installDir = r.path
+      }
+    } catch {
+      // Best-effort — the user can always type or Browse.
+    }
+  }
 
   async function load(): Promise<void> {
     loading = true
@@ -166,18 +175,6 @@
     if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
     if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
     return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`
-  }
-
-  function defaultInstallDir(root: string | null | undefined, appName: string): string {
-    const sysSep = navigator.userAgent.toLowerCase().includes('windows') ? '\\' : '/'
-    if (root && root.length > 0) {
-      const trimmed = root.replace(/[\\/]+$/, '')
-      return `${trimmed}${sysSep}${appName}`
-    }
-    // Best-effort default — the user almost always wants to override anyway.
-    return navigator.userAgent.toLowerCase().includes('windows')
-      ? `C:\\Program Files\\Epic Games\\${appName}`
-      : `~/Epic Games/${appName}`
   }
 
   async function pickInstallDir(): Promise<void> {
