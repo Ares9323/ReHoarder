@@ -26,6 +26,7 @@ import {
   type CleanupRedirectorsResult,
   type DeepCleanPreserve
 } from './projects-actions'
+import { createWindowsShortcut, type CreateShortcutResult } from './engine-actions'
 import type { DownloadsRepo } from './db/downloads-repo'
 import type { AssetsRepo, AssetSource } from './db/assets-repo'
 import type { SettingsStore } from './settings'
@@ -462,6 +463,25 @@ export function registerProjectsIpc(
         }
       }
       return await deepCleanProject(resolved, req.preserve)
+    }
+  )
+
+  ipcMain.handle(
+    'projects:create-shortcut',
+    async (_e, uprojectPath: string): Promise<CreateShortcutResult> => {
+      const cfg = settings.load()
+      const resolved = guardProjectPath(uprojectPath, cfg.projectPaths)
+      if (!resolved) {
+        return { ok: false, error: 'Path is outside the configured project roots' }
+      }
+      const projectDir = path.dirname(resolved)
+      const projectName = path.basename(resolved, '.uproject')
+      return await createWindowsShortcut({
+        shortcutName: projectName,
+        targetPath: resolved,
+        workingDir: projectDir,
+        description: `Unreal project: ${projectName}`
+      })
     }
   )
 

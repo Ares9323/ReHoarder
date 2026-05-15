@@ -2,6 +2,12 @@ import { ipcMain, shell, dialog, app } from 'electron'
 import * as path from 'node:path'
 import { scanEngines, type EngineInfo } from './engines-local'
 import {
+  uninstallEngine,
+  createWindowsShortcut,
+  type UninstallEngineResult,
+  type CreateShortcutResult
+} from './engine-actions'
+import {
   listEnginePluginsRich,
   setEnginePluginState,
   uninstallEnginePlugin,
@@ -927,6 +933,64 @@ export function registerEnginesIpc(settings: SettingsStore): void {
         else failures.push({ name: entry.name, error: r.error ?? 'unknown error' })
       }
       return { ok: true, restored, failures }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:uninstall',
+    async (_e, engineRoot: string): Promise<UninstallEngineResult> => {
+      return await uninstallEngine(settings, engineRoot)
+    }
+  )
+
+  ipcMain.handle(
+    'engines:set-default-version',
+    (_e, version: string): { ok: boolean; error?: string } => {
+      // Empty string is a valid value — clears the default. Otherwise we
+      // sanity-check the shape (`X.Y`) so accidental garbage doesn't land
+      // in settings.
+      const trimmed = (version ?? '').trim()
+      if (trimmed && !/^\d+(?:\.\d+)?$/.test(trimmed)) {
+        return { ok: false, error: 'Expected a short version like "5.5" or empty to clear' }
+      }
+      const cfg = settings.load()
+      settings.saveAll({ ...cfg, defaultEngineVersion: trimmed })
+      return { ok: true }
+    }
+  )
+
+  ipcMain.handle(
+    'engines:create-shortcut',
+    async (
+      _e,
+      args: {
+        engineRoot: string
+        shortcutName: string
+      }
+    ): Promise<CreateShortcutResult> => {
+      if (!isInsideEngineRoots(args.engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      // Resolve the editor exe via the same scan the rest of the engines
+      // tab uses — engines without a discoverable editor (corrupt installs,
+      // download-in-progress) shouldn't get a broken shortcut.
+      const cfg = settings.load()
+      const engines = await scanEngines(cfg.enginePaths)
+      const resolved = path.resolve(args.engineRoot)
+      const engine = engines.find((e) => path.resolve(e.path) === resolved)
+      if (!engine) {
+        return { ok: false, error: 'Engine not found in the configured roots' }
+      }
+      if (!engine.editorExePath) {
+        return { ok: false, error: `Engine ${engine.name} has no editor executable on disk` }
+      }
+      return await createWindowsShortcut({
+        shortcutName: args.shortcutName,
+        targetPath: engine.editorExePath,
+        workingDir: path.dirname(engine.editorExePath),
+        description: `Unreal Editor ${engine.version}`,
+        iconPath: engine.editorExePath
+      })
     }
   )
 

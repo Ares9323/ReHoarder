@@ -4,6 +4,100 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] — 2026-05-16
+
+Quick-action set lifted from AMS, scoped to Projects and Engines tabs.
+Project right-click menu gains Fix redirectors / Delete binaries & caches /
+Deep clean (with a per-`Saved/` preserve modal) / Create desktop shortcut.
+Engines tab gains Set as default engine, Create desktop shortcut, and a
+guarded Uninstall engine flow with HKCU registry de-registration.
+
+### Added
+
+#### Projects — Quick Actions context menu
+- **Fix redirectors** — spawns
+  `UnrealEditor-Cmd.exe <uproject> -run=ResavePackages -fixupredirects
+   -autocheckout -projectonly -unattended`
+  against the project's resolved engine (same `EngineAssociation` →
+  `enginePaths` lookup `projects:run-game` already uses), buffers the
+  tail of stdout/stderr and surfaces it in the failure case via a
+  "Show output" modal next to the toast.
+- **Delete binaries & caches** — silent wipe of `Binaries/`,
+  `Intermediate/`, `DerivedDataCache/`, `.vs/` plus the transient parts
+  of `Saved/` (`Crashes/`, `Logs/`, `Autosaves/`, `Backup/`, `Cooked/`,
+  `SourceControl/`, top-level `*.tmp`, `StagedBuilds/`, `LocalBuilds/`).
+  Always preserves `Saved/Config/` (folder colors + layout +
+  per-project user settings), `Saved/Collections/` (named `.collection`
+  files), `Saved/SaveGames/`, and `Saved/AutoScreenshot.png` (used by
+  ReHoarder's project card thumbnail).
+- **Deep clean…** — same wipe as above, but driven by a confirm dialog
+  with 5 preserve checkboxes (Editor preferences / Asset collections /
+  Save games / Project thumbnail / Local packaged builds; first four
+  default ON, last default OFF). A `Keep none` button deselects all
+  five for the "literally wipe everything I know about" case.
+  Genuinely-unknown `Saved/` entries (plugin caches like
+  `BlueprintAssist/`, build-tool state like `UnrealBuildTool/` and
+  `ShaderDebugInfo/`, etc.) are always preserved as a safety net —
+  better than silently nuking persistent plugin data.
+- **Create desktop shortcut** — writes a `.lnk` to the user's Desktop
+  pointing at the `.uproject`, with the project's directory as
+  working dir.
+
+#### Engines — actions
+- **Set as default engine** — new `settings.defaultEngineVersion`
+  (short slug like `5.5` / `4.27`). The matching engine row gets a
+  pink `Default` badge in the Engines table. Default-engine context-menu
+  toggles between `Set as default engine` and `Clear default engine`
+  depending on the current state.
+- **Create desktop shortcut** — writes a `.lnk` pointing at the
+  engine's `UnrealEditor.exe` with the editor exe as both target and
+  icon source.
+- **Uninstall engine…** — confirm modal naming the path + the
+  registry de-reg side effect, then recursively removes the engine
+  directory, deletes its `HKCU\Software\Epic Games\Unreal Engine\Builds\{GUID}`
+  entry (GUID derived from the install path the same way the install
+  flow registered it), and prunes the parent from `settings.enginePaths`
+  when it was the only engine living there. Reports freed bytes +
+  registry/path side effects in the toast.
+
+#### Renderer plumbing
+- Per-tab quick-action banner *stack* (Projects + Engines): every
+  action gets its own row with its own dismiss `×`, so kicking off a
+  second action while the first is still running doesn't overwrite
+  the first banner — both stay visible. Fix-redirectors output is
+  routed through a separate `Show output` modal with Copy/Close.
+- Engine + Project context menus now clamp themselves to the viewport
+  on render — right-clicking a row near the window edge no longer
+  crops the menu. Position is measured after mount via `bind:this`
+  + `$effect`; if `right > innerWidth - 8` or
+  `bottom > innerHeight - 8` the menu shifts left/up to fit.
+
+### Main-process modules
+
+- `src/main/projects-actions.ts` — `cleanupRedirectors`,
+  `cleanBuildArtifacts`, `deepCleanProject`. All three operate on a
+  single project, guarded against `projectPaths`; the `Saved/` walker
+  has an explicit `SAVED_MANAGED_BY_TOGGLE` allow-list so unchecking
+  a preserve toggle in Deep clean actually deletes that subfolder
+  (the previous fallback "unknown → preserve" branch was bypassing
+  user intent for `Config/` and `Collections/`).
+- `src/main/engine-actions.ts` — `uninstallEngine` +
+  `createWindowsShortcut`. The shortcut path uses a temp VBS through
+  `wscript.exe` (the same canonical Windows pattern the elevation
+  relaunch uses since 0.1.3) — no PowerShell execution policy concerns,
+  no native bindings.
+
+### Known gap
+
+- **Install missing toolchain** (AMS counterpart: download + run
+  Visual Studio Build Tools / Windows SDK / .NET) is deferred to a
+  later release. The flow needs `vswhere`-based detection of already-
+  present components, a UAC-elevated installer spawn, and a progress UI
+  for a multi-GB Microsoft bootstrapper — enough surface area to deserve
+  its own focused turn rather than getting bundled in here.
+
+[0.1.5]: https://github.com/Ares9323/ReHoarder/releases/tag/v0.1.5
+
 ## [0.1.4] — 2026-05-15
 
 Creator / seller name surfaced on every asset card and now part of the

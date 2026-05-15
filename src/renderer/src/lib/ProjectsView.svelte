@@ -375,6 +375,23 @@
     deepCleaning = p
   }
 
+  async function ctxCreateShortcut(): Promise<void> {
+    if (!contextMenu) return
+    const p = contextMenu.project
+    closeContextMenu()
+    const id = startQuickAction(p, 'Creating desktop shortcut')
+    try {
+      const r = await window.api.projects.createShortcut(p.uprojectPath)
+      if (!r.ok) {
+        endQuickAction(id, 'error', r.error ?? 'Could not create shortcut')
+        return
+      }
+      endQuickAction(id, 'ok', `Shortcut written to ${r.shortcutPath}.`)
+    } catch (err) {
+      endQuickAction(id, 'error', err instanceof Error ? err.message : String(err))
+    }
+  }
+
   async function runDeepClean(preserve: DeepCleanPreserve): Promise<void> {
     const p = deepCleaning
     if (!p) return
@@ -589,6 +606,10 @@
     </button>
     <button type="button" role="menuitem" onclick={ctxDeepClean}>
       Deep clean…
+    </button>
+    <div class="ctx-divider"></div>
+    <button type="button" role="menuitem" onclick={() => void ctxCreateShortcut()}>
+      Create desktop shortcut
     </button>
   </div>
 {/if}

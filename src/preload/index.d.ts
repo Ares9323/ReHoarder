@@ -685,6 +685,9 @@ export interface EnginesApi {
   }>
   useKeybindingsPresetFromLibrary(id: string): Promise<UseIniPresetResult>
   openKeybindingsFile(masterPath: string): Promise<EnginesOpenResult>
+  uninstall(engineRoot: string): Promise<UninstallEngineResult>
+  setDefaultVersion(version: string): Promise<{ ok: boolean; error?: string }>
+  createShortcut(req: { engineRoot: string; shortcutName: string }): Promise<CreateShortcutResult>
 }
 
 export interface ProjectInfo {
@@ -859,6 +862,21 @@ export interface ProjectsApi {
   cleanupRedirectors(uprojectPath: string): Promise<ProjectCleanupRedirectorsResult>
   cleanBuildArtifacts(projectDir: string): Promise<ProjectCleanResult>
   deepClean(req: { projectDir: string; preserve: DeepCleanPreserve }): Promise<ProjectCleanResult>
+  createShortcut(uprojectPath: string): Promise<CreateShortcutResult>
+}
+
+export interface CreateShortcutResult {
+  ok: boolean
+  error?: string
+  shortcutPath?: string
+}
+
+export interface UninstallEngineResult {
+  ok: boolean
+  error?: string
+  bytesRemoved: number
+  registryDeregistered: boolean
+  enginePathRemoved: boolean
 }
 
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'

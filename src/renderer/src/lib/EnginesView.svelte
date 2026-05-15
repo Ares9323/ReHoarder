@@ -33,6 +33,26 @@
   /** The engine currently selected for the plugin panel below. Null until
    *  the user clicks a row or picks "Toggle plugins…" from the menu. */
   let focusedEngine = $state<EngineInfo | null>(null)
+
+  /** Short version string ("5.5" / "4.27") of the user's default engine.
+   *  Mirrored into the row UI as a `Default` badge; updated via the
+   *  context-menu "Set as default engine" action. */
+  let defaultEngineVersion = $state<string>('')
+
+  async function loadDefaultEngineVersion(): Promise<void> {
+    try {
+      const s = await window.api.settings.get()
+      defaultEngineVersion = s.defaultEngineVersion ?? ''
+    } catch {
+      // best-effort, the badge just stays hidden
+    }
+  }
+
+  function shortVersionOf(engine: EngineInfo): string {
+    // EngineInfo.version is the full "5.5.4" — short form is major.minor for
+    // settings matching (`defaultEngineVersion` always carries that shape).
+    return engine.version.split('.').slice(0, 2).join('.')
+  }
   /** Right-click menu position + target. Null = closed. */
   let contextMenu = $state<{
     x: number
@@ -86,6 +106,19 @@
     // in-memory cache (installerOwnedEngines !== null) holds across re-mounts
     // and gets invalidated by `onInstalled` and by a successful install.
     void ensureInstallerOwnedLoaded()
+    void loadDefaultEngineVersion()
+  })
+
+  // Re-pull settings on every settings save so the Default badge tracks the
+  // SettingsView "default engine" input (and vice-versa).
+  let firstDefaultTick = true
+  $effect(() => {
+    settingsVersion()
+    if (firstDefaultTick) {
+      firstDefaultTick = false
+      return
+    }
+    void loadDefaultEngineVersion()
   })
 
   // Listen for "engine just finished installing" from main — the
@@ -345,6 +378,148 @@
   })
 
   /**
+   * Viewport-clamp the engine context menu so a right-click near the bottom
+   * doesn't crop the menu. Same pattern as in `ProjectsView.svelte` — measure
+   * the menu after it binds, shift left/up if it overflows.
+   */
+  let contextMenuEl = $state<HTMLDivElement | null>(null)
+  $effect(() => {
+    const cm = contextMenu
+    const el = contextMenuEl
+    if (!cm || !el) return
+    const rect = el.getBoundingClientRect()
+    const margin = 8
+    let { x, y } = cm
+    let needsUpdate = false
+    if (rect.right > window.innerWidth - margin) {
+      x = Math.max(margin, window.innerWidth - rect.width - margin)
+      needsUpdate = true
+    }
+    if (rect.bottom > window.innerHeight - margin) {
+      y = Math.max(margin, window.innerHeight - rect.height - margin)
+      needsUpdate = true
+    }
+    if (needsUpdate) contextMenu = { ...cm, x, y }
+  })
+
+  /** Engine-action quick-action stack, same shape as the one on Projects. */
+  type EngineActionStatus = 'running' | 'ok' | 'error'
+  interface EngineActionEntry {
+    id: number
+    engine: EngineInfo
+    label: string
+    status: EngineActionStatus
+    message: string | null
+  }
+  let engineActions = $state<EngineActionEntry[]>([])
+  let nextEngineActionId = 0
+  function startEngineAction(engine: EngineInfo, label: string): number {
+    const id = ++nextEngineActionId
+    engineActions = [
+      ...engineActions,
+      { id, engine, label, status: 'running', message: null }
+    ]
+    return id
+  }
+  function endEngineAction(
+    id: number,
+    status: 'ok' | 'error',
+    message: string
+  ): void {
+    engineActions = engineActions.map((a) =>
+      a.id === id ? { ...a, status, message } : a
+    )
+  }
+  function dismissEngineAction(id: number): void {
+    engineActions = engineActions.filter((a) => a.id !== id)
+  }
+
+  /** Uninstall-engine confirm modal target; non-null = modal open. */
+  let uninstallingEngine = $state<EngineInfo | null>(null)
+
+  function formatBytes(n: number): string {
+    if (n < 1024) return `${n} B`
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  }
+
+  async function ctxSetDefault(): Promise<void> {
+    if (!contextMenu) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    const id = startEngineAction(eng, 'Setting as default engine')
+    try {
+      const version = shortVersionOf(eng)
+      const r = await window.api.engines.setDefaultVersion(version)
+      if (!r.ok) {
+        endEngineAction(id, 'error', r.error ?? 'Could not set default')
+        return
+      }
+      defaultEngineVersion = version
+      endEngineAction(id, 'ok', `${eng.name} is now the default engine.`)
+    } catch (err) {
+      endEngineAction(id, 'error', err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function ctxCreateShortcut(): Promise<void> {
+    if (!contextMenu) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    const id = startEngineAction(eng, 'Creating desktop shortcut')
+    try {
+      const r = await window.api.engines.createShortcut({
+        engineRoot: eng.path,
+        shortcutName: eng.name
+      })
+      if (!r.ok) {
+        endEngineAction(id, 'error', r.error ?? 'Could not create shortcut')
+        return
+      }
+      endEngineAction(id, 'ok', `Shortcut written to ${r.shortcutPath}.`)
+    } catch (err) {
+      endEngineAction(id, 'error', err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  function ctxUninstall(): void {
+    if (!contextMenu) return
+    const eng = contextMenu.engine
+    closeContextMenu()
+    uninstallingEngine = eng
+  }
+
+  async function confirmUninstall(): Promise<void> {
+    const eng = uninstallingEngine
+    if (!eng) return
+    uninstallingEngine = null
+    const id = startEngineAction(eng, 'Uninstalling engine')
+    try {
+      const r = await window.api.engines.uninstall(eng.path)
+      if (!r.ok) {
+        endEngineAction(id, 'error', r.error ?? 'Uninstall failed')
+        return
+      }
+      const reg = r.registryDeregistered ? ' Registry deregistered.' : ''
+      const pathDrop = r.enginePathRemoved ? ' Engine path pruned from settings.' : ''
+      endEngineAction(
+        id,
+        'ok',
+        `Removed ${formatBytes(r.bytesRemoved)} from disk.${reg}${pathDrop}`
+      )
+      // Clear "default engine" if we just uninstalled the one that was default.
+      if (defaultEngineVersion === shortVersionOf(eng)) {
+        defaultEngineVersion = ''
+        void window.api.engines.setDefaultVersion('').catch(() => {})
+      }
+      void enginesStore.rescan()
+    } catch (err) {
+      endEngineAction(id, 'error', err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  /**
    * Turn Epic's perforce-style branch name (`++UE5+Release-5.5`) into something
    * human-readable. The raw form is what UBT writes to Build.version, but it's
    * an internal P4 stream path — `++Project+Stream` markers don't mean anything
@@ -484,6 +659,9 @@
           >
             <td class="name">
               <span class="engine-name">{e.name}</span>
+              {#if defaultEngineVersion && shortVersionOf(e) === defaultEngineVersion}
+                <span class="default-pill" title="Used as the fallback when a project has no resolvable EngineAssociation">Default</span>
+              {/if}
               <span class="path-hint">{e.path}</span>
             </td>
             <td class="ver">{e.version}</td>
@@ -511,6 +689,7 @@
 {#if contextMenu}
   {@const cm = contextMenu}
   <div
+    bind:this={contextMenuEl}
     class="ctx-menu"
     role="menu"
     tabindex="-1"
@@ -526,6 +705,27 @@
     </button>
     <button type="button" role="menuitem" onclick={ctxTogglePlugins}>
       Toggle plugins enabled by default
+    </button>
+    <div class="ctx-sep"></div>
+    {#if shortVersionOf(cm.engine) === defaultEngineVersion}
+      <button
+        type="button"
+        role="menuitem"
+        onclick={() => {
+          closeContextMenu()
+          defaultEngineVersion = ''
+          void window.api.engines.setDefaultVersion('').catch(() => {})
+        }}
+      >
+        Clear default engine
+      </button>
+    {:else}
+      <button type="button" role="menuitem" onclick={() => void ctxSetDefault()}>
+        Set as default engine
+      </button>
+    {/if}
+    <button type="button" role="menuitem" onclick={() => void ctxCreateShortcut()}>
+      Create desktop shortcut
     </button>
     <div class="ctx-sep"></div>
     <button
@@ -564,6 +764,72 @@
         Restore keybindings from baseline
       </button>
     {/if}
+    <div class="ctx-sep"></div>
+    <button type="button" role="menuitem" class="danger" onclick={ctxUninstall}>
+      Uninstall engine…
+    </button>
+  </div>
+{/if}
+
+{#if uninstallingEngine}
+  {@const ue = uninstallingEngine}
+  <div
+    class="confirm-backdrop"
+    role="dialog"
+    aria-modal="true"
+    onmousedown={() => (uninstallingEngine = null)}
+  >
+    <div class="confirm-popup" onmousedown={(e) => e.stopPropagation()} role="document">
+      <h3>Uninstall <code>{ue.name}</code>?</h3>
+      <p class="confirm-text">
+        This deletes <code>{ue.path}</code> recursively and removes its
+        <code>HKCU\\Software\\Epic Games\\Unreal Engine\\Builds</code> registration on Windows.
+        The action cannot be undone.
+      </p>
+      <p class="confirm-text small">
+        Projects that referenced this engine via <code>EngineAssociation</code> will need
+        to be retargeted to a different install.
+      </p>
+      <div class="confirm-actions">
+        <button type="button" class="ghost" onclick={() => (uninstallingEngine = null)}>Cancel</button>
+        <button type="button" class="danger" onclick={() => void confirmUninstall()}>
+          Uninstall engine
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if engineActions.length > 0}
+  <div class="engine-action-stack">
+    {#each engineActions as a (a.id)}
+      <div
+        class="engine-action-banner"
+        class:busy={a.status === 'running'}
+        class:error={a.status === 'error'}
+      >
+        <div class="ea-text">
+          <strong>{a.engine.name}</strong>
+          <span class="ea-label">
+            {#if a.status === 'running'}
+              {a.label}… (this can take a while)
+            {:else if a.status === 'error'}
+              {a.label} failed — {a.message}
+            {:else}
+              {a.message}
+            {/if}
+          </span>
+        </div>
+        {#if a.status !== 'running'}
+          <button
+            type="button"
+            class="ea-close"
+            onclick={() => dismissEngineAction(a.id)}
+            title="Dismiss"
+          >×</button>
+        {/if}
+      </div>
+    {/each}
   </div>
 {/if}
 
@@ -1201,5 +1467,115 @@
   .confirm-actions .primary:disabled {
     opacity: 0.45;
     cursor: not-allowed;
+  }
+  .confirm-actions .danger {
+    background: #5a2727;
+    color: #fff;
+    border: 1px solid #7a3737;
+    border-radius: 5px;
+    padding: 0.45rem 1.1rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .confirm-actions .danger:hover {
+    background: #7a3737;
+    border-color: #9a4747;
+  }
+  .confirm-text {
+    margin: 0 0 0.6rem;
+    color: #d0d0d0;
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  .confirm-text.small {
+    font-size: 0.78rem;
+    color: #b0b0b0;
+  }
+  .ctx-menu button.danger {
+    color: #fca5a5;
+  }
+  .ctx-menu button.danger:hover {
+    background: #3a1f1f;
+    color: #fff;
+  }
+  .default-pill {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.05rem 0.45rem;
+    background: #2a1f3a;
+    color: #c084fc;
+    border: 1px solid #4a3268;
+    border-radius: 3px;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+    vertical-align: middle;
+  }
+  .engine-action-stack {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    z-index: 350;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    align-items: flex-end;
+    max-width: 520px;
+  }
+  .engine-action-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    background: #1f2a1f;
+    border: 1px solid #2d4a2d;
+    color: #c8f0c8;
+    border-radius: 6px;
+    padding: 0.55rem 0.85rem;
+    font-size: 0.8rem;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  }
+  .engine-action-banner.busy {
+    background: #1f1f2a;
+    border-color: #3a3a55;
+    color: #c0c0e0;
+  }
+  .engine-action-banner.error {
+    background: #3a1f1f;
+    border-color: #5a2727;
+    color: #fca5a5;
+  }
+  .ea-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+  }
+  .ea-text strong {
+    color: #fff;
+    font-weight: 500;
+    font-size: 0.82rem;
+  }
+  .ea-label {
+    font-size: 0.75rem;
+    opacity: 0.9;
+  }
+  .ea-close {
+    background: transparent;
+    border: 1px solid #444;
+    color: #c0c0c0;
+    border-radius: 3px;
+    padding: 0 0.45rem;
+    font-size: 0.95rem;
+    line-height: 1.2;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .ea-close:hover {
+    color: #fff;
+    border-color: #666;
   }
 </style>

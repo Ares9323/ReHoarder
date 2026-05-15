@@ -58,6 +58,8 @@ export interface AppSettings {
   editorKeyBindingsMasterPath: string
   /** How long (in days) the "owned engines" list from Epic stays cached on disk before being refetched. 0 disables the cache (always hits the network). Range 0–30. The picker also has an explicit Refresh button that bypasses the TTL. */
   ownedEnginesCacheTtlDays: number
+  /** Short version slug (`5.5`, `4.27`) of the engine ReHoarder treats as the user's default — surfaced as a "Default" badge in the Engines tab and used as the fallback when a project's EngineAssociation is empty or unresolvable. Empty string = no default selected. */
+  defaultEngineVersion: string
 }
 
 const SETTINGS_KEY = 'app_settings_v1'
@@ -119,7 +121,8 @@ export function defaultSettings(): AppSettings {
     pluginPresetPerEngine: {},
     editorSettingsMasterPath: '',
     editorKeyBindingsMasterPath: '',
-    ownedEnginesCacheTtlDays: 7
+    ownedEnginesCacheTtlDays: 7,
+    defaultEngineVersion: ''
   }
 }
 
@@ -223,7 +226,11 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
     ownedEnginesCacheTtlDays:
       typeof partial.ownedEnginesCacheTtlDays === 'number'
         ? clamp(partial.ownedEnginesCacheTtlDays, MIN_OWNED_ENGINES_TTL_DAYS, MAX_OWNED_ENGINES_TTL_DAYS)
-        : d.ownedEnginesCacheTtlDays
+        : d.ownedEnginesCacheTtlDays,
+    defaultEngineVersion:
+      typeof partial.defaultEngineVersion === 'string'
+        ? partial.defaultEngineVersion.trim()
+        : d.defaultEngineVersion
   }
 }
 

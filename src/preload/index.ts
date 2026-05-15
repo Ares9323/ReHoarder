@@ -898,7 +898,15 @@ const api = {
     useKeybindingsPresetFromLibrary: (id: string): Promise<UseIniPresetResult> =>
       ipcRenderer.invoke('engines:use-keybindings-preset-from-library', id),
     openKeybindingsFile: (masterPath: string): Promise<EnginesOpenResult> =>
-      ipcRenderer.invoke('engines:open-keybindings-file', masterPath)
+      ipcRenderer.invoke('engines:open-keybindings-file', masterPath),
+    uninstall: (engineRoot: string): Promise<UninstallEngineResult> =>
+      ipcRenderer.invoke('engines:uninstall', engineRoot),
+    setDefaultVersion: (version: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('engines:set-default-version', version),
+    createShortcut: (req: {
+      engineRoot: string
+      shortcutName: string
+    }): Promise<CreateShortcutResult> => ipcRenderer.invoke('engines:create-shortcut', req)
   },
   engineDownloads: {
     listOwned: (
@@ -966,7 +974,9 @@ const api = {
     deepClean: (req: {
       projectDir: string
       preserve: DeepCleanPreserve
-    }): Promise<ProjectCleanResult> => ipcRenderer.invoke('projects:deep-clean', req)
+    }): Promise<ProjectCleanResult> => ipcRenderer.invoke('projects:deep-clean', req),
+    createShortcut: (uprojectPath: string): Promise<CreateShortcutResult> =>
+      ipcRenderer.invoke('projects:create-shortcut', uprojectPath)
   },
   downloads: {
     list: (): Promise<DownloadsListResult> => ipcRenderer.invoke('downloads:list'),
