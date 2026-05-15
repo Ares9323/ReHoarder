@@ -3,6 +3,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import * as path from 'node:path'
 import type { Session } from '../auth/session'
 import type { DownloadsManager } from '../downloads-manager'
+import type { KvStore } from '../db/kv'
 import type { SettingsStore } from '../settings'
 import {
   fetchEngineInstallPlan,
@@ -40,10 +41,30 @@ interface CachedPlan {
 const PLAN_TTL_MS = 45 * 60 * 1000 // 45 min — CDN tokens last ~60.
 const planCache = new Map<string, CachedPlan>()
 
+/**
+ * Disk-persisted cache of the "owned engines" list. Same data Epic returns
+ * from `listOwnedAssets` filtered down to UE namespaces; refreshed in the
+ * background at startup and on explicit user Refresh from the picker. The
+ * TTL is user-controlled via `settings.ownedEnginesCacheTtlDays` — 0 disables
+ * the cache entirely (always hits the network).
+ */
+const OWNED_ENGINES_CACHE_KEY = 'owned_engines_cache_v1'
+interface OwnedEnginesCachePayload {
+  engines: EngineSku[]
+  /** Epoch ms when the network fetch that populated this payload completed. */
+  fetchedAt: number
+}
+
 export interface EngineDownloadsListOwnedResult {
   ok: boolean
   error?: string
   engines?: EngineSku[]
+  /** True when the response was served from the disk cache rather than a fresh network fetch. */
+  cached?: boolean
+  /** Epoch ms of the underlying fetch — for "last refreshed N hours ago" UI. */
+  fetchedAt?: number
+  /** Set when we served stale cache because the live refresh wasn't possible (e.g. not authenticated). The renderer can surface a hint without treating it as an error. */
+  staleReason?: string
 }
 
 /** Lightweight install-plan summary shipped over IPC. Excludes the parsed
@@ -111,18 +132,30 @@ export interface EngineDownloadsRelaunchResult {
 export function registerEngineDownloadsIpc(
   session: Session,
   downloadsManager: DownloadsManager,
-  settings: SettingsStore
+  settings: SettingsStore,
+  kv: KvStore
 ): void {
   ipcMain.handle(
     'engine-downloads:list-owned',
-    async (): Promise<EngineDownloadsListOwnedResult> => {
-      const token = session.getAccessToken()
-      if (!token) {
-        return { ok: false, error: 'Not authenticated — log in first.' }
-      }
+    async (
+      _event,
+      opts: { forceRefresh?: boolean } = {}
+    ): Promise<EngineDownloadsListOwnedResult> => {
+      const force = opts.forceRefresh === true
       try {
-        const engines = await listOwnedEngines(token)
-        return { ok: true, engines }
+        const result = await getOwnedEngines({
+          token: session.getAccessToken(),
+          forceRefresh: force,
+          ttlMs: ttlMsFromSettings(settings),
+          kv
+        })
+        return {
+          ok: true,
+          engines: result.engines,
+          cached: result.cached,
+          fetchedAt: result.fetchedAt,
+          ...(result.staleReason ? { staleReason: result.staleReason } : {})
+        }
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
       }
@@ -391,6 +424,93 @@ async function getOrFetchPlan(
   const entry: CachedPlan = { plan, fetchedAt: now }
   planCache.set(sku.appName, entry)
   return { entry }
+}
+
+/**
+ * Read/write helpers for the persisted owned-engines cache, plus the
+ * cache-or-fetch coordinator used by both the IPC handler and the
+ * startup background refresh.
+ */
+function readOwnedEnginesCache(kv: KvStore): OwnedEnginesCachePayload | null {
+  const raw = kv.getJson<OwnedEnginesCachePayload>(OWNED_ENGINES_CACHE_KEY)
+  if (!raw || !Array.isArray(raw.engines) || typeof raw.fetchedAt !== 'number') {
+    return null
+  }
+  return raw
+}
+
+function writeOwnedEnginesCache(kv: KvStore, engines: EngineSku[]): OwnedEnginesCachePayload {
+  const payload: OwnedEnginesCachePayload = { engines, fetchedAt: Date.now() }
+  kv.setJson(OWNED_ENGINES_CACHE_KEY, payload)
+  return payload
+}
+
+function ttlMsFromSettings(settings: SettingsStore): number {
+  const days = settings.load().ownedEnginesCacheTtlDays
+  // 0 means "always refresh"; mergeSettings already clamped the value.
+  return days > 0 ? days * 24 * 60 * 60 * 1000 : 0
+}
+
+async function getOwnedEngines(opts: {
+  token: string | null
+  forceRefresh: boolean
+  ttlMs: number
+  kv: KvStore
+}): Promise<{
+  engines: EngineSku[]
+  cached: boolean
+  fetchedAt: number
+  staleReason?: string
+}> {
+  const cache = readOwnedEnginesCache(opts.kv)
+  const now = Date.now()
+  const cacheFresh =
+    cache !== null && opts.ttlMs > 0 && now - cache.fetchedAt < opts.ttlMs
+  if (cache && cacheFresh && !opts.forceRefresh) {
+    return { engines: cache.engines, cached: true, fetchedAt: cache.fetchedAt }
+  }
+  if (!opts.token) {
+    if (cache) {
+      // Best-effort: serve stale rather than failing. The renderer can show a
+      // "log in to refresh" hint via `staleReason`.
+      return {
+        engines: cache.engines,
+        cached: true,
+        fetchedAt: cache.fetchedAt,
+        staleReason: 'Not authenticated — showing the last cached list. Log in to refresh.'
+      }
+    }
+    throw new Error('Not authenticated — log in first.')
+  }
+  const engines = await listOwnedEngines(opts.token)
+  const payload = writeOwnedEnginesCache(opts.kv, engines)
+  return { engines, cached: false, fetchedAt: payload.fetchedAt }
+}
+
+/**
+ * Fire-and-forget background refresh of the owned-engines cache. Wired
+ * from `main/index.ts` after `whenReady` + `session.init` so the picker
+ * stays fresh without ever blocking the user. Skips the network call when
+ * the cache is already within the configured TTL.
+ */
+export async function runStartupOwnedEnginesRefresh(
+  session: Session,
+  settings: SettingsStore,
+  kv: KvStore
+): Promise<void> {
+  try {
+    const ttlMs = ttlMsFromSettings(settings)
+    const cache = readOwnedEnginesCache(kv)
+    const now = Date.now()
+    const cacheFresh =
+      cache !== null && ttlMs > 0 && now - cache.fetchedAt < ttlMs
+    if (cacheFresh) return
+    const token = session.getAccessToken()
+    if (!token) return // user not signed in yet — refresh will happen on next user-triggered action
+    await getOwnedEngines({ token, forceRefresh: true, ttlMs, kv })
+  } catch (err) {
+    console.warn('[engine-downloads] startup cache refresh failed:', err)
+  }
 }
 
 /**

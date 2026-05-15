@@ -4,7 +4,10 @@ import { promises as fsp } from 'node:fs'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { VelopackApp } from 'velopack'
 import { registerUpdatesIpc, runStartupUpdateCheck } from './updates-ipc'
-import { registerEngineDownloadsIpc } from './engine-downloads/engine-downloads-ipc'
+import {
+  registerEngineDownloadsIpc,
+  runStartupOwnedEnginesRefresh
+} from './engine-downloads/engine-downloads-ipc'
 
 // Velopack hook — MUST run before any other startup work. The installer
 // re-invokes us with custom CLI args (first-run, update, uninstall, restart)
@@ -218,7 +221,7 @@ app.whenReady().then(async () => {
     broadcastProgress: broadcastDownloadProgress,
     broadcastEngineInstalled
   })
-  registerEngineDownloadsIpc(session, downloadsManager, settingsStore)
+  registerEngineDownloadsIpc(session, downloadsManager, settingsStore, db.kv)
   registerDownloadsIpc(downloadsManager, settingsStore)
   registerSettingsIpc(settingsStore, {
     onChange: () => downloadsManager.onSettingsChanged()
@@ -242,6 +245,15 @@ app.whenReady().then(async () => {
   setTimeout(() => {
     void runStartupUpdateCheck(settingsStore, () => mainWindow)
   }, 1500)
+
+  // Background refresh of the "owned engines" picker cache so the first
+  // click on Install engine… is instant after the next launch. Wrapped in
+  // a longer delay than the update check so `session.init` has time to
+  // populate the access token first — without a token the helper would
+  // skip the refresh and we'd be back to the cold-start 20 s stall.
+  setTimeout(() => {
+    void runStartupOwnedEnginesRefresh(session, settingsStore, db.kv)
+  }, 4000)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

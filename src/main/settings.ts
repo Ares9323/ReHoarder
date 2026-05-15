@@ -56,6 +56,8 @@ export interface AppSettings {
   editorSettingsMasterPath: string
   /** Absolute path to a master `EditorKeyBindings.ini`; applied to the per-user, per-engine-version config file. Empty disables the feature. */
   editorKeyBindingsMasterPath: string
+  /** How long (in days) the "owned engines" list from Epic stays cached on disk before being refetched. 0 disables the cache (always hits the network). Range 0–30. The picker also has an explicit Refresh button that bypasses the TTL. */
+  ownedEnginesCacheTtlDays: number
 }
 
 const SETTINGS_KEY = 'app_settings_v1'
@@ -64,6 +66,8 @@ const MIN_THREADS = 1
 const MAX_THREADS = 64
 const MIN_CONCURRENT_DOWNLOADS = 1
 const MAX_CONCURRENT_DOWNLOADS = 8
+const MIN_OWNED_ENGINES_TTL_DAYS = 0
+const MAX_OWNED_ENGINES_TTL_DAYS = 30
 
 function defaultProjectPaths(): string[] {
   if (process.platform === 'win32') {
@@ -114,7 +118,8 @@ export function defaultSettings(): AppSettings {
     pluginPresetGlobalPath: '',
     pluginPresetPerEngine: {},
     editorSettingsMasterPath: '',
-    editorKeyBindingsMasterPath: ''
+    editorKeyBindingsMasterPath: '',
+    ownedEnginesCacheTtlDays: 7
   }
 }
 
@@ -214,7 +219,11 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
     editorKeyBindingsMasterPath:
       typeof partial.editorKeyBindingsMasterPath === 'string'
         ? partial.editorKeyBindingsMasterPath.trim()
-        : d.editorKeyBindingsMasterPath
+        : d.editorKeyBindingsMasterPath,
+    ownedEnginesCacheTtlDays:
+      typeof partial.ownedEnginesCacheTtlDays === 'number'
+        ? clamp(partial.ownedEnginesCacheTtlDays, MIN_OWNED_ENGINES_TTL_DAYS, MAX_OWNED_ENGINES_TTL_DAYS)
+        : d.ownedEnginesCacheTtlDays
   }
 }
 

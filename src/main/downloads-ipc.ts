@@ -63,14 +63,26 @@ export function registerDownloadsIpc(
   ipcMain.handle(
     'downloads:open-in-explorer',
     async (_e, absolutePath: string): Promise<DownloadsActionResult> => {
-      // Reveal a download's dest_dir. Guarded by the configured vault roots.
+      // Reveal a download's dest_dir. We trust any path that matches the
+      // destDir of an existing download row — ReHoarder wrote those itself at
+      // enqueue time after the user went through the picker/IPC, so they're
+      // implicitly authorised even if the path doesn't live under a currently
+      // configured root (e.g. an engine still mid-download, whose install dir
+      // only gets appended to enginePaths when status flips to 'done'). As a
+      // fallback we still accept any configured vault/engine/project root.
       const cfg = settings.load()
       const resolved = path.resolve(absolutePath)
-      const allowed = cfg.vaultPaths.some((root) =>
-        resolved.startsWith(path.resolve(root))
-      )
+      const resolvedLower = resolved.toLowerCase()
+      const matchesRow = manager.list().some((row) => {
+        if (!row.destDir) return false
+        return path.resolve(row.destDir).toLowerCase() === resolvedLower
+      })
+      const roots = [...cfg.vaultPaths, ...cfg.enginePaths, ...cfg.projectPaths]
+      const allowed =
+        matchesRow ||
+        roots.some((root) => resolved.startsWith(path.resolve(root)))
       if (!allowed) {
-        return { ok: false, error: 'Path is outside the configured vault roots' }
+        return { ok: false, error: 'Path is outside the configured vault/engine/project roots' }
       }
       try {
         const errMsg = await shell.openPath(resolved)

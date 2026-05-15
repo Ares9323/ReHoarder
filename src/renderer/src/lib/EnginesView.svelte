@@ -56,6 +56,11 @@
   let installerOwnedEngines = $state<EngineSku[] | null>(null)
   let installerOwnedLoading = $state(false)
   let installerOwnedError = $state<string | null>(null)
+  /** Last successful fetch time + whether it came from the persisted cache,
+   *  so the picker can render a "Last refreshed N ago" footer + Refresh button. */
+  let installerOwnedFetchedAt = $state<number | null>(null)
+  let installerOwnedCached = $state(false)
+  let installerOwnedStaleReason = $state<string | null>(null)
   /** The SKU the user picked → drives the EngineDownloadDialog. Null = dialog
    *  closed; non-null = dialog open against that SKU. */
   let installerSelectedSku = $state<EngineSku | null>(null)
@@ -145,20 +150,39 @@
     if (installerOwnedEngines !== null && !force) return
     installerOwnedLoading = true
     installerOwnedError = null
+    installerOwnedStaleReason = null
     try {
-      const r = await window.api.engineDownloads.listOwned()
+      const r = await window.api.engineDownloads.listOwned({ forceRefresh: force })
       if (!r.ok) {
         installerOwnedError = r.error ?? 'Could not list owned engines'
         installerOwnedEngines = []
         return
       }
       installerOwnedEngines = r.engines ?? []
+      installerOwnedFetchedAt = typeof r.fetchedAt === 'number' ? r.fetchedAt : null
+      installerOwnedCached = r.cached === true
+      installerOwnedStaleReason = r.staleReason ?? null
     } catch (err) {
       installerOwnedError = err instanceof Error ? err.message : String(err)
       installerOwnedEngines = []
     } finally {
       installerOwnedLoading = false
     }
+  }
+
+  function formatRelativeTime(ms: number): string {
+    const diff = Date.now() - ms
+    if (diff < 60 * 1000) return 'just now'
+    if (diff < 60 * 60 * 1000) {
+      const m = Math.round(diff / (60 * 1000))
+      return `${m} min ago`
+    }
+    if (diff < 24 * 60 * 60 * 1000) {
+      const h = Math.round(diff / (60 * 60 * 1000))
+      return `${h} h ago`
+    }
+    const d = Math.round(diff / (24 * 60 * 60 * 1000))
+    return `${d} d ago`
   }
 
   async function toggleInstallPicker(): Promise<void> {
@@ -380,6 +404,32 @@
                   <span class="picker-build">{sku.buildVersion}</span>
                 </button>
               {/each}
+            {/if}
+            {#if installerOwnedStaleReason}
+              <div class="picker-footer stale">{installerOwnedStaleReason}</div>
+            {/if}
+            {#if installerOwnedEngines !== null && !installerOwnedLoading}
+              <div class="picker-footer">
+                <span class="picker-footer-info">
+                  {#if installerOwnedFetchedAt}
+                    {installerOwnedCached ? 'Cached' : 'Fetched'} {formatRelativeTime(installerOwnedFetchedAt)}
+                  {:else}
+                    From Epic
+                  {/if}
+                </span>
+                <button
+                  type="button"
+                  class="picker-refresh"
+                  onclick={(e) => {
+                    e.stopPropagation()
+                    void ensureInstallerOwnedLoaded(true)
+                  }}
+                  disabled={installerOwnedLoading}
+                  title="Re-fetch the owned engines list from Epic (bypasses the cache)"
+                >
+                  Refresh
+                </button>
+              </div>
             {/if}
           </div>
         {/if}
@@ -806,6 +856,45 @@
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 100%;
+  }
+  .picker-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.35rem 0.65rem;
+    border-top: 1px solid #2a2a2a;
+    margin-top: 0.2rem;
+  }
+  .picker-footer.stale {
+    border-top: none;
+    padding-top: 0.55rem;
+    padding-bottom: 0;
+    color: #fcd34d;
+    font-size: 0.7rem;
+    justify-content: flex-start;
+  }
+  .picker-footer-info {
+    font-size: 0.7rem;
+    color: #888;
+  }
+  .picker-refresh {
+    background: transparent;
+    color: #c084fc;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.7rem;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .picker-refresh:hover:not(:disabled) {
+    border-color: #c084fc;
+    color: #fff;
+  }
+  .picker-refresh:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .installer-flash {
     background: #1f2a1f;

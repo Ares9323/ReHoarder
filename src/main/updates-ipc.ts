@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, Notification } from 'electron'
 import { UpdateManager, type UpdateInfo } from 'velopack'
 import type { SettingsStore } from './settings'
 
@@ -210,9 +210,32 @@ export async function runStartupUpdateCheck(
         w.webContents.send('updates:download-progress', perc)
       }
     })
+    // Surface a system toast before quitting: without it the silent restart
+    // looks like ReHoarder crashed. The toast survives the app quitting via
+    // Windows' Action Center (AppUserModelId is set in src/main/index.ts).
+    await notifyRestartingForUpdate(target?.Version)
     mgr.waitExitThenApplyUpdate(info, false, true)
     app.quit()
   } catch (err) {
     console.warn('[updates] auto-install failed:', err)
   }
+}
+
+async function notifyRestartingForUpdate(targetVersion: string | undefined): Promise<void> {
+  if (!Notification.isSupported()) return
+  try {
+    new Notification({
+      title: 'ReHoarder is updating',
+      body: targetVersion
+        ? `Restarting to install version ${targetVersion}…`
+        : 'Restarting to install the latest update…',
+      silent: false
+    }).show()
+  } catch (err) {
+    console.warn('[updates] could not show restart notification:', err)
+    return
+  }
+  // Give the toast ~1.5 s to surface before we hand off to the Velopack
+  // updater; once it's queued the OS keeps it alive even after we exit.
+  await new Promise((resolve) => setTimeout(resolve, 1500))
 }

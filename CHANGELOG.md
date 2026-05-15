@@ -4,6 +4,137 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] — 2026-05-15
+
+Engine downloads ship end-to-end: the Engines tab can now pull a UE binary
+straight from the Epic launcher manifest with a components picker (Core /
+Templates / Engine Source / MetaHuman / Editor Symbols / Target Platforms),
+queue it through the same parallel chunk downloader Fab assets use, and
+register the install with the OS once it lands. The auto-update flow gains
+a system-toast restart notice, and the Install-engine picker now keeps the
+owned-versions list cached on disk so reopening the dropdown after a
+restart is instant.
+
+### Added
+
+#### Engines — install from the Epic library
+- New `Install engine…` button on the Engines tab opens a popover listing
+  every engine SKU the signed-in account owns and doesn't already have on
+  disk (dedup by `major.minor` against the local scan).
+- Components picker dialog: required Core (greyed, "Required" label),
+  Templates / Engine Source / Starter Content / MetaHuman / Editor Symbols
+  as optional rows (sensible defaults: Templates + Engine Source on),
+  Target Platforms collapsed by default with a live "N selected" badge,
+  live dependency propagation (tvOS implies iOS) and a live
+  "Selection size" footer.
+- Older Unreal versions (UE 4.x / 5.0) ship without per-file `InstallTags`,
+  so everything rolls up under Core — the dialog detects that shape and
+  surfaces a blue info banner explaining the engine doesn't expose
+  components instead of looking like a bare bug.
+- Confirm hands off to the same `DownloadsManager` queue Fab uses: shared
+  parallelism budget, abort handles, persistent recovery, Downloads-tab
+  progress UI, chunk cache, Poly64 + SHA1 verification on every chunk.
+- Suggested install dir defaults to `<enginePaths[0]>/<appName>` when at
+  least one engine path is configured, falling back to `<home>/Epic Games/<appName>`
+  on a fresh user — both reliably writable from a non-elevated process.
+
+#### Engines — UAC elevation prompt
+- Install confirm runs a pre-flight `engine-downloads:check-install-dir`
+  IPC that flags Windows-protected roots (Program Files, Program Files
+  (x86), Windows) and detects whether ReHoarder is currently admin-elevated
+  (via the `net session` exit-code trick, with stdio suppressed).
+- When the chosen dir needs admin and we don't have it, a modal halts the
+  flow before queueing a doomed download: <em>"This install location
+  needs admin — relaunch ReHoarder elevated to install here, or pick a
+  user-writable folder"</em> with `Pick another folder` /
+  `Relaunch as administrator` buttons.
+- The Relaunch button spawns `powershell.exe -Verb RunAs` against the
+  same `process.execPath`, triggering Windows' UAC prompt, then quits
+  after a 200 ms beat so the elevated child reliably claims the prompt
+  on 22H2 fast-launch installs. Downloads queue + library + settings
+  persist across the relaunch.
+- In dev (`npm run dev`) the relaunch refuses early with a clear error,
+  since `process.execPath` points at the bundled
+  `node_modules/electron/dist/electron.exe` rather than a packaged
+  ReHoarder.exe — running `npm run dev` from a terminal you started with
+  "Run as administrator" is the working alternative.
+
+#### Engines — post-install bookkeeping
+- When the chunk runner finishes successfully, the install location's
+  parent directory is appended to `settings.enginePaths` (case-folded on
+  Windows to avoid duplicate equivalent entries).
+- On Windows, the new engine is registered under
+  `HKCU\Software\Epic Games\Unreal Engine\Builds\{GUID}` via `reg.exe`,
+  so `.uproject` files opened with the OS file association resolve
+  through `UnrealVersionSelector`. The GUID is derived deterministically
+  from the SHA1 of the normalised install path — re-installing into the
+  same location reuses the existing registration instead of accumulating
+  duplicates.
+- A `engine-downloads:installed` IPC broadcast wakes the Engines tab,
+  invalidates the picker's owned cache, retriggers the local scan and
+  flashes a toast (<em>"UE_X.Y installed at &lt;dir&gt;. Added &lt;parentDir&gt;
+  to engine paths. Registered with UnrealVersionSelector."</em>).
+- Non-Windows hosts skip the registry step (UVS doesn't exist there and
+  `.uproject` `EngineAssociation` resolves by path), only the
+  `enginePaths` append runs.
+
+#### Engines — persistent owned-engines cache
+- The `Install engine…` picker now reads its list from a disk-backed
+  cache (`KvStore` key `owned_engines_cache_v1`) instead of the
+  in-memory warm-up from 0.1.1 — first click after any app restart is
+  instant.
+- New setting `Owned engines cache` (Settings → Downloads), 0–30 days,
+  default 7: controls how long the cache stays valid before the next
+  refresh. `0` disables the cache and always hits the network.
+- Background refresh runs 4 s after launch (once `session.init` has had
+  time to land a token), bypassing the TTL only when the cache is
+  already stale, so the next user click is instant even on a cold boot.
+- Picker footer shows "Cached / Fetched &lt;relative-time&gt;" plus an
+  explicit `Refresh` button that bypasses the TTL — useful right after
+  claiming a new UE on the Epic launcher in parallel.
+- When not authenticated, the picker now serves the stale cache with a
+  "Log in to refresh" hint instead of erroring out.
+
+#### Updates — restart notification
+- When `autoDownloadAndInstallUpdates` is enabled and the startup check
+  installs a new build, ReHoarder fires a native Windows toast
+  (<em>"ReHoarder is updating — Restarting to install version X.Y.Z…"</em>)
+  via `electron.Notification` before handing off to the Velopack updater
+  and quitting. The toast is queued via the configured `AppUserModelId`,
+  so Windows preserves it in Action Center even after the app exits —
+  no more "did it crash?" moment during a silent auto-update restart.
+
+### Changed
+
+- `downloads:open-in-explorer` IPC now trusts any path that matches the
+  `destDir` of an existing `downloads` row, in addition to the
+  vault / engine / project root allow-list. Fixes the "Path is outside
+  the configured vault roots" error that fired when clicking Open on a
+  running engine download (the install dir isn't appended to
+  `enginePaths` until the row reaches `done`).
+- Default suggested install dir changed from `C:\Program Files\Epic Games\<appName>`
+  to a user-writable path. The legacy default silently required admin
+  elevation, so the chunk runner's first `mkdir` always failed with EPERM
+  before the first byte landed — the new default routes through the
+  `engine-downloads:suggest-install-dir` IPC and prefers the first
+  configured engine path with `<home>/Epic Games/<appName>` as the fallback.
+
+### Fixed
+
+- Elevation confirm modal painted underneath the EngineDownloadDialog
+  because both shared `z-index: 290` and `EnginesView.svelte` had no
+  scoped CSS for `.confirm-backdrop` / `.confirm-popup` / `.confirm-actions`
+  (Svelte scopes styles per file). Added the missing styles and bumped
+  the elevation backdrop to `z-index: 320` via a new
+  `.elevation-prompt-backdrop` modifier.
+- First click on `Install engine…` no longer stalls 5–10 s on
+  `listOwnedAssets` + bulk catalog metadata: `EnginesView.onMount`
+  warms the owned-engines list in the background alongside the local
+  scan, and the new persistent cache (see above) survives restarts so
+  the latency is hidden behind whatever else the user is doing.
+
+[0.1.2]: https://github.com/Ares9323/ReHoarder/releases/tag/v0.1.2
+
 ## [0.1.1] — 2026-05-15
 
 Engines tab grows real teeth: a `.uplugin` toggler, per-engine plugin presets

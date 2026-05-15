@@ -30,6 +30,7 @@
     editorSettingsMasterPath: string
     editorKeyBindingsMasterPath: string
     gameLaunchParams: string[]
+    ownedEnginesCacheTtlDays: number
   }
 
   let settings = $state<AppSettings | null>(null)
@@ -614,6 +615,22 @@
             onchange={markDirty}
           />
           <span class="hint">(1–64, chunk-level worker pool within one asset)</span>
+        </label>
+        <label class="row">
+          <span class="lbl">Owned engines cache</span>
+          <input
+            type="number"
+            min="0"
+            max="30"
+            step="1"
+            class="num-input"
+            bind:value={settings.ownedEnginesCacheTtlDays}
+            onchange={markDirty}
+          />
+          <span class="hint">
+            (days the "Install engine…" picker keeps the Epic library list cached on
+            disk; 0 = always refresh. Refresh button in the picker bypasses this.)
+          </span>
         </label>
         <label>
           <input

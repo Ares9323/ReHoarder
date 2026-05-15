@@ -901,8 +901,10 @@ const api = {
       ipcRenderer.invoke('engines:open-keybindings-file', masterPath)
   },
   engineDownloads: {
-    listOwned: (): Promise<EngineDownloadsListOwnedResult> =>
-      ipcRenderer.invoke('engine-downloads:list-owned'),
+    listOwned: (
+      opts: { forceRefresh?: boolean } = {}
+    ): Promise<EngineDownloadsListOwnedResult> =>
+      ipcRenderer.invoke('engine-downloads:list-owned', opts),
     fetchInstallPlan: (sku: {
       namespace: string
       catalogItemId: string

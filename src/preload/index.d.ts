@@ -206,6 +206,9 @@ export interface EngineDownloadsListOwnedResult {
   ok: boolean
   error?: string
   engines?: EngineSku[]
+  cached?: boolean
+  fetchedAt?: number
+  staleReason?: string
 }
 
 export interface EngineDownloadsFetchPlanResult {
@@ -257,7 +260,7 @@ export interface EngineInstalledEvent {
 }
 
 export interface EngineDownloadsApi {
-  listOwned(): Promise<EngineDownloadsListOwnedResult>
+  listOwned(opts?: { forceRefresh?: boolean }): Promise<EngineDownloadsListOwnedResult>
   fetchInstallPlan(sku: {
     namespace: string
     catalogItemId: string
