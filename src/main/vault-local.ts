@@ -49,41 +49,53 @@ export async function listLocalVault(vaultDirs: string[]): Promise<LocalVaultEnt
       continue
     }
 
-    for (const name of topNames) {
-      const entryPath = path.join(vaultDir, name)
-      const key = path.resolve(entryPath).toLowerCase()
-      if (seenPaths.has(key)) continue
-      let stat
-      try {
-        stat = await fsp.stat(entryPath)
-      } catch {
-        continue
-      }
-      if (!stat.isDirectory()) continue
-      const walked = await walkEntry(entryPath)
-      const dataPath = path.join(entryPath, 'data')
-      let hasData = false
-      try {
-        const ds = await fsp.stat(dataPath)
-        hasData = ds.isDirectory()
-      } catch {
-        hasData = false
-      }
-      entries.push({
-        name,
-        // `friendlyName` and `imageUrl` are filled in by the IPC layer (where
-        // we have access to the downloads + assets repos). Keep `null` here so
-        // the on-disk scanner stays self-contained and easy to test without a DB.
-        friendlyName: null,
-        imageUrl: null,
-        path: entryPath,
-        rootPath: vaultDir,
-        totalBytes: walked.totalBytes,
-        fileCount: walked.fileCount,
-        lastModified: walked.lastModified,
-        hasData
+    // Scan every top-level entry in parallel — the per-asset walk is the
+    // expensive part (recursive stat over thousands of files per asset),
+    // and there's no shared mutable state across entries. On a 50-asset
+    // vault this turns the wall time from ~sum(perAsset) into ~max(perAsset).
+    // Stays in-process: each walk's stats hit the libuv thread pool (default
+    // 4 threads) but `Promise.all` keeps them all pending simultaneously
+    // instead of one-at-a-time.
+    const perEntry = await Promise.all(
+      topNames.map(async (name) => {
+        const entryPath = path.join(vaultDir, name)
+        const key = path.resolve(entryPath).toLowerCase()
+        let stat
+        try {
+          stat = await fsp.stat(entryPath)
+        } catch {
+          return null
+        }
+        if (!stat.isDirectory()) return null
+        const [walked, hasData] = await Promise.all([
+          walkEntry(entryPath),
+          fsp
+            .stat(path.join(entryPath, 'data'))
+            .then((ds) => ds.isDirectory())
+            .catch(() => false)
+        ])
+        const entry: LocalVaultEntry = {
+          name,
+          // `friendlyName` and `imageUrl` are filled in by the IPC layer (where
+          // we have access to the downloads + assets repos). Keep `null` here so
+          // the on-disk scanner stays self-contained and easy to test without a DB.
+          friendlyName: null,
+          imageUrl: null,
+          path: entryPath,
+          rootPath: vaultDir,
+          totalBytes: walked.totalBytes,
+          fileCount: walked.fileCount,
+          lastModified: walked.lastModified,
+          hasData
+        }
+        return { entry, key }
       })
-      seenPaths.add(key)
+    )
+    for (const item of perEntry) {
+      if (!item) continue
+      if (seenPaths.has(item.key)) continue
+      seenPaths.add(item.key)
+      entries.push(item.entry)
     }
   }
 
@@ -111,22 +123,33 @@ async function walk(dir: string, out: WalkResult, depth: number): Promise<void> 
   } catch {
     return
   }
+  // Split entries before issuing any I/O so we can fire stats + recursive
+  // walks concurrently against the libuv thread pool. Mutating `out` is
+  // safe under JS's single-threaded event loop — `+=` on shared counters
+  // doesn't race when each Promise resumes one-at-a-time.
+  const subdirs: string[] = []
+  const files: string[] = []
   for (const item of items) {
     // Skip the chunk cache directory — those are transient and shouldn't
     // contribute to the user-visible asset size.
     if (depth === 0 && item.isDirectory() && item.name === 'cache') continue
     const child = path.join(dir, item.name)
-    if (item.isDirectory()) {
-      await walk(child, out, depth + 1)
-    } else if (item.isFile()) {
-      try {
-        const s = await fsp.stat(child)
-        out.totalBytes += s.size
-        out.fileCount += 1
-        if (s.mtimeMs > out.lastModified) out.lastModified = s.mtimeMs
-      } catch {
-        // skip transient/unreadable files
-      }
-    }
+    if (item.isDirectory()) subdirs.push(child)
+    else if (item.isFile()) files.push(child)
   }
+  await Promise.all([
+    Promise.all(
+      files.map(async (child) => {
+        try {
+          const s = await fsp.stat(child)
+          out.totalBytes += s.size
+          out.fileCount += 1
+          if (s.mtimeMs > out.lastModified) out.lastModified = s.mtimeMs
+        } catch {
+          // skip transient/unreadable files
+        }
+      })
+    ),
+    Promise.all(subdirs.map((child) => walk(child, out, depth + 1)))
+  ])
 }

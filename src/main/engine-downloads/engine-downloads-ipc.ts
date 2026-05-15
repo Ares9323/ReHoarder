@@ -1,5 +1,7 @@
 import { app, dialog, ipcMain } from 'electron'
 import { spawn, spawnSync } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
+import * as os from 'node:os'
 import * as path from 'node:path'
 import type { Session } from '../auth/session'
 import type { DownloadsManager } from '../downloads-manager'
@@ -340,11 +342,28 @@ function isElevatedNow(): boolean {
 
 /**
  * Re-spawn ReHoarder under a UAC elevation prompt and exit the current
- * process. Uses PowerShell's `Start-Process -Verb RunAs`, which is the
- * standard way to trigger UAC from a non-elevated parent without bundling
- * a separate manifest. The relaunched copy inherits the same `userData`
- * dir so settings + the downloads queue persist; the in-memory engine
- * plan does NOT persist, so the user re-opens the dialog after restart.
+ * process. Uses a temporary VBScript driven through `wscript.exe` that
+ * calls `Shell.Application.ShellExecute("ReHoarder.exe", "", "", "runas", 1)` —
+ * the canonical Windows pattern (used by sudo-prompt, Windows installers,
+ * legacy Squirrel-style updaters) that:
+ *   - is decoupled from PowerShell's variable startup cost and the cold-
+ *     console quirks a hidden detached `powershell -WindowStyle Hidden` hits;
+ *   - finishes within a few hundred milliseconds (wscript reads the script,
+ *     fires ShellExecute, exits) so the UAC chain is well past the parent-
+ *     process job-object teardown before we quit;
+ *   - works identically on packaged Velopack installs and standalone exe
+ *     layouts because `process.execPath` always points at the inner
+ *     `current\ReHoarder.exe`, which is a valid `ShellExecute` target.
+ *
+ * The previous PowerShell approach worked unattended in tests but failed
+ * silently in the wild on some Velopack-installed instances — the most
+ * likely cause is the detached `powershell.exe` being torn down with the
+ * parent before `Start-Process -Verb RunAs` had a chance to push the
+ * elevation request to `consent.exe`.
+ *
+ * The relaunched copy inherits the same `userData` dir so settings + the
+ * downloads queue persist; the in-memory engine plan does NOT persist, so
+ * the user re-opens the dialog after restart.
  */
 function relaunchElevatedWindows(): void {
   if (process.platform !== 'win32') {
@@ -352,38 +371,32 @@ function relaunchElevatedWindows(): void {
   }
   if (!app.isPackaged) {
     // In dev, `process.execPath` points at `node_modules\electron\dist\electron.exe`,
-    // not at a packaged ReHoarder.exe — Start-Process -Verb RunAs against that
-    // would relaunch a bare Electron without the dev server / preload bindings.
-    // Tell the user to relaunch their dev terminal as admin instead.
+    // not at a packaged ReHoarder.exe — UAC-launching that would re-spawn a
+    // bare Electron without the dev server / preload bindings. Tell the user
+    // to relaunch their dev terminal as admin instead.
     throw new Error(
       'Elevation relaunch is only available in packaged builds. ' +
         'In dev, close ReHoarder and run `npm run dev` from a terminal you started with "Run as administrator".'
     )
   }
-  // PowerShell single-quotes are literal — escape any apostrophe in the
-  // exe path by doubling it. Real-world this only matters for installs
-  // under `C:\Users\<name with '>` which is rare but cheap to handle.
-  const exe = process.execPath.replace(/'/g, "''")
-  const child = spawn(
-    'powershell.exe',
-    [
-      '-NoProfile',
-      '-WindowStyle',
-      'Hidden',
-      '-Command',
-      `Start-Process -FilePath '${exe}' -Verb RunAs`
-    ],
-    {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true
-    }
-  )
+  // VBS double-quote escape is `""` for a literal `"`. Real-world install
+  // paths under %LocalAppData% never contain quotes; the replace is defensive.
+  const exe = process.execPath.replace(/"/g, '""')
+  const vbs =
+    'Set objShell = CreateObject("Shell.Application")\r\n' +
+    `objShell.ShellExecute "${exe}", "", "", "runas", 1\r\n`
+  const vbsPath = path.join(os.tmpdir(), `rehoarder-elevate-${Date.now()}.vbs`)
+  writeFileSync(vbsPath, vbs, 'utf-8')
+  const child = spawn('wscript.exe', [vbsPath], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true
+  })
   child.unref()
-  // Give the elevated process a beat to claim the UAC prompt before we
-  // exit — quitting too fast occasionally drops the prompt on some
-  // Windows builds (observed on 22H2 with fast-launch enabled).
-  setTimeout(() => app.quit(), 200)
+  // Give wscript time to load the script + fire ShellExecute before we quit.
+  // After that, the elevated launch is owned by consent.exe + the new admin
+  // session — fully independent of our process tree.
+  setTimeout(() => app.quit(), 800)
 }
 
 /**

@@ -3,6 +3,7 @@
   import { createAuthStore } from './stores/auth.svelte'
   import { createLibraryStore } from './stores/library.svelte'
   import { freebiesStore } from './stores/freebies.svelte'
+  import { vaultStore } from './stores/vault.svelte'
   import LoginView from './lib/LoginView.svelte'
   import EmptyLibraryView from './lib/EmptyLibraryView.svelte'
   import AssetLibraryView from './lib/AssetLibraryView.svelte'
@@ -26,6 +27,13 @@
     if (auth.state.status === 'authenticated') {
       await library.refresh()
       void maybeFocusFreebiesTab()
+      // Warm the Vault scan in the background so opening the Vault tab is
+      // instant. `vault:list` walks every file under each configured root
+      // (size + mtime + count) — on a populated vault it can take 10+ s
+      // even on NVMe, and that latency used to fire on every first tab open.
+      // The store is a singleton, so this populates the cache for the
+      // LocalVaultView / AssetLibraryView (downloaded filter) too.
+      void vaultStore.ensureLoaded()
     }
   })
 

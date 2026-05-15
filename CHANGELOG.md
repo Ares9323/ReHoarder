@@ -4,6 +4,57 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] — 2026-05-15
+
+Patch release that unsticks two pain points reported against 0.1.2: the
+`Relaunch as administrator` button doing nothing on Velopack-installed
+copies, and the Vault tab stalling 10+ s on "Loading vault…" every first
+open. Also covers the persistent download-folder open glitch that fired
+the "Path is outside the configured vault roots" toast on running engine
+rows.
+
+### Fixed
+
+- `Relaunch as administrator` now actually re-launches ReHoarder under
+  UAC on Velopack installs. The old path spawned `powershell.exe -Verb RunAs`
+  detached + window-hidden, then quit 200 ms later — on installed copies
+  the parent's job-object teardown reliably killed the PowerShell child
+  before `Start-Process -Verb RunAs` had pushed the elevation request to
+  `consent.exe`. Switched to a temporary VBScript driven through
+  `wscript.exe` calling `Shell.Application.ShellExecute("ReHoarder.exe", "", "", "runas", 1)`
+  (same pattern used by `sudo-prompt` and legacy Squirrel updaters):
+  wscript finishes within a few hundred ms, after which the UAC chain is
+  owned by `consent.exe` + the elevated session and is fully decoupled
+  from ReHoarder's process tree. Bumped the parent-quit delay to 800 ms
+  so wscript has time to load the script + fire `ShellExecute` before
+  we exit.
+- `Open` button on a running engine download no longer surfaces
+  "Path is outside the configured vault roots". The `downloads:open-in-explorer`
+  IPC now trusts any path that matches the `destDir` of an existing
+  `downloads` row in addition to the configured vault / engine / project
+  roots — ReHoarder wrote that path itself at enqueue time after the
+  user went through the elevation pre-flight + picker, so it's
+  implicitly authorised even before `finalizeEngineInstall` appends the
+  parent dir to `settings.enginePaths` (which only happens at `status='done'`).
+
+### Changed
+
+- Vault tab opens instantly on app launches where it has been visited
+  before, and only stalls on the very first session boot. Two changes:
+  1. `App.svelte.onMount` warms `vaultStore.ensureLoaded()` in the
+     background right after auth lands, so by the time the user clicks
+     the tab the scan is already complete (singleton store survives tab
+     switches). The "Only Downloaded" filter on Assets benefits too.
+  2. `listLocalVault` parallelised at two levels: the per-asset walks
+     now run via `Promise.all` (wall time drops from
+     `sum(perAsset)` to `~max(perAsset)`), and inside each `walk` the
+     `stat` calls on files + recursive descent into subdirectories fire
+     concurrently against the libuv thread pool. On a 50-asset vault
+     with ~thousands of files each, the "Loading vault…" delay collapses
+     from 10+ s on NVMe to ~1–2 s.
+
+[0.1.3]: https://github.com/Ares9323/ReHoarder/releases/tag/v0.1.3
+
 ## [0.1.2] — 2026-05-15
 
 Engine downloads ship end-to-end: the Engines tab can now pull a UE binary
