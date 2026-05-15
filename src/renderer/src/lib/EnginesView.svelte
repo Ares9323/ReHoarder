@@ -75,6 +75,12 @@
 
   onMount(() => {
     void enginesStore.ensureLoaded()
+    // Warm the "owned engines" list in the background so the Install picker
+    // opens instantly the first time the user clicks it instead of stalling
+    // 5–10s on `listOwnedAssets` + the bulk catalog metadata fetch. The
+    // in-memory cache (installerOwnedEngines !== null) holds across re-mounts
+    // and gets invalidated by `onInstalled` and by a successful install.
+    void ensureInstallerOwnedLoaded()
   })
 
   // Listen for "engine just finished installing" from main — the
@@ -598,7 +604,7 @@
 {#if elevationPrompt}
   {@const p = elevationPrompt}
   <div
-    class="confirm-backdrop"
+    class="confirm-backdrop elevation-prompt-backdrop"
     role="presentation"
     onclick={(e) => {
       if (
@@ -1012,5 +1018,99 @@
     color: #fca5a5;
     background: #3a1f1f;
     border: 1px solid #5a2727;
+  }
+  /* Confirm modal — same look used in EnginePluginsPanel + SettingsView so
+     the visual language of "yes/no on a destructive bulk operation" stays
+     consistent across the app. */
+  .confirm-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    z-index: 290;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  /* Elevation prompt sits on top of an already-open EngineDownloadDialog
+     (z-index 290 there too); bumping the backdrop ensures the relaunch
+     buttons land above the dialog instead of being painted underneath. */
+  .elevation-prompt-backdrop {
+    z-index: 320;
+  }
+  .confirm-popup {
+    width: min(540px, 92vw);
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 10px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+    padding: 1.1rem 1.25rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+  .confirm-popup h3 {
+    margin: 0 0 0.2rem;
+    color: #fff;
+    font-size: 1rem;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .confirm-popup p {
+    margin: 0;
+    color: #c0c0c0;
+    font-size: 0.85rem;
+    line-height: 1.45;
+  }
+  .confirm-popup p.hint {
+    color: #909090;
+    font-size: 0.78rem;
+  }
+  .confirm-popup code {
+    background: #2a2a2a;
+    border: 1px solid #333;
+    border-radius: 3px;
+    padding: 0.05rem 0.35rem;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.8em;
+    word-break: break-all;
+  }
+  .confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .confirm-actions .ghost {
+    background: transparent;
+    color: #c0c0c0;
+    border: 1px solid #444;
+    border-radius: 5px;
+    padding: 0.45rem 1rem;
+    font-family: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+  .confirm-actions .ghost:hover:not(:disabled) {
+    color: #fff;
+    border-color: #666;
+  }
+  .confirm-actions .ghost:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  .confirm-actions .primary {
+    background: linear-gradient(135deg, #c084fc, #f472b6);
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    padding: 0.45rem 1.1rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .confirm-actions .primary:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
 </style>

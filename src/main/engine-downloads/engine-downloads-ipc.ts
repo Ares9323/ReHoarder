@@ -317,6 +317,16 @@ function relaunchElevatedWindows(): void {
   if (process.platform !== 'win32') {
     throw new Error('Elevation is only meaningful on Windows.')
   }
+  if (!app.isPackaged) {
+    // In dev, `process.execPath` points at `node_modules\electron\dist\electron.exe`,
+    // not at a packaged ReHoarder.exe — Start-Process -Verb RunAs against that
+    // would relaunch a bare Electron without the dev server / preload bindings.
+    // Tell the user to relaunch their dev terminal as admin instead.
+    throw new Error(
+      'Elevation relaunch is only available in packaged builds. ' +
+        'In dev, close ReHoarder and run `npm run dev` from a terminal you started with "Run as administrator".'
+    )
+  }
   // PowerShell single-quotes are literal — escape any apostrophe in the
   // exe path by doubling it. Real-world this only matters for installs
   // under `C:\Users\<name with '>` which is rare but cheap to handle.
