@@ -30,9 +30,19 @@ export function normalizeVaultAsset(
     ownedAt: ownedAt !== null && Number.isFinite(ownedAt) ? ownedAt : null,
     hidden: false,
     bookmarked: false,
+    seller: pickString((catalog as { developer?: unknown }).developer),
     raw: JSON.stringify({ summary, catalog }),
     syncedAt
   }
+}
+
+/** Trim + return a string only if it has non-whitespace content. Used by the
+ *  seller-extraction paths where the upstream payload is typed `unknown`
+ *  (catalog/publisher shapes vary across endpoints). */
+function pickString(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const t = v.trim()
+  return t.length > 0 ? t : null
 }
 
 function deriveFabUeListingType(item: FabLibraryItem): string | null {
@@ -123,6 +133,7 @@ export function normalizeFabAsset(item: FabLibraryItem, syncedAt: number): Asset
     ownedAt: null,
     hidden: false,
     bookmarked: false,
+    seller: pickString((item as { seller?: unknown }).seller),
     raw: JSON.stringify(item),
     syncedAt
   }
@@ -179,6 +190,7 @@ export function normalizeFabOtherAsset(
     ownedAt: null,
     hidden: false,
     bookmarked: false,
+    seller: pickString(listing.publisher?.sellerName),
     raw: JSON.stringify(listing),
     syncedAt
   }

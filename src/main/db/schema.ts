@@ -7,7 +7,12 @@ import {
 } from '../category-slug'
 
 export function applySchema(db: Database.Database): void {
-  applyMigrations(db)
+  // Order matters: create the base tables FIRST, then run migrations on top.
+  // `tryAddColumn` silently no-ops "no such table" errors, so on a fresh DB
+  // with the previous ordering the migrations would have skipped — leaving
+  // `bookmarked` / `sub_source` / `listing_type` / `seller` missing until
+  // the next launch. Creating first then migrating means a single launch
+  // converges to the full schema for both fresh installs and upgrades.
   db.exec(`
     CREATE TABLE IF NOT EXISTS assets (
       source TEXT NOT NULL,
@@ -18,6 +23,7 @@ export function applySchema(db: Database.Database): void {
       product_url TEXT,
       owned_at INTEGER,
       hidden INTEGER NOT NULL DEFAULT 0,
+      seller TEXT,
       raw TEXT,
       synced_at INTEGER NOT NULL,
       PRIMARY KEY (source, source_id)
@@ -64,6 +70,7 @@ export function applySchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads (status);
     CREATE INDEX IF NOT EXISTS idx_downloads_created ON downloads (created_at DESC);
   `)
+  applyMigrations(db)
 }
 
 /**
@@ -77,6 +84,7 @@ function applyMigrations(db: Database.Database): void {
   tryAddColumn(db, 'assets', 'bookmarked', 'INTEGER NOT NULL DEFAULT 0')
   tryAddColumn(db, 'assets', 'sub_source', 'TEXT')
   tryAddColumn(db, 'assets', 'listing_type', 'TEXT')
+  tryAddColumn(db, 'assets', 'seller', 'TEXT')
   tryAddColumn(db, 'downloads', 'engine_version', 'TEXT')
   tryAddColumn(db, 'downloads', 'install_target_path', 'TEXT')
   tryAddColumn(db, 'downloads', 'build_version', 'TEXT')
@@ -84,6 +92,7 @@ function applyMigrations(db: Database.Database): void {
   backfillListingType(db)
   migrateCategoriesToSluggedNames(db)
   migrateFabUePathListingTypes(db)
+  backfillSeller(db)
 }
 
 /**
@@ -322,6 +331,61 @@ function deriveListingTypeFromRaw(rawJson: string): string | null {
   }
   const dm = typeof obj.distributionMethod === 'string' ? obj.distributionMethod.toUpperCase() : ''
   return FAB_DISTRIBUTION_TO_LISTING_TYPE[dm] ?? null
+}
+
+/**
+ * Migration v2 → v3: populate `assets.seller` for rows that pre-date the
+ * column. The display-name lives in three different shapes depending on the
+ * source: `raw.seller` (Fab UE), `raw.publisher.sellerName` (Fab Other),
+ * `raw.catalog.developer` (Epic Vault). Pure-SQL with `json_extract` so we
+ * don't need to parse every blob in JS; runs once and tracks via
+ * `PRAGMA user_version`.
+ */
+function backfillSeller(db: Database.Database): void {
+  let v: number
+  try {
+    v = db.pragma('user_version', { simple: true }) as number
+  } catch {
+    v = 0
+  }
+  if (v >= 3) return
+  try {
+    const fabUe = db
+      .prepare(
+        `UPDATE assets
+            SET seller = NULLIF(TRIM(json_extract(raw, '$.seller')), '')
+          WHERE source = 'fab'
+            AND sub_source = 'fab-ue'
+            AND seller IS NULL
+            AND raw IS NOT NULL`
+      )
+      .run()
+    const fabOther = db
+      .prepare(
+        `UPDATE assets
+            SET seller = NULLIF(TRIM(json_extract(raw, '$.publisher.sellerName')), '')
+          WHERE source = 'fab'
+            AND sub_source = 'fab-other'
+            AND seller IS NULL
+            AND raw IS NOT NULL`
+      )
+      .run()
+    const vault = db
+      .prepare(
+        `UPDATE assets
+            SET seller = NULLIF(TRIM(json_extract(raw, '$.catalog.developer')), '')
+          WHERE source = 'vault'
+            AND seller IS NULL
+            AND raw IS NOT NULL`
+      )
+      .run()
+    db.pragma('user_version = 3')
+    console.warn(
+      `[schema] backfilled seller for ${fabUe.changes} fab-ue, ${fabOther.changes} fab-other, ${vault.changes} vault rows (user_version → 3)`
+    )
+  } catch (err) {
+    console.warn('[schema] seller backfill skipped:', err)
+  }
 }
 
 function tryAddColumn(

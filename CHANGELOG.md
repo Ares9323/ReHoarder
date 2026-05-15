@@ -4,6 +4,45 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] — 2026-05-15
+
+Creator / seller name surfaced on every asset card and now part of the
+library search. No new sync round-trip required: the data was already
+in the cached `assets.raw` JSON, this release lifts it into a dedicated
+column and renders it on the card.
+
+### Added
+
+- New `seller` column on `assets` (`raw.seller` for Fab UE,
+  `raw.publisher.sellerName` for Fab Other, `raw.catalog.developer` for
+  Epic Vault). Backfilled on first launch via `PRAGMA user_version = 3`
+  with three single-pass SQL UPDATEs (`json_extract` against the existing
+  `raw` blobs — no re-parse on the JS side, no network round-trip).
+- Asset cards now render a `by <Seller Name>` line below the title.
+  Clicking it opens a Fab search filtered by that name
+  (`https://www.fab.com/search?q=<encoded>`) — Fab doesn't expose a
+  stable seller-profile URL in the library payload, so the search route
+  is the safe fallback that surfaces "everything else by this creator".
+  Hidden when the upstream payload didn't carry a seller value.
+- Library search (`library:list` IPC) now matches the search query
+  against `seller` in addition to `title` and `description`. Typing
+  "infinity pbr" surfaces every asset by that publisher, not only the
+  ones with the phrase in the title.
+
+### Fixed
+
+- `applySchema` was running migrations *before* the `CREATE TABLE`
+  statements, so on a truly-fresh database `tryAddColumn` no-op'd
+  against a not-yet-existing `assets` table and the columns that came
+  in as migrations (`bookmarked`, `sub_source`, `listing_type`, and now
+  `seller`) never got added on that first launch. Reordered to create
+  tables first then migrate — idempotent for existing installs, makes
+  the test suite's `:memory:` fixtures converge in a single pass, and
+  unbreaks 17 vitest cases that had been failing on `master` against
+  the `WHERE assets has no column named sub_source` SQL error.
+
+[0.1.4]: https://github.com/Ares9323/ReHoarder/releases/tag/v0.1.4
+
 ## [0.1.3] — 2026-05-15
 
 Patch release that unsticks two pain points reported against 0.1.2: the

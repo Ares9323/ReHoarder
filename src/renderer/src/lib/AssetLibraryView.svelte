@@ -32,6 +32,7 @@
     ownedAt: number | null
     hidden: boolean
     bookmarked: boolean
+    seller: string | null
     raw: string | null
     syncedAt: number
   }
@@ -495,6 +496,7 @@
       source={a.source}
       hidden={a.hidden}
       bookmarked={a.bookmarked}
+      seller={a.seller}
       engineVersions={versions}
       installedEngineVersions={installedEngineVersions}
       downloadedVersions={downloadedVersionsFor(a)}

@@ -16,6 +16,8 @@
     source: AssetSource
     hidden: boolean
     bookmarked: boolean
+    /** Display name of the asset's creator / seller / publisher. Rendered as a clickable link to a Fab search filtered by that name. `null` hides the row. */
+    seller?: string | null
     /** Short labels of engine versions this asset is available for, e.g. `["5.4","5.6"]`. */
     engineVersions?: string[]
     /** Slugs the user has installed locally — used to decide if a chip can fast-path or must open Custom Install. */
@@ -48,6 +50,7 @@
     source,
     hidden,
     bookmarked,
+    seller = null,
     engineVersions = [],
     installedEngineVersions = [],
     downloadedVersions = [],
@@ -235,6 +238,22 @@
   }
 
   /**
+   * Click on the seller line: open a Fab search URL filtered by the seller's
+   * display name. Fab doesn't expose a stable seller-profile URL in the
+   * library payload (no slug / uid for Fab UE), so we route through the
+   * generic search instead — surfaces every listing whose seller / title /
+   * description mentions the name, which is what a user clicking on the
+   * creator would want ("show me more by them").
+   */
+  function handleSellerClick(e: globalThis.MouseEvent): void {
+    if (!seller) return
+    e.preventDefault()
+    e.stopPropagation()
+    const url = `https://www.fab.com/search?q=${encodeURIComponent(seller)}`
+    void window.open(url, '_blank', 'noreferrer')
+  }
+
+  /**
    * Tooltip + chip label for an already-downloaded chip, by asset kind. Mirrors
    * the wording Epic Games Launcher / Fab use: "Create project" for full
    * projects, "Add to project" for asset packs, "Install" for plugins.
@@ -296,6 +315,14 @@
   </div>
   <div class="body">
     <h3 {title}>{title}</h3>
+    {#if seller}
+      <button
+        type="button"
+        class="seller"
+        onclick={handleSellerClick}
+        title={`See more from ${seller} on Fab`}
+      >by {seller}</button>
+    {/if}
     {#if cleanDescription}
       <p class="desc">{cleanDescription}</p>
     {/if}
@@ -543,6 +570,29 @@
     display: -webkit-box;
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
+  }
+
+  .seller {
+    display: inline-block;
+    margin: 0.15rem 0 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: #888;
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-style: italic;
+    line-height: 1.2;
+    cursor: pointer;
+    text-align: left;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .seller:hover {
+    color: #c084fc;
+    text-decoration: underline;
   }
 
   .desc {

@@ -17,6 +17,8 @@ export interface AssetRow {
   ownedAt: number | null
   hidden: boolean
   bookmarked: boolean
+  /** Display name of the seller / publisher / developer — `raw.seller` for Fab UE, `raw.publisher.sellerName` for Fab Other, `raw.catalog.developer` for Vault. Null when the upstream payload doesn't carry it. */
+  seller: string | null
   raw: string | null
   syncedAt: number
 }
@@ -50,6 +52,7 @@ interface AssetRowDb {
   owned_at: number | null
   hidden: number
   bookmarked: number
+  seller: string | null
   raw: string | null
   synced_at: number
 }
@@ -69,6 +72,7 @@ function fromDb(r: AssetRowDb): AssetRow {
     ownedAt: r.owned_at,
     hidden: r.hidden !== 0,
     bookmarked: r.bookmarked !== 0,
+    seller: r.seller,
     raw: r.raw,
     syncedAt: r.synced_at
   }
@@ -93,8 +97,8 @@ export class AssetsRepo {
     // `sub_source` IS refreshed: sync derives it from the raw payload and
     // overwriting keeps it consistent with the source endpoint the row came from.
     this.upsertStmt = db.prepare(`
-      INSERT INTO assets (source, source_id, sub_source, listing_type, title, description, image_url, product_url, owned_at, hidden, bookmarked, raw, synced_at)
-      VALUES (@source, @source_id, @sub_source, @listing_type, @title, @description, @image_url, @product_url, @owned_at, @hidden, @bookmarked, @raw, @synced_at)
+      INSERT INTO assets (source, source_id, sub_source, listing_type, title, description, image_url, product_url, owned_at, hidden, bookmarked, seller, raw, synced_at)
+      VALUES (@source, @source_id, @sub_source, @listing_type, @title, @description, @image_url, @product_url, @owned_at, @hidden, @bookmarked, @seller, @raw, @synced_at)
       ON CONFLICT(source, source_id) DO UPDATE SET
         sub_source = excluded.sub_source,
         listing_type = excluded.listing_type,
@@ -103,6 +107,7 @@ export class AssetsRepo {
         image_url = excluded.image_url,
         product_url = excluded.product_url,
         owned_at = COALESCE(excluded.owned_at, owned_at),
+        seller = excluded.seller,
         raw = excluded.raw,
         synced_at = excluded.synced_at
     `)
@@ -142,6 +147,7 @@ export class AssetsRepo {
       owned_at: asset.ownedAt,
       hidden: asset.hidden ? 1 : 0,
       bookmarked: asset.bookmarked ? 1 : 0,
+      seller: asset.seller,
       raw: asset.raw,
       synced_at: asset.syncedAt
     })
@@ -195,9 +201,14 @@ export class AssetsRepo {
       params.push(filters.category)
     }
     if (filters.search && filters.search.trim().length > 0) {
-      clauses.push("(LOWER(title) LIKE ? OR LOWER(IFNULL(description, '')) LIKE ?)")
+      // Match on title, description AND seller — so a query like "infinity pbr"
+      // surfaces every asset by that creator in addition to titles that
+      // happen to contain the phrase.
+      clauses.push(
+        "(LOWER(title) LIKE ? OR LOWER(IFNULL(description, '')) LIKE ? OR LOWER(IFNULL(seller, '')) LIKE ?)"
+      )
       const like = `%${filters.search.trim().toLowerCase()}%`
-      params.push(like, like)
+      params.push(like, like, like)
     }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''

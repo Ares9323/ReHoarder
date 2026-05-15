@@ -40,6 +40,7 @@ export interface AssetRow {
   ownedAt: number | null
   hidden: boolean
   bookmarked: boolean
+  seller: string | null
   raw: string | null
   syncedAt: number
 }
