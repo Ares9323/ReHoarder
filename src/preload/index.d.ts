@@ -214,6 +214,18 @@ export interface EngineDownloadsFetchPlanResult {
   summary?: EngineInstallPlanSummary
 }
 
+export interface EngineDownloadsInstallResult {
+  ok: boolean
+  error?: string
+  downloadId?: string
+}
+
+export interface EngineDownloadsPickDirResult {
+  ok: boolean
+  error?: string
+  path?: string | null
+}
+
 export interface EngineDownloadsApi {
   listOwned(): Promise<EngineDownloadsListOwnedResult>
   fetchInstallPlan(sku: {
@@ -221,6 +233,12 @@ export interface EngineDownloadsApi {
     catalogItemId: string
     appName: string
   }): Promise<EngineDownloadsFetchPlanResult>
+  pickInstallDir(defaultPath: string | null): Promise<EngineDownloadsPickDirResult>
+  install(args: {
+    sku: { namespace: string; catalogItemId: string; appName: string; shortVersion: string }
+    selectedTags: string[]
+    installDir: string
+  }): Promise<EngineDownloadsInstallResult>
 }
 
 export interface DebugApi {

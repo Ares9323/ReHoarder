@@ -7,6 +7,8 @@ import { composeSkipPatterns } from './download/cruft-filter'
 import { scanEngines } from './engines-local'
 import type { AppSettings, SettingsStore } from './settings'
 import { DownloadCancelledError } from './download/download-types'
+import type { EngineInstallPlan } from './engine-downloads/engine-catalog-client'
+import { runEngineDownload } from './engine-downloads/engine-runner'
 
 function buildSkipPatterns(cfg: AppSettings): string[] {
   return composeSkipPatterns({
@@ -62,6 +64,17 @@ export class DownloadsManager {
   private stopped = false
   /** Per-id throttle for progress broadcasts (~5/s each) — chunk-grained updates would otherwise hammer IPC. */
   private readonly lastProgressBroadcastAt = new Map<string, number>()
+  /** Engine downloads carry an `EngineInstallPlan` (parsed manifest + signed
+   *  CDN base URIs) and a `Set<string>` of selected install tags that the
+   *  DB row can't model on its own. We keep them in memory keyed by row id;
+   *  on app restart an interrupted engine row drops to `failed` with a hint
+   *  to re-enqueue from the Engines tab (persisting the plan across restarts
+   *  would mean writing the 35 MB parsed manifest to disk, which isn't worth
+   *  the trade-off in v1). */
+  private readonly enginePending = new Map<
+    string,
+    { plan: EngineInstallPlan; selectedTags: Set<string> }
+  >()
 
   constructor(private readonly deps: DownloadsManagerDeps) {}
 
@@ -97,6 +110,42 @@ export class DownloadsManager {
       filesTotal: 0,
       engineVersion: opts.engineVersion ?? null,
       installTargetPath: opts.installTargetPath ?? null,
+      createdAt: Date.now()
+    })
+    this.notify()
+    void this.pump()
+    return row
+  }
+
+  /**
+   * Engine-specific enqueue: inserts the row with `source='engine'` and
+   * `sourceId=<appName>`, then stashes the install plan + selected tags in
+   * memory so `runDownload` can hand them to the engine runner. Title is
+   * derived from the build version for display; install dir is mandatory.
+   */
+  enqueueEngine(args: {
+    appName: string
+    shortVersion: string
+    buildVersion: string
+    installDir: string
+    plan: EngineInstallPlan
+    selectedTags: Set<string>
+  }): DownloadRow {
+    const id = randomUUID()
+    const title = `Unreal Engine ${args.shortVersion}`
+    this.enginePending.set(id, { plan: args.plan, selectedTags: args.selectedTags })
+    const row = this.deps.repo.insert({
+      id,
+      source: 'engine',
+      sourceId: args.appName,
+      title,
+      status: 'queued',
+      bytesDone: 0,
+      bytesTotal: 0,
+      filesDone: 0,
+      filesTotal: 0,
+      engineVersion: args.shortVersion,
+      installTargetPath: args.installDir,
       createdAt: Date.now()
     })
     this.notify()
@@ -245,6 +294,10 @@ export class DownloadsManager {
    * leak out and crash the manager.
    */
   private async runDownload(row: DownloadRow, abort: AbortController): Promise<void> {
+    if (row.source === 'engine') {
+      await this.runEngineRow(row, abort)
+      return
+    }
     const cfg = this.deps.settings.load()
     // Decide the destination ahead of the runner: explicit override > engine-plugin
     // auto-route (for CODE_PLUGIN assets with a matched engine install) > the
@@ -352,6 +405,92 @@ export class DownloadsManager {
       this.lastProgressBroadcastAt.delete(row.id)
       this.notify()
       // Tail-call the next item, if any.
+      void this.pump()
+    }
+  }
+
+  /**
+   * Engine-specific runner. Picks up the cached plan + selectedTags that
+   * `enqueueEngine` stashed in memory, then delegates to the shared
+   * chunk-download pipeline. When the cached plan is missing (e.g. row
+   * survived an app restart) we fail with a clear hint.
+   */
+  private async runEngineRow(row: DownloadRow, abort: AbortController): Promise<void> {
+    const pending = this.enginePending.get(row.id)
+    if (!pending) {
+      this.deps.repo.setStatus(row.id, 'failed', {
+        error:
+          'Engine install plan not in memory (was the app restarted mid-download?). ' +
+          'Re-open Engines → Install engine… to start a fresh download.',
+        finishedAt: Date.now()
+      })
+      this.running.delete(row.id)
+      this.lastProgressBroadcastAt.delete(row.id)
+      this.notify()
+      void this.pump()
+      return
+    }
+    if (!row.installTargetPath) {
+      this.deps.repo.setStatus(row.id, 'failed', {
+        error: 'Engine row has no install target path.',
+        finishedAt: Date.now()
+      })
+      this.enginePending.delete(row.id)
+      this.running.delete(row.id)
+      this.notify()
+      void this.pump()
+      return
+    }
+    try {
+      await runEngineDownload(pending.plan, {
+        installDir: row.installTargetPath,
+        selectedTags: pending.selectedTags,
+        signal: abort.signal,
+        onLog: (m) => console.warn(`[engines:${row.id.slice(0, 8)}]`, m),
+        onProgress: (p) => {
+          this.deps.repo.updateProgress(
+            row.id,
+            p.bytesDone,
+            p.bytesTotal,
+            p.filesDone,
+            p.filesTotal,
+            p.currentFile
+          )
+          const now = Date.now()
+          const last = this.lastProgressBroadcastAt.get(row.id) ?? 0
+          if (now - last > 200) {
+            this.lastProgressBroadcastAt.set(row.id, now)
+            const fresh = this.deps.repo.findById(row.id)
+            if (fresh) this.deps.broadcastProgress?.(row.id, fresh)
+          }
+        },
+        onStart: (startInfo) => {
+          this.deps.repo.setStatus(row.id, 'running', {
+            destDir: startInfo.installDir,
+            bytesTotal: startInfo.bytesTotal,
+            filesTotal: startInfo.filesTotal,
+            buildVersion: startInfo.buildVersion
+          })
+          this.notify()
+        }
+      })
+      this.deps.repo.setStatus(row.id, 'done', { finishedAt: Date.now(), currentFile: null })
+    } catch (err) {
+      const cancelled = err instanceof DownloadCancelledError
+      const msg = err instanceof Error ? err.message : String(err)
+      this.deps.repo.setStatus(row.id, cancelled ? 'cancelled' : 'failed', {
+        finishedAt: Date.now(),
+        error: cancelled ? null : msg,
+        currentFile: null
+      })
+      if (!cancelled) {
+        console.error(`[engines:${row.id.slice(0, 8)}] failed:`, msg)
+      }
+    } finally {
+      this.enginePending.delete(row.id)
+      this.running.delete(row.id)
+      this.lastProgressBroadcastAt.delete(row.id)
+      this.notify()
       void this.pump()
     }
   }

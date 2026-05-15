@@ -705,6 +705,18 @@ export interface EngineDownloadsFetchPlanResult {
   summary?: EngineInstallPlanSummary
 }
 
+export interface EngineDownloadsInstallResult {
+  ok: boolean
+  error?: string
+  downloadId?: string
+}
+
+export interface EngineDownloadsPickDirResult {
+  ok: boolean
+  error?: string
+  path?: string | null
+}
+
 const api = {
   auth: {
     getState: (): Promise<AuthState> => ipcRenderer.invoke('auth:get-state'),
@@ -866,7 +878,15 @@ const api = {
       catalogItemId: string
       appName: string
     }): Promise<EngineDownloadsFetchPlanResult> =>
-      ipcRenderer.invoke('engine-downloads:fetch-install-plan', sku)
+      ipcRenderer.invoke('engine-downloads:fetch-install-plan', sku),
+    pickInstallDir: (defaultPath: string | null): Promise<EngineDownloadsPickDirResult> =>
+      ipcRenderer.invoke('engine-downloads:pick-install-dir', defaultPath),
+    install: (args: {
+      sku: { namespace: string; catalogItemId: string; appName: string; shortVersion: string }
+      selectedTags: string[]
+      installDir: string
+    }): Promise<EngineDownloadsInstallResult> =>
+      ipcRenderer.invoke('engine-downloads:install', args)
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),

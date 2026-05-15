@@ -1,5 +1,6 @@
-import { ipcMain } from 'electron'
+import { dialog, ipcMain } from 'electron'
 import type { Session } from '../auth/session'
+import type { DownloadsManager } from '../downloads-manager'
 import {
   fetchEngineInstallPlan,
   listOwnedEngines,
@@ -63,7 +64,25 @@ export interface EngineDownloadsFetchPlanResult {
   summary?: EngineInstallPlanSummary
 }
 
-export function registerEngineDownloadsIpc(session: Session): void {
+export interface EngineDownloadsInstallResult {
+  ok: boolean
+  error?: string
+  /** ID of the queued `downloads` row, useful for the renderer to navigate
+   *  the Downloads tab to the newly-created entry. */
+  downloadId?: string
+}
+
+export interface EngineDownloadsPickDirResult {
+  ok: boolean
+  error?: string
+  /** Absolute path the user picked. `null` when the dialog was cancelled. */
+  path?: string | null
+}
+
+export function registerEngineDownloadsIpc(
+  session: Session,
+  downloadsManager: DownloadsManager
+): void {
   ipcMain.handle(
     'engine-downloads:list-owned',
     async (): Promise<EngineDownloadsListOwnedResult> => {
@@ -91,30 +110,17 @@ export function registerEngineDownloadsIpc(session: Session): void {
         return { ok: false, error: 'Not authenticated — log in first.' }
       }
       try {
-        // Cache hit short-circuit so re-opening the dialog with the same
-        // engine doesn't re-download the 35 MB manifest.
-        const cached = planCache.get(sku.appName)
-        const now = Date.now()
-        let plan: EngineInstallPlan
-        let fetchedAt: number
-        if (cached && now - cached.fetchedAt < PLAN_TTL_MS) {
-          plan = cached.plan
-          fetchedAt = cached.fetchedAt
-        } else {
-          plan = await fetchEngineInstallPlan(token, sku)
-          fetchedAt = now
-          planCache.set(sku.appName, { plan, fetchedAt })
-        }
+        const plan = await getOrFetchPlan(token, sku)
         return {
           ok: true,
           summary: {
-            appName: plan.appName,
-            buildVersion: plan.buildVersion,
-            manifestHash: plan.manifestHash,
-            totalCompressedBytes: plan.totalCompressedBytes,
-            totalDecompressedBytes: plan.totalDecompressedBytes,
-            components: describeComponents(plan.installTagsHistogram),
-            fetchedAt
+            appName: plan.entry.plan.appName,
+            buildVersion: plan.entry.plan.buildVersion,
+            manifestHash: plan.entry.plan.manifestHash,
+            totalCompressedBytes: plan.entry.plan.totalCompressedBytes,
+            totalDecompressedBytes: plan.entry.plan.totalDecompressedBytes,
+            components: describeComponents(plan.entry.plan.installTagsHistogram),
+            fetchedAt: plan.entry.fetchedAt
           }
         }
       } catch (err) {
@@ -122,6 +128,79 @@ export function registerEngineDownloadsIpc(session: Session): void {
       }
     }
   )
+
+  ipcMain.handle(
+    'engine-downloads:pick-install-dir',
+    async (
+      _event,
+      defaultPath: string | null
+    ): Promise<EngineDownloadsPickDirResult> => {
+      try {
+        const r = await dialog.showOpenDialog({
+          title: 'Pick install location for the engine',
+          properties: ['openDirectory', 'createDirectory'],
+          defaultPath: defaultPath ?? undefined
+        })
+        if (r.canceled || r.filePaths.length === 0) return { ok: true, path: null }
+        return { ok: true, path: r.filePaths[0] }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'engine-downloads:install',
+    async (
+      _event,
+      args: {
+        sku: { namespace: string; catalogItemId: string; appName: string; shortVersion: string }
+        selectedTags: string[]
+        installDir: string
+      }
+    ): Promise<EngineDownloadsInstallResult> => {
+      const token = session.getAccessToken()
+      if (!token) {
+        return { ok: false, error: 'Not authenticated — log in first.' }
+      }
+      const installDir = args.installDir.trim()
+      if (installDir.length === 0) {
+        return { ok: false, error: 'Install directory is required.' }
+      }
+      try {
+        const fresh = await getOrFetchPlan(token, args.sku)
+        const row = downloadsManager.enqueueEngine({
+          appName: args.sku.appName,
+          shortVersion: args.sku.shortVersion,
+          buildVersion: fresh.entry.plan.buildVersion,
+          installDir,
+          plan: fresh.entry.plan,
+          selectedTags: new Set(args.selectedTags)
+        })
+        return { ok: true, downloadId: row.id }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+}
+
+/** Cache lookup with auto-refresh — used by both `fetch-install-plan` (UI)
+ *  and `install` (queue). Returning the entry instead of just the plan lets
+ *  callers reuse `fetchedAt` without re-reading the cache. */
+async function getOrFetchPlan(
+  token: string,
+  sku: { namespace: string; catalogItemId: string; appName: string }
+): Promise<{ entry: CachedPlan }> {
+  const cached = planCache.get(sku.appName)
+  const now = Date.now()
+  if (cached && now - cached.fetchedAt < PLAN_TTL_MS) {
+    return { entry: cached }
+  }
+  const plan = await fetchEngineInstallPlan(token, sku)
+  const entry: CachedPlan = { plan, fetchedAt: now }
+  planCache.set(sku.appName, entry)
+  return { entry }
 }
 
 /**

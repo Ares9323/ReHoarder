@@ -517,21 +517,29 @@
     sku={s}
     suggestedRoot={scannedPaths[0] ?? null}
     onClose={() => (installerSelectedSku = null)}
-    onConfirm={(payload) => {
-      // Task #15 wires this to the actual chunk runner + Downloads queue.
-      // For now: close the dialog and surface a flash describing what
-      // would have been queued so the UI flow is verifiable end-to-end.
-      const labels = payload.selectedTags
-        .map((t) => {
-          if (t === '') return 'Core'
-          if (t.startsWith('platform_')) return t.slice('platform_'.length)
-          return t.replace(/_/g, ' ')
-        })
-        .join(', ')
+    onConfirm={async (payload) => {
+      const r = await window.api.engineDownloads.install({
+        sku: {
+          namespace: payload.sku.namespace,
+          catalogItemId: payload.sku.catalogItemId,
+          appName: payload.sku.appName,
+          shortVersion: payload.sku.shortVersion
+        },
+        selectedTags: payload.selectedTags,
+        installDir: payload.installDir
+      })
+      if (!r.ok) {
+        flashInstaller(`Could not queue install: ${r.error}`)
+        return
+      }
       flashInstaller(
-        `Engine download (chunk runner) ships in the next commit. Selection: ${payload.sku.appName} → ${payload.installDir} · components: ${labels}`
+        `Queued install of ${payload.sku.appName} → ${payload.installDir}. Watch progress in Downloads.`
       )
       installerSelectedSku = null
+      // The owned list now has one fewer "installable" engine — invalidate
+      // it so the picker re-fetches next time it opens. We don't await this;
+      // the next picker open will hit the stale data once and refresh.
+      installerOwnedEngines = null
     }}
   />
 {/if}

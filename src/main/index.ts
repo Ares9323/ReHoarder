@@ -199,7 +199,6 @@ app.whenReady().then(async () => {
     }
   })
   registerEnginesIpc(settingsStore)
-  registerEngineDownloadsIpc(session)
   registerUpdatesIpc(() => mainWindow)
   const downloadsRepo = new DownloadsRepo(db.raw)
   registerVaultIpc(settingsStore, downloadsRepo, assetsRepo)
@@ -217,6 +216,7 @@ app.whenReady().then(async () => {
     broadcast: broadcastDownloads,
     broadcastProgress: broadcastDownloadProgress
   })
+  registerEngineDownloadsIpc(session, downloadsManager)
   registerDownloadsIpc(downloadsManager, settingsStore)
   registerSettingsIpc(settingsStore, {
     onChange: () => downloadsManager.onSettingsChanged()

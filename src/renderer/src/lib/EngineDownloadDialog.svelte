@@ -181,9 +181,12 @@
   }
 
   async function pickInstallDir(): Promise<void> {
-    // The IPC for a directory picker doesn't exist yet — task #15 wires it
-    // alongside the chunk runner. For now the user can type/paste.
-    // (Stubbed; a follow-up commit adds `engine-downloads:pick-install-dir`.)
+    const r = await window.api.engineDownloads.pickInstallDir(installDir || null)
+    if (!r.ok) {
+      error = r.error ?? 'Could not open directory picker'
+      return
+    }
+    if (r.path) installDir = r.path
   }
 
   async function confirm(): Promise<void> {
@@ -307,11 +310,14 @@
               spellcheck="false"
               placeholder={'e.g. D:\\UE_' + sku.shortVersion}
             />
-            <button type="button" class="ghost" onclick={() => void pickInstallDir()} disabled>
+            <button type="button" class="ghost" onclick={() => void pickInstallDir()}>
               Browse…
             </button>
           </div>
-          <span class="hint">Directory picker wires in the next commit (task #15).</span>
+          <span class="hint">
+            Pick an empty folder — the engine's <code>Engine/</code>, <code>Templates/</code>
+            and friends land directly under here.
+          </span>
         </label>
         <div class="size-summary">
           <div><strong>Selection size:</strong> {fmtBytes(totalSelectedBytes)}</div>
