@@ -17,3 +17,30 @@ body {
   margin: 0;
   min-height: 100vh;
 }
+
+/* Minimal scrollbars across the app. Chromium honours -webkit-scrollbar
+   reliably (we ship Electron, no cross-browser concern). Firefox/Gecko
+   doesn't apply, but Electron is Chromium-only here so this covers 100%
+   of users. The thumb fades up on hover so quiet panels stay quiet but
+   long lists remain easy to grab. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}

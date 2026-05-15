@@ -133,12 +133,117 @@ export interface DebugDownloadSampleAssetResult {
   firstFiles?: Array<{ filename: string; size: number; skipped: boolean }>
 }
 
+export interface DebugLauncherCatalogResult {
+  ok: boolean
+  error?: string
+  totalAssets?: number
+  engineCandidates?: Array<{
+    namespace: string
+    catalogItemId: string
+    appName: string
+    labelName: string
+    buildVersion?: string
+    title?: string
+    categoryPaths?: string[]
+  }>
+  savedDumpPath?: string
+}
+
+export interface DebugEngineDownloadInfoResult {
+  ok: boolean
+  error?: string
+  status?: number
+  savedJsonPath?: string
+  firstManifestUrl?: string
+}
+
+export interface DebugEngineManifestResult {
+  ok: boolean
+  error?: string
+  appName?: string
+  buildVersion?: string
+  manifestHash?: string
+  blobBytes?: number
+  fileCount?: number
+  chunkCount?: number
+  totalFileSize?: number
+  installTagsHistogram?: Array<{ tag: string; fileCount: number; bytes: number }>
+  baseUris?: string[]
+  savedBlobPath?: string
+  savedJsonPath?: string
+}
+
+export interface EngineSku {
+  appName: string
+  catalogItemId: string
+  namespace: string
+  buildVersion: string
+  shortVersion: string
+}
+
+export interface EngineComponentDescriptor {
+  tag: string
+  label: string
+  defaultEnabled: boolean
+  alwaysIncluded: boolean
+  isPlatform: boolean
+  requires?: string[]
+  fileCount: number
+  bytes: number
+}
+
+export interface EngineInstallPlanSummary {
+  appName: string
+  buildVersion: string
+  manifestHash: string
+  totalCompressedBytes: number
+  totalDecompressedBytes: number
+  components: EngineComponentDescriptor[]
+  fetchedAt: number
+}
+
+export interface EngineDownloadsListOwnedResult {
+  ok: boolean
+  error?: string
+  engines?: EngineSku[]
+}
+
+export interface EngineDownloadsFetchPlanResult {
+  ok: boolean
+  error?: string
+  summary?: EngineInstallPlanSummary
+}
+
+export interface EngineDownloadsApi {
+  listOwned(): Promise<EngineDownloadsListOwnedResult>
+  fetchInstallPlan(sku: {
+    namespace: string
+    catalogItemId: string
+    appName: string
+  }): Promise<EngineDownloadsFetchPlanResult>
+}
+
 export interface DebugApi {
   fetchSampleManifest(assetId: string): Promise<DebugFetchSampleManifestResult>
   clearLibrary(opts?: {
     sources?: Array<'vault' | 'fab' | 'legacy'>
   }): Promise<DebugClearLibraryResult>
   downloadSampleAsset(assetId: string): Promise<DebugDownloadSampleAssetResult>
+  listLauncherCatalog(): Promise<DebugLauncherCatalogResult>
+  fetchEngineDownloadInfo(args: {
+    namespace: string
+    catalogItemId: string
+    appName: string
+    platform?: string
+    labelName?: string
+  }): Promise<DebugEngineDownloadInfoResult>
+  fetchEngineManifest(args: {
+    namespace: string
+    catalogItemId: string
+    appName: string
+    platform?: string
+    labelName?: string
+  }): Promise<DebugEngineManifestResult>
 }
 
 export type ImageSize = 'small' | 'medium' | 'large'
@@ -769,6 +874,7 @@ declare global {
       debug: DebugApi
       vault: VaultApi
       engines: EnginesApi
+      engineDownloads: EngineDownloadsApi
       projects: ProjectsApi
       downloads: DownloadsApi
       settings: SettingsApi

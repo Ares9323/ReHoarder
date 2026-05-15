@@ -4,6 +4,7 @@ import { promises as fsp } from 'node:fs'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { VelopackApp } from 'velopack'
 import { registerUpdatesIpc, runStartupUpdateCheck } from './updates-ipc'
+import { registerEngineDownloadsIpc } from './engine-downloads/engine-downloads-ipc'
 
 // Velopack hook — MUST run before any other startup work. The installer
 // re-invokes us with custom CLI args (first-run, update, uninstall, restart)
@@ -198,6 +199,7 @@ app.whenReady().then(async () => {
     }
   })
   registerEnginesIpc(settingsStore)
+  registerEngineDownloadsIpc(session)
   registerUpdatesIpc(() => mainWindow)
   const downloadsRepo = new DownloadsRepo(db.raw)
   registerVaultIpc(settingsStore, downloadsRepo, assetsRepo)

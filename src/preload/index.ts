@@ -624,6 +624,87 @@ export interface DebugFetchSampleManifestResult {
   savedJsonPath?: string
 }
 
+export interface DebugLauncherCatalogResult {
+  ok: boolean
+  error?: string
+  totalAssets?: number
+  engineCandidates?: Array<{
+    namespace: string
+    catalogItemId: string
+    appName: string
+    labelName: string
+    buildVersion?: string
+    title?: string
+    categoryPaths?: string[]
+  }>
+  savedDumpPath?: string
+}
+
+export interface DebugEngineDownloadInfoResult {
+  ok: boolean
+  error?: string
+  status?: number
+  savedJsonPath?: string
+  firstManifestUrl?: string
+}
+
+export interface DebugEngineManifestResult {
+  ok: boolean
+  error?: string
+  appName?: string
+  buildVersion?: string
+  manifestHash?: string
+  blobBytes?: number
+  fileCount?: number
+  chunkCount?: number
+  totalFileSize?: number
+  installTagsHistogram?: Array<{ tag: string; fileCount: number; bytes: number }>
+  baseUris?: string[]
+  savedBlobPath?: string
+  savedJsonPath?: string
+}
+
+export interface EngineSku {
+  appName: string
+  catalogItemId: string
+  namespace: string
+  buildVersion: string
+  shortVersion: string
+}
+
+export interface EngineComponentDescriptor {
+  tag: string
+  label: string
+  defaultEnabled: boolean
+  alwaysIncluded: boolean
+  isPlatform: boolean
+  requires?: string[]
+  fileCount: number
+  bytes: number
+}
+
+export interface EngineInstallPlanSummary {
+  appName: string
+  buildVersion: string
+  manifestHash: string
+  totalCompressedBytes: number
+  totalDecompressedBytes: number
+  components: EngineComponentDescriptor[]
+  fetchedAt: number
+}
+
+export interface EngineDownloadsListOwnedResult {
+  ok: boolean
+  error?: string
+  engines?: EngineSku[]
+}
+
+export interface EngineDownloadsFetchPlanResult {
+  ok: boolean
+  error?: string
+  summary?: EngineInstallPlanSummary
+}
+
 const api = {
   auth: {
     getState: (): Promise<AuthState> => ipcRenderer.invoke('auth:get-state'),
@@ -665,7 +746,25 @@ const api = {
       opts: { sources?: Array<'vault' | 'fab' | 'legacy'> } = {}
     ): Promise<DebugClearLibraryResult> => ipcRenderer.invoke('debug:clear-library', opts),
     downloadSampleAsset: (assetId: string): Promise<DebugDownloadSampleAssetResult> =>
-      ipcRenderer.invoke('debug:download-sample-asset', assetId)
+      ipcRenderer.invoke('debug:download-sample-asset', assetId),
+    listLauncherCatalog: (): Promise<DebugLauncherCatalogResult> =>
+      ipcRenderer.invoke('debug:list-launcher-catalog'),
+    fetchEngineDownloadInfo: (args: {
+      namespace: string
+      catalogItemId: string
+      appName: string
+      platform?: string
+      labelName?: string
+    }): Promise<DebugEngineDownloadInfoResult> =>
+      ipcRenderer.invoke('debug:fetch-engine-download-info', args),
+    fetchEngineManifest: (args: {
+      namespace: string
+      catalogItemId: string
+      appName: string
+      platform?: string
+      labelName?: string
+    }): Promise<DebugEngineManifestResult> =>
+      ipcRenderer.invoke('debug:fetch-engine-manifest', args)
   },
   vault: {
     list: (): Promise<VaultListResult> => ipcRenderer.invoke('vault:list'),
@@ -758,6 +857,16 @@ const api = {
       ipcRenderer.invoke('engines:use-keybindings-preset-from-library', id),
     openKeybindingsFile: (masterPath: string): Promise<EnginesOpenResult> =>
       ipcRenderer.invoke('engines:open-keybindings-file', masterPath)
+  },
+  engineDownloads: {
+    listOwned: (): Promise<EngineDownloadsListOwnedResult> =>
+      ipcRenderer.invoke('engine-downloads:list-owned'),
+    fetchInstallPlan: (sku: {
+      namespace: string
+      catalogItemId: string
+      appName: string
+    }): Promise<EngineDownloadsFetchPlanResult> =>
+      ipcRenderer.invoke('engine-downloads:fetch-install-plan', sku)
   },
   projects: {
     list: (): Promise<ProjectsListResult> => ipcRenderer.invoke('projects:list'),

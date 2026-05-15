@@ -4,6 +4,15 @@
   import { enginesStore } from '../stores/engines.svelte'
   import EnginePluginsPanel from './EnginePluginsPanel.svelte'
   import IniMasterPreviewDialog from './IniMasterPreviewDialog.svelte'
+  import EngineDownloadDialog from './EngineDownloadDialog.svelte'
+
+  interface EngineSku {
+    appName: string
+    catalogItemId: string
+    namespace: string
+    buildVersion: string
+    shortVersion: string
+  }
 
   interface EngineInfo {
     name: string
@@ -40,6 +49,20 @@
   let previewingEngine = $state<EngineInfo | null>(null)
   let previewSubject = $state<'editor-settings' | 'keybindings'>('editor-settings')
 
+  /** "Install engine" picker — popover triggered by the Install engine button.
+   *  Null = closed. The list is loaded lazily on first open and re-loaded after
+   *  every successful install so it auto-updates as engines get installed. */
+  let installPickerOpen = $state(false)
+  let installerOwnedEngines = $state<EngineSku[] | null>(null)
+  let installerOwnedLoading = $state(false)
+  let installerOwnedError = $state<string | null>(null)
+  /** The SKU the user picked → drives the EngineDownloadDialog. Null = dialog
+   *  closed; non-null = dialog open against that SKU. */
+  let installerSelectedSku = $state<EngineSku | null>(null)
+  /** Toast surfaced once a confirm fires — task #15 hooks the real queue;
+   *  for this commit we just show the user what would have been queued. */
+  let installerFlash = $state<string | null>(null)
+
   onMount(() => {
     void enginesStore.ensureLoaded()
   })
@@ -56,6 +79,65 @@
 
   async function openInExplorer(engine: EngineInfo): Promise<void> {
     await window.api.engines.openInExplorer(engine.path)
+  }
+
+  /** Versions already on disk — `enginesStore.engines` is the locally-detected
+   *  list, indexed by major.minor for dedup against owned SKUs. */
+  const installedShortVersions = $derived.by(() => {
+    const set = new Set<string>()
+    for (const e of engines) {
+      const m = /^(\d+)(?:\.(\d+))?/.exec(e.version)
+      if (m) set.add(m[2] ? `${m[1]}.${m[2]}` : m[1])
+    }
+    return set
+  })
+
+  /** Owned SKUs minus the ones already installed on disk — used for the
+   *  "Install engine…" picker dropdown. */
+  const installablEngines = $derived(
+    (installerOwnedEngines ?? []).filter((s) => !installedShortVersions.has(s.shortVersion))
+  )
+
+  async function ensureInstallerOwnedLoaded(force = false): Promise<void> {
+    if (installerOwnedLoading) return
+    if (installerOwnedEngines !== null && !force) return
+    installerOwnedLoading = true
+    installerOwnedError = null
+    try {
+      const r = await window.api.engineDownloads.listOwned()
+      if (!r.ok) {
+        installerOwnedError = r.error ?? 'Could not list owned engines'
+        installerOwnedEngines = []
+        return
+      }
+      installerOwnedEngines = r.engines ?? []
+    } catch (err) {
+      installerOwnedError = err instanceof Error ? err.message : String(err)
+      installerOwnedEngines = []
+    } finally {
+      installerOwnedLoading = false
+    }
+  }
+
+  async function toggleInstallPicker(): Promise<void> {
+    if (installPickerOpen) {
+      installPickerOpen = false
+      return
+    }
+    installPickerOpen = true
+    await ensureInstallerOwnedLoaded()
+  }
+
+  function pickEngineForInstall(sku: EngineSku): void {
+    installPickerOpen = false
+    installerSelectedSku = sku
+  }
+
+  function flashInstaller(msg: string): void {
+    installerFlash = msg
+    setTimeout(() => {
+      if (installerFlash === msg) installerFlash = null
+    }, 6000)
   }
 
   async function openPluginFolder(engine: EngineInfo): Promise<void> {
@@ -222,11 +304,53 @@
     </div>
     <div class="stats">
       <span>{engines.length} {engines.length === 1 ? 'install' : 'installs'}</span>
+      <div class="install-anchor">
+        <button
+          type="button"
+          class="install-btn"
+          onclick={() => void toggleInstallPicker()}
+          aria-haspopup="menu"
+          aria-expanded={installPickerOpen}
+          title="Install an Unreal Engine version from your Epic library"
+        >
+          Install engine…
+        </button>
+        {#if installPickerOpen}
+          <div class="install-picker" role="menu">
+            {#if installerOwnedLoading}
+              <div class="picker-state">Loading owned engines…</div>
+            {:else if installerOwnedError}
+              <div class="picker-state error">{installerOwnedError}</div>
+            {:else if installablEngines.length === 0}
+              <div class="picker-state empty">
+                Every engine you own is already installed (or you haven't
+                synced Epic yet — log in + sync first).
+              </div>
+            {:else}
+              {#each installablEngines as sku (sku.appName)}
+                <button
+                  type="button"
+                  class="picker-row"
+                  role="menuitem"
+                  onclick={() => pickEngineForInstall(sku)}
+                >
+                  <span class="picker-version">{sku.appName.replace(/^UE_/, 'UE ')}</span>
+                  <span class="picker-build">{sku.buildVersion}</span>
+                </button>
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </div>
       <button type="button" onclick={() => enginesStore.rescan()} disabled={loading}>
         {loading ? 'Scanning…' : 'Rescan'}
       </button>
     </div>
   </header>
+
+  {#if installerFlash}
+    <div class="installer-flash">{installerFlash}</div>
+  {/if}
 
   {#if scannedPaths.length > 0}
     <div class="roots">
@@ -387,6 +511,40 @@
   />
 {/if}
 
+{#if installerSelectedSku}
+  {@const s = installerSelectedSku}
+  <EngineDownloadDialog
+    sku={s}
+    suggestedRoot={scannedPaths[0] ?? null}
+    onClose={() => (installerSelectedSku = null)}
+    onConfirm={(payload) => {
+      // Task #15 wires this to the actual chunk runner + Downloads queue.
+      // For now: close the dialog and surface a flash describing what
+      // would have been queued so the UI flow is verifiable end-to-end.
+      const labels = payload.selectedTags
+        .map((t) => {
+          if (t === '') return 'Core'
+          if (t.startsWith('platform_')) return t.slice('platform_'.length)
+          return t.replace(/_/g, ' ')
+        })
+        .join(', ')
+      flashInstaller(
+        `Engine download (chunk runner) ships in the next commit. Selection: ${payload.sku.appName} → ${payload.installDir} · components: ${labels}`
+      )
+      installerSelectedSku = null
+    }}
+  />
+{/if}
+
+<svelte:window
+  onclick={(e) => {
+    if (!installPickerOpen) return
+    const t = e.target as HTMLElement
+    if (t.closest('.install-anchor')) return
+    installPickerOpen = false
+  }}
+/>
+
 <style>
   section {
     padding: 1.5rem;
@@ -440,6 +598,95 @@
   .stats button:disabled {
     opacity: 0.5;
     cursor: progress;
+  }
+  /* "Install engine…" + its dropdown picker. The anchor is positioned
+     so the popover floats below the button without re-flowing the header
+     row. */
+  .install-anchor {
+    position: relative;
+    display: inline-flex;
+  }
+  .install-btn {
+    margin-left: 0.5rem;
+    background: linear-gradient(135deg, rgba(192, 132, 252, 0.18), rgba(244, 114, 182, 0.18));
+    color: #f0e0ff;
+    border: 1px solid #5a3e7a;
+    border-radius: 4px;
+    padding: 0.3rem 0.8rem;
+    font-size: 0.75rem;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .install-btn:hover {
+    background: linear-gradient(135deg, rgba(192, 132, 252, 0.28), rgba(244, 114, 182, 0.28));
+    border-color: #c084fc;
+    color: #fff;
+  }
+  .install-picker {
+    position: absolute;
+    top: calc(100% + 0.3rem);
+    right: 0;
+    z-index: 220;
+    /* Wide enough to keep the longest "4.X.Y-12345678+++UE4+Release-…-Windows"
+       build-version tag on a single line at the .picker-build font-size. */
+    min-width: 420px;
+    max-width: 480px;
+    max-height: 360px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: #1a1a1a;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+    padding: 0.25rem 0;
+  }
+  .picker-state {
+    padding: 0.7rem 0.85rem;
+    color: #888;
+    font-size: 0.8rem;
+    text-align: center;
+  }
+  .picker-state.error { color: #fca5a5; }
+  .picker-state.empty { color: #b0b0b0; }
+  .picker-row {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    width: 100%;
+    gap: 0.15rem;
+    padding: 0.5rem 0.85rem;
+    background: transparent;
+    border: none;
+    color: #d0d0d0;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .picker-row:hover { background: #2a213a; color: #fff; }
+  .picker-version {
+    font-size: 0.88rem;
+    font-weight: 500;
+  }
+  .picker-build {
+    font-size: 0.7rem;
+    color: #888;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    /* Keep the long build-version tag on a single line — `.install-picker`
+       is sized to fit; truncate with an ellipsis if it ever overflows. */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .installer-flash {
+    background: #1f2a1f;
+    border: 1px solid #2d4a2d;
+    color: #c8f0c8;
+    padding: 0.55rem 0.85rem;
+    border-radius: 5px;
+    font-size: 0.82rem;
+    margin-bottom: 0.8rem;
   }
   .roots {
     display: flex;
