@@ -816,6 +816,34 @@ export interface SetAsTemplateResult {
   mediaCopied?: boolean
 }
 
+export interface DeepCleanPreserve {
+  editorPreferences: boolean
+  assetCollections: boolean
+  saveGames: boolean
+  projectThumbnail: boolean
+  localPackagedBuilds: boolean
+}
+
+export interface ProjectCleanSummary {
+  deletedBytes: number
+  deletedPaths: string[]
+  preservedPaths?: string[]
+}
+
+export interface ProjectCleanResult {
+  ok: boolean
+  error?: string
+  summary: ProjectCleanSummary
+}
+
+export interface ProjectCleanupRedirectorsResult {
+  ok: boolean
+  error?: string
+  exitCode: number | null
+  output: string
+  engineName?: string
+}
+
 export interface ProjectsApi {
   list(): Promise<ProjectsListResult>
   openInExplorer(absolutePath: string): Promise<ProjectsOpenResult>
@@ -828,6 +856,9 @@ export interface ProjectsApi {
   createFromVault(req: CreateProjectRequest): Promise<CreateProjectResult>
   addToProject(req: AddToProjectRequest): Promise<AddToProjectResult>
   setAsTemplate(req: SetAsTemplateRequest): Promise<SetAsTemplateResult>
+  cleanupRedirectors(uprojectPath: string): Promise<ProjectCleanupRedirectorsResult>
+  cleanBuildArtifacts(projectDir: string): Promise<ProjectCleanResult>
+  deepClean(req: { projectDir: string; preserve: DeepCleanPreserve }): Promise<ProjectCleanResult>
 }
 
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'

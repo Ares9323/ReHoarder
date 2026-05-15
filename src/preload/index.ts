@@ -958,7 +958,15 @@ const api = {
     addToProject: (req: AddToProjectRequest): Promise<AddToProjectResult> =>
       ipcRenderer.invoke('projects:add-to-project', req),
     setAsTemplate: (req: SetAsTemplateRequest): Promise<SetAsTemplateResult> =>
-      ipcRenderer.invoke('projects:set-as-template', req)
+      ipcRenderer.invoke('projects:set-as-template', req),
+    cleanupRedirectors: (uprojectPath: string): Promise<ProjectCleanupRedirectorsResult> =>
+      ipcRenderer.invoke('projects:cleanup-redirectors', uprojectPath),
+    cleanBuildArtifacts: (projectDir: string): Promise<ProjectCleanResult> =>
+      ipcRenderer.invoke('projects:clean-build-artifacts', projectDir),
+    deepClean: (req: {
+      projectDir: string
+      preserve: DeepCleanPreserve
+    }): Promise<ProjectCleanResult> => ipcRenderer.invoke('projects:deep-clean', req)
   },
   downloads: {
     list: (): Promise<DownloadsListResult> => ipcRenderer.invoke('downloads:list'),

@@ -4,6 +4,15 @@
   import { projectsStore } from '../stores/projects.svelte'
   import UProjectEditorPanel from './UProjectEditorPanel.svelte'
   import SetAsTemplateDialog from './SetAsTemplateDialog.svelte'
+  import DeepCleanDialog from './DeepCleanDialog.svelte'
+
+  interface DeepCleanPreserve {
+    editorPreferences: boolean
+    assetCollections: boolean
+    saveGames: boolean
+    projectThumbnail: boolean
+    localPackagedBuilds: boolean
+  }
 
   interface ProjectInfo {
     name: string
@@ -217,13 +226,43 @@
    * cursor away. Position is fixed-viewport coordinates (clientX/Y).
    */
   let contextMenu = $state<{ x: number; y: number; project: ProjectInfo } | null>(null)
+  /** DOM ref for the menu element so we can measure it after render and
+   *  flip the position up / left when the click happened near the viewport
+   *  edge. Without this the menu gets cropped by the window. */
+  let contextMenuEl = $state<HTMLDivElement | null>(null)
   function openContextMenu(e: MouseEvent, p: ProjectInfo): void {
     e.preventDefault()
     contextMenu = { x: e.clientX, y: e.clientY, project: p }
   }
   function closeContextMenu(): void {
     contextMenu = null
+    contextMenuEl = null
   }
+
+  /**
+   * Clamp the menu inside the viewport after it has been measured. Runs every
+   * time the menu mounts (or its target ref binds) — we read its bounding
+   * box, and if the bottom-right corner overflows, we shift the anchor up /
+   * left enough to fit. 8 px margin so the menu doesn't kiss the edge.
+   */
+  $effect(() => {
+    const cm = contextMenu
+    const el = contextMenuEl
+    if (!cm || !el) return
+    const rect = el.getBoundingClientRect()
+    const margin = 8
+    let { x, y } = cm
+    let needsUpdate = false
+    if (rect.right > window.innerWidth - margin) {
+      x = Math.max(margin, window.innerWidth - rect.width - margin)
+      needsUpdate = true
+    }
+    if (rect.bottom > window.innerHeight - margin) {
+      y = Math.max(margin, window.innerHeight - rect.height - margin)
+      needsUpdate = true
+    }
+    if (needsUpdate) contextMenu = { ...cm, x, y }
+  })
   function ctxEdit(): void {
     if (!contextMenu) return
     const p = contextMenu.project
@@ -235,6 +274,133 @@
     const p = contextMenu.project
     closeContextMenu()
     startTemplating(p)
+  }
+
+  /**
+   * Per-action transient state. We keep an array so a slow Fix-redirectors
+   * doesn't get its banner clobbered when the user kicks off a second action
+   * — each promise stays live independently, and the user can see every
+   * outcome instead of guessing whether the previous one finished. Banners
+   * stack bottom-right; manual dismissal once the action is no longer
+   * running.
+   */
+  type QuickActionStatus = 'running' | 'ok' | 'error'
+  interface QuickActionEntry {
+    id: number
+    project: ProjectInfo
+    label: string
+    status: QuickActionStatus
+    message: string | null
+    /** Commandlet stdout/stderr tail when available — opens in a "Show output" modal. */
+    output: string | null
+  }
+  let quickActions = $state<QuickActionEntry[]>([])
+  let nextActionId = 0
+  /** Output viewer modal target; non-null = open against that entry. */
+  let viewingOutput = $state<QuickActionEntry | null>(null)
+
+  /** Deep clean modal target; non-null = dialog open against that project. */
+  let deepCleaning = $state<ProjectInfo | null>(null)
+
+  function startQuickAction(p: ProjectInfo, label: string): number {
+    const id = ++nextActionId
+    quickActions = [
+      ...quickActions,
+      { id, project: p, label, status: 'running', message: null, output: null }
+    ]
+    return id
+  }
+  function endQuickAction(
+    id: number,
+    status: 'ok' | 'error',
+    message: string,
+    output: string | null = null
+  ): void {
+    quickActions = quickActions.map((a) =>
+      a.id === id ? { ...a, status, message, output } : a
+    )
+  }
+  function dismissQuickAction(id: number): void {
+    quickActions = quickActions.filter((a) => a.id !== id)
+  }
+
+  function formatBytes(n: number): string {
+    if (n < 1024) return `${n} B`
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+  }
+
+  async function ctxCleanupRedirectors(): Promise<void> {
+    if (!contextMenu) return
+    const p = contextMenu.project
+    closeContextMenu()
+    const id = startQuickAction(p, 'Fixing redirectors')
+    try {
+      const r = await window.api.projects.cleanupRedirectors(p.uprojectPath)
+      if (!r.ok) {
+        endQuickAction(id, 'error', r.error ?? 'Cleanup commandlet failed', r.output || null)
+        return
+      }
+      const engineNote = r.engineName ? ` via ${r.engineName}` : ''
+      endQuickAction(id, 'ok', `Redirectors fixed${engineNote}.`, r.output || null)
+    } catch (err) {
+      endQuickAction(id, 'error', err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  async function ctxCleanBuildArtifacts(): Promise<void> {
+    if (!contextMenu) return
+    const p = contextMenu.project
+    closeContextMenu()
+    const id = startQuickAction(p, 'Deleting build artifacts')
+    try {
+      const r = await window.api.projects.cleanBuildArtifacts(p.projectDir)
+      if (!r.ok) {
+        endQuickAction(id, 'error', r.error ?? 'Clean failed')
+        return
+      }
+      const freed = formatBytes(r.summary.deletedBytes)
+      const n = r.summary.deletedPaths.length
+      endQuickAction(id, 'ok', `Freed ${freed} across ${n} ${n === 1 ? 'path' : 'paths'}.`)
+    } catch (err) {
+      endQuickAction(id, 'error', err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  function ctxDeepClean(): void {
+    if (!contextMenu) return
+    const p = contextMenu.project
+    closeContextMenu()
+    deepCleaning = p
+  }
+
+  async function runDeepClean(preserve: DeepCleanPreserve): Promise<void> {
+    const p = deepCleaning
+    if (!p) return
+    deepCleaning = null
+    const id = startQuickAction(p, 'Deep cleaning')
+    try {
+      const r = await window.api.projects.deepClean({ projectDir: p.projectDir, preserve })
+      if (!r.ok) {
+        endQuickAction(id, 'error', r.error ?? 'Deep clean failed')
+        return
+      }
+      const freed = formatBytes(r.summary.deletedBytes)
+      const n = r.summary.deletedPaths.length
+      const kept = r.summary.preservedPaths?.length ?? 0
+      const keptNote = kept > 0 ? `, kept ${kept}` : ''
+      endQuickAction(
+        id,
+        'ok',
+        `Freed ${freed} across ${n} ${n === 1 ? 'path' : 'paths'}${keptNote}.`
+      )
+      // Refresh the projects scan so any thumbnail changes (e.g. user opted to
+      // wipe AutoScreenshot.png) reflect in the cards immediately.
+      void projectsStore.rescan()
+    } catch (err) {
+      endQuickAction(id, 'error', err instanceof Error ? err.message : String(err))
+    }
   }
 
   $effect(() => {
@@ -399,6 +565,7 @@
 {#if contextMenu}
   {@const cm = contextMenu}
   <div
+    bind:this={contextMenuEl}
     class="ctx-menu"
     role="menu"
     tabindex="-1"
@@ -412,6 +579,99 @@
     <button type="button" role="menuitem" onclick={ctxTemplate}>
       Use as engine template
     </button>
+    <div class="ctx-divider"></div>
+    <div class="ctx-group-label">Quick Actions</div>
+    <button type="button" role="menuitem" onclick={() => void ctxCleanupRedirectors()}>
+      Fix redirectors…
+    </button>
+    <button type="button" role="menuitem" onclick={() => void ctxCleanBuildArtifacts()}>
+      Delete binaries &amp; caches
+    </button>
+    <button type="button" role="menuitem" onclick={ctxDeepClean}>
+      Deep clean…
+    </button>
+  </div>
+{/if}
+
+{#if deepCleaning}
+  <DeepCleanDialog
+    projectName={deepCleaning.name}
+    onCancel={() => (deepCleaning = null)}
+    onConfirm={(preserve) => void runDeepClean(preserve)}
+  />
+{/if}
+
+{#if quickActions.length > 0}
+  <div class="quick-action-stack">
+    {#each quickActions as a (a.id)}
+      <div
+        class="quick-action-banner"
+        class:busy={a.status === 'running'}
+        class:error={a.status === 'error'}
+      >
+        <div class="qa-text">
+          <strong>{a.project.name}</strong>
+          <span class="qa-label">
+            {#if a.status === 'running'}
+              {a.label}… (this can take a while)
+            {:else if a.status === 'error'}
+              {a.label} failed — {a.message}
+            {:else}
+              {a.message}
+            {/if}
+          </span>
+        </div>
+        {#if a.output}
+          <button
+            type="button"
+            class="qa-output"
+            onclick={() => (viewingOutput = a)}
+            title="Show commandlet output"
+          >
+            Show output
+          </button>
+        {/if}
+        {#if a.status !== 'running'}
+          <button
+            type="button"
+            class="qa-close"
+            onclick={() => dismissQuickAction(a.id)}
+            title="Dismiss"
+          >×</button>
+        {/if}
+      </div>
+    {/each}
+  </div>
+{/if}
+
+{#if viewingOutput}
+  {@const v = viewingOutput}
+  <div class="output-backdrop" role="dialog" aria-modal="true" onmousedown={() => (viewingOutput = null)}>
+    <div class="output-popup" onmousedown={(e) => e.stopPropagation()} role="document">
+      <h3>
+        <span class="output-action">{v.label}</span>
+        <code>{v.project.name}</code>
+      </h3>
+      <p class="output-meta">
+        {#if v.status === 'error'}
+          <span class="output-status-err">Failed</span>
+        {:else}
+          <span class="output-status-ok">Completed</span>
+        {/if}
+        — last ~200 lines of commandlet output:
+      </p>
+      <pre class="output-pre">{v.output}</pre>
+      <div class="output-actions">
+        <button
+          type="button"
+          class="ghost"
+          onclick={() => {
+            if (v.output) void navigator.clipboard.writeText(v.output)
+          }}
+        >Copy</button>
+        <button type="button" class="ghost" onclick={() => (viewingOutput = null)}>Close</button>
+      </div>
+    </div>
   </div>
 {/if}
 
@@ -748,6 +1008,181 @@
   .ctx-menu button:hover {
     background: #2a2a2a;
     color: #fff;
+  }
+  .ctx-divider {
+    height: 1px;
+    background: #2a2a2a;
+    margin: 0.25rem 0.3rem;
+  }
+  .ctx-group-label {
+    font-size: 0.65rem;
+    color: #777;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 0.25rem 0.7rem 0.15rem;
+  }
+  .quick-action-stack {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    z-index: 350;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    align-items: flex-end;
+    max-width: 520px;
+  }
+  .quick-action-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    width: 100%;
+    background: #1f2a1f;
+    border: 1px solid #2d4a2d;
+    color: #c8f0c8;
+    border-radius: 6px;
+    padding: 0.55rem 0.85rem;
+    font-size: 0.8rem;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  }
+  .quick-action-banner.busy {
+    background: #1f1f2a;
+    border-color: #3a3a55;
+    color: #c0c0e0;
+  }
+  .quick-action-banner.error {
+    background: #3a1f1f;
+    border-color: #5a2727;
+    color: #fca5a5;
+  }
+  .qa-text {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    flex: 1;
+  }
+  .qa-text strong {
+    color: #fff;
+    font-weight: 500;
+    font-size: 0.82rem;
+  }
+  .qa-label {
+    font-size: 0.75rem;
+    opacity: 0.9;
+  }
+  .qa-close {
+    background: transparent;
+    border: 1px solid #444;
+    color: #c0c0c0;
+    border-radius: 3px;
+    padding: 0 0.45rem;
+    font-size: 0.95rem;
+    line-height: 1.2;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .qa-close:hover {
+    color: #fff;
+    border-color: #666;
+  }
+  .qa-output {
+    background: transparent;
+    border: 1px solid #444;
+    color: #c0c0c0;
+    border-radius: 3px;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.72rem;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .qa-output:hover {
+    color: #fff;
+    border-color: #c084fc;
+  }
+  .output-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 360;
+  }
+  .output-popup {
+    background: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+    padding: 1rem 1.2rem 0.85rem;
+    min-width: 640px;
+    max-width: 80vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    color: #e0e0e0;
+  }
+  .output-popup h3 {
+    margin: 0 0 0.4rem;
+    font-size: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .output-popup h3 code {
+    color: #c084fc;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.9rem;
+  }
+  .output-action {
+    font-weight: 500;
+    color: #fff;
+  }
+  .output-meta {
+    margin: 0 0 0.6rem;
+    color: #b0b0b0;
+    font-size: 0.78rem;
+  }
+  .output-status-ok {
+    color: #86efac;
+    font-weight: 600;
+  }
+  .output-status-err {
+    color: #fca5a5;
+    font-weight: 600;
+  }
+  .output-pre {
+    flex: 1;
+    background: #131313;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    padding: 0.6rem 0.75rem;
+    margin: 0 0 0.85rem;
+    overflow: auto;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: #d0d0d0;
+    white-space: pre;
+    max-height: 60vh;
+  }
+  .output-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+  .output-actions button {
+    background: transparent;
+    border: 1px solid #444;
+    color: #c0c0c0;
+    border-radius: 4px;
+    padding: 0.35rem 0.85rem;
+    font-size: 0.82rem;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .output-actions button.ghost:hover {
+    color: #fff;
+    border-color: #666;
   }
   .ver {
     color: #e0e0e0;

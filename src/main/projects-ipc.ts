@@ -18,6 +18,14 @@ import {
   type AddToProjectResult
 } from './projects-add-to'
 import { setAsTemplate, type SetAsTemplateResult } from './projects-set-as-template'
+import {
+  cleanupRedirectors,
+  cleanBuildArtifacts,
+  deepCleanProject,
+  type CleanResult,
+  type CleanupRedirectorsResult,
+  type DeepCleanPreserve
+} from './projects-actions'
 import type { DownloadsRepo } from './db/downloads-repo'
 import type { AssetsRepo, AssetSource } from './db/assets-repo'
 import type { SettingsStore } from './settings'
@@ -392,6 +400,68 @@ export function registerProjectsIpc(
         description: req.description,
         categories: req.categories
       })
+    }
+  )
+
+  ipcMain.handle(
+    'projects:cleanup-redirectors',
+    async (_e, uprojectPath: string): Promise<CleanupRedirectorsResult> => {
+      const cfg = settings.load()
+      const resolved = guardProjectPath(uprojectPath, cfg.projectPaths)
+      if (!resolved) {
+        return {
+          ok: false,
+          error: 'Path is outside the configured project roots',
+          exitCode: null,
+          output: ''
+        }
+      }
+      return await cleanupRedirectors(resolved, cfg.enginePaths)
+    }
+  )
+
+  ipcMain.handle(
+    'projects:clean-build-artifacts',
+    async (_e, projectDir: string): Promise<CleanResult> => {
+      const cfg = settings.load()
+      const resolved = path.resolve(projectDir)
+      const allowed = cfg.projectPaths.some(
+        (root) =>
+          resolved === path.resolve(root) ||
+          resolved.startsWith(path.resolve(root) + path.sep)
+      )
+      if (!allowed) {
+        return {
+          ok: false,
+          error: 'Project directory is outside the configured project roots',
+          summary: { deletedBytes: 0, deletedPaths: [] }
+        }
+      }
+      return await cleanBuildArtifacts(resolved)
+    }
+  )
+
+  ipcMain.handle(
+    'projects:deep-clean',
+    async (
+      _e,
+      req: { projectDir: string; preserve: DeepCleanPreserve }
+    ): Promise<CleanResult> => {
+      const cfg = settings.load()
+      const resolved = path.resolve(req.projectDir)
+      const allowed = cfg.projectPaths.some(
+        (root) =>
+          resolved === path.resolve(root) ||
+          resolved.startsWith(path.resolve(root) + path.sep)
+      )
+      if (!allowed) {
+        return {
+          ok: false,
+          error: 'Project directory is outside the configured project roots',
+          summary: { deletedBytes: 0, deletedPaths: [] }
+        }
+      }
+      return await deepCleanProject(resolved, req.preserve)
     }
   )
 
