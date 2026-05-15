@@ -823,6 +823,8 @@ const api = {
   updates: {
     currentVersion: (): Promise<string> => ipcRenderer.invoke('updates:current-version'),
     check: (): Promise<UpdateCheckResult> => ipcRenderer.invoke('updates:check'),
+    getPendingState: (): Promise<UpdateCheckResult> =>
+      ipcRenderer.invoke('updates:get-pending-state'),
     download: (): Promise<UpdateActionResult> => ipcRenderer.invoke('updates:download'),
     applyAndRestart: (): Promise<UpdateActionResult> =>
       ipcRenderer.invoke('updates:apply-and-restart'),
@@ -830,6 +832,19 @@ const api = {
       const listener = (_e: IpcRendererEvent, perc: number): void => handler(perc)
       ipcRenderer.on('updates:download-progress', listener)
       return () => ipcRenderer.removeListener('updates:download-progress', listener)
+    },
+    onAvailable: (
+      handler: (info: {
+        available: boolean
+        currentVersion: string
+        targetVersion?: string
+        notes?: string | null
+      }) => void
+    ): (() => void) => {
+      const listener = (_e: IpcRendererEvent, info: Parameters<typeof handler>[0]): void =>
+        handler(info)
+      ipcRenderer.on('updates:available', listener)
+      return () => ipcRenderer.removeListener('updates:available', listener)
     }
   }
 }

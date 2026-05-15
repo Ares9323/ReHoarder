@@ -8,8 +8,12 @@ export type ImageSize = 'small' | 'medium' | 'large'
 export interface AppSettings {
   /** Auto-refresh Epic session on app startup so the user lands authenticated. */
   loginAtStartup: boolean
-  /** Check for ReHoarder app updates at startup (requires updater integration). */
+  /** Check for ReHoarder app updates at startup. */
   checkVersionAtStartup: boolean
+  /** When the startup check finds an update, automatically download + install
+   *  it (the app then restarts into the new build). Only honoured when
+   *  `checkVersionAtStartup` is true. */
+  autoDownloadAndInstallUpdates: boolean
   /** When the user launches an Unreal Editor / project from inside the app, quit ReHoarder. */
   exitOnLaunchUnreal: boolean
   /** Run `RunUAT BuildPlugin` after copying a code plugin into the engine. */
@@ -89,6 +93,7 @@ export function defaultSettings(): AppSettings {
   return {
     loginAtStartup: true,
     checkVersionAtStartup: true,
+    autoDownloadAndInstallUpdates: false,
     exitOnLaunchUnreal: false,
     compilePluginsOnInstall: process.platform === 'linux',
     deleteExtraVaultPlatforms: false,
@@ -143,6 +148,10 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
     loginAtStartup: typeof partial.loginAtStartup === 'boolean' ? partial.loginAtStartup : d.loginAtStartup,
     checkVersionAtStartup:
       typeof partial.checkVersionAtStartup === 'boolean' ? partial.checkVersionAtStartup : d.checkVersionAtStartup,
+    autoDownloadAndInstallUpdates:
+      typeof partial.autoDownloadAndInstallUpdates === 'boolean'
+        ? partial.autoDownloadAndInstallUpdates
+        : d.autoDownloadAndInstallUpdates,
     exitOnLaunchUnreal:
       typeof partial.exitOnLaunchUnreal === 'boolean' ? partial.exitOnLaunchUnreal : d.exitOnLaunchUnreal,
     compilePluginsOnInstall:

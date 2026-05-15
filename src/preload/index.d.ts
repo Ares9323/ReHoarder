@@ -743,12 +743,21 @@ export interface UpdateActionResult {
   error?: string
 }
 
+export interface UpdatesAvailableInfo {
+  available: boolean
+  currentVersion: string
+  targetVersion?: string
+  notes?: string | null
+}
+
 export interface UpdatesApi {
   currentVersion(): Promise<string>
   check(): Promise<UpdateCheckResult>
+  getPendingState(): Promise<UpdateCheckResult>
   download(): Promise<UpdateActionResult>
   applyAndRestart(): Promise<UpdateActionResult>
   onDownloadProgress(handler: (perc: number) => void): () => void
+  onAvailable(handler: (info: UpdatesAvailableInfo) => void): () => void
 }
 
 declare global {

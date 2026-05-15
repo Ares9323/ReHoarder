@@ -44,20 +44,29 @@ It connects to your Epic Games account, indexes everything you've ever acquired 
 - ✅ **Install from vault** — if the artifact is already in a vault path, plugin install into engine/project copies straight from disk without re-downloading. Path-prefix stripping handles the `Engine/Plugins/Marketplace/` indirection cleanly.
 - ✅ **Custom install menu** — modal with searchbar, three-tier compatibility (requested-version exact match / older-version dimmed / incompatible hidden), "show N older projects" toggle, and engine-version disambiguation.
 - ✅ **Engines tab** — scan for `UE_*/Engine/Build/Build.version`, expose Editor / Run / shell-open per row, branch-name cleanup (`++UE5+Release-5.5` → `UE5 Release 5.5`).
+- ✅ **Engine plugins toggler** — scans `<engine>/Engine/Plugins/` for `.uplugin` descriptors (JSON5-tolerant), surfaces `EnabledByDefault` / `Installed` flags with the plugin icon, writes flag changes back preserving original formatting (`.bak` safety net). Searchbar + All/Enabled/Installed/Modified filters, batched Apply, per-engine baseline snapshot with one-click "Restore baseline" rollback.
+- ✅ **Plugin preset templates** — JSON preset (`{ plugins: [{ name, enabledByDefault, installed }] }`) with one global fallback + per-engine overrides. Right-click on a plugin row → Add to config / Remove from config / Uninstall plugin (Marketplace folder only, behind a confirm). Apply-to-all gated by a confirm modal naming the engine count.
+- ✅ **Engine editor-settings master patcher** — applies a curated `BaseEditorPerProjectUserSettings.ini` to every engine's config (sentinel header, scalar/array-add/`CommentAll` merge, `.bak` on first apply, side-by-side LCS diff preview + Restore from baseline on right-click).
+- ✅ **Engine keybindings master patcher** — same flow against the per-user `EditorKeyBindings.ini` (`%LOCALAPPDATA%\UnrealEngine\<ver>\…`), dedup-by-version when applying to all (multiple installs of one engine version share the file).
+- ✅ **Bundled preset library** — `resources/presets/{plugins,keybindings,editor-settings}/` (shipped via `electron-builder.yml` `extraResources`). INI files carry their metadata in leading `; @label` / `; @description` directives. A generic chooser dialog replaces the previous Create-sample / Ares-recommended buttons in every section.
+- ✅ **Set-as-template flow** — copy a project into `<Engine>/Templates/<TP_Name>/`, generate `Config/TemplateDefs.ini`, reuse `Saved/AutoScreenshot.png` as the launcher icon. Blueprint-only projects suggest `TP_<Name>BP` so Unreal pairs them with the C++ template variant.
+- ✅ **Fab Giveaway tab** — monthly freebies from Fab's `free_content_blade` endpoint, listings-states server check cross-referenced against owned assets, optional auto-focus at startup when items are unclaimed, per-card Claim-on-Fab deep link.
+- ✅ **Cruft filter at download** — glob-based skip list (defaults + user extras), per-asset "Clean cruft" action in the Vault tab with scan-preview dialog.
 - ✅ **uproject editor** — JSON editor panel with atomic write + `.uproject.bak` backup; reads & writes `EngineAssociation`, `Description`, `Category`, `Modules`, `Plugins`, `AdditionalDependencies` etc.
-- ✅ **Settings panel** — project / engine / vault paths, image size, downloads pane (threads, compile plugins on install, skip non-current-platform binaries), per-tab "separate by path" and "show thumbnails" toggles, `Ctrl+S` save shortcut.
+- ✅ **Settings panel** — project / engine / vault paths, image size (in Downloads), downloads pane (threads, compile plugins on install, skip non-current-platform binaries, skip cruft at download + extra glob patterns), Engines pane with the three master fields (plugin preset, editor settings, keybindings), per-tab "separate by path" and "show thumbnails" toggles, `Ctrl+S` save shortcut.
 - ✅ **On-disk thumbnails** — Projects show their `Saved/AutoScreenshot.png` (with Fab thumbnail fallback for ReHoarder-created projects), Engines show their splash icon, Vault rows can show their cached image. Served through a custom restricted `rh-file://` scheme so the renderer CSP stays tight; allow-list of roots = configured project / engine / vault paths.
 - ✅ **Singleton renderer stores** — Vault, Projects, Engines and Downloads each live in a single Svelte store at module scope, so tab switches are free (no rescan unless the user asks for one).
 - ✅ **SQLite catalog** — assets, tags, sync_state, downloads, bookmarks. Schema migrations via `PRAGMA user_version` for one-shot fixes (category re-tagging, listing-type backfill, …).
-- ✅ **Velopack installer + in-app auto-update** — Windows installer, delta updates, `Settings → About & updates` pane that checks GitHub Releases for the latest `vX.Y.Z` and applies it on next restart. No update server required.
+- ✅ **Velopack installer + in-app auto-update** — Windows installer, delta updates, `Settings → Startup & behavior` pane that checks GitHub Releases for the latest `vX.Y.Z` and applies it on next restart. Startup auto-check is now actually wired, and an optional `autoDownloadAndInstallUpdates` flag silently installs + restarts when a newer build is found at launch. No update server required.
 
 ### What's next
 
-- 📋 **Concurrent chunk downloads** — `downloadThreads` is wired through Settings; queue-level parallelism (`maxConcurrentDownloads`) ships in 0.1.1, intra-asset chunk parallelism is still pending.
+- 📋 **Intra-asset chunk parallelism** — `downloadThreads` is wired through Settings but the per-asset chunk pool still runs serially. Queue-level parallelism (`maxConcurrentDownloads`) already ships.
+- 📋 **Curated `ares-recommended` preset bundle** — the preset library ships only the `empty` starters in 0.1.1; the curated baselines (BlueprintAssist, GraphEditor distribute, monitor presets, …) land after a manual review pass.
 - 📋 **Engine downloads** — fetch UE binaries from the Epic launcher manifest with a components picker (Core / Templates / Source / MetaHuman / Editor Symbols / Target Platforms).
 - 📋 **Source-build engines** — detect installs registered under `HKCU\Software\Epic Games\Unreal Engine\Builds\<GUID>` so the Projects tab can resolve `EngineAssociation = "{GUID}"`.
-- 📋 **Auto-claim Fab freebies** — never miss a monthly free drop again.
-- 📋 **Auto-update detection** — flag assets when `modifiedDate` changes server-side (the data is already in the catalog).
+- 📋 **Auto-claim Fab freebies** — the Freebies tab surfaces them today, but claiming still requires opening Fab in the browser.
+- 📋 **Auto-update detection on assets** — flag library assets when their server-side `modifiedDate` changes (the data is already in the catalog).
 - 📋 **Linux/macOS pass** — the download pipeline is platform-agnostic but plugin-compile and engine-launch flows still assume Windows path conventions in spots.
 
 ## Why another asset manager?

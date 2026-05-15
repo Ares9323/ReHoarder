@@ -3,7 +3,7 @@ import * as path from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
 import { VelopackApp } from 'velopack'
-import { registerUpdatesIpc } from './updates-ipc'
+import { registerUpdatesIpc, runStartupUpdateCheck } from './updates-ipc'
 
 // Velopack hook — MUST run before any other startup work. The installer
 // re-invokes us with custom CLI args (first-run, update, uninstall, restart)
@@ -229,6 +229,15 @@ app.whenReady().then(async () => {
   })
 
   mainWindow = createMainWindow()
+
+  // Fire-and-forget startup update check. Wrapped in a short delay so the
+  // renderer has a chance to attach the `updates:available` listener before
+  // we'd broadcast — when settings.checkVersionAtStartup is off this is a
+  // no-op, when autoDownloadAndInstallUpdates is on the app may quit and
+  // restart on its own. Errors are swallowed inside the helper.
+  setTimeout(() => {
+    void runStartupUpdateCheck(settingsStore, () => mainWindow)
+  }, 1500)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

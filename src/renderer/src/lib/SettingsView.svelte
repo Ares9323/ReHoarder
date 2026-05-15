@@ -8,6 +8,7 @@
   interface AppSettings {
     loginAtStartup: boolean
     checkVersionAtStartup: boolean
+    autoDownloadAndInstallUpdates: boolean
     exitOnLaunchUnreal: boolean
     compilePluginsOnInstall: boolean
     deleteExtraVaultPlatforms: boolean
@@ -425,6 +426,18 @@
     } catch {
       // best effort: leave version blank
     }
+    // If main has already auto-checked and found an update, reflect that here
+    // so the banner shows without forcing the user to click "Check for updates".
+    try {
+      const pending = await window.api.updates.getPendingState()
+      if (pending.ok && pending.available && updateState === 'idle') {
+        updateState = 'available'
+        updateTargetVersion = pending.targetVersion ?? null
+        updateNotes = pending.notes ?? null
+      }
+    } catch {
+      // ignore — pending-state probe is best-effort
+    }
   })
 
   // Subscribe to download progress events. Returned unsubscribe is tracked
@@ -432,6 +445,21 @@
   $effect(() => {
     const unsub = window.api.updates.onDownloadProgress((perc) => {
       updateProgress = perc
+    })
+    return unsub
+  })
+
+  // Listen for the startup auto-check event so a SettingsView mounted *while*
+  // main is still checking still picks up the result.
+  $effect(() => {
+    const unsub = window.api.updates.onAvailable((info) => {
+      if (!info.available) return
+      // Don't clobber a download-in-progress state if the user already started
+      // one — the banner is meaningful only when we're idle.
+      if (updateState !== 'idle' && updateState !== 'up-to-date' && updateState !== 'error') return
+      updateState = 'available'
+      updateTargetVersion = info.targetVersion ?? null
+      updateNotes = info.notes ?? null
     })
     return unsub
   })
@@ -478,14 +506,24 @@
           />
           Login to Epic at startup
         </label>
-        <label class="disabled-soft">
+        <label>
           <input
             type="checkbox"
             bind:checked={settings.checkVersionAtStartup}
             onchange={markDirty}
           />
           Check version at startup
-          <span class="hint">(requires Velopack auto-updater — not wired yet)</span>
+          <span class="hint">(asks GitHub Releases for a newer build a moment after launch)</span>
+        </label>
+        <label class:disabled-soft={!settings.checkVersionAtStartup}>
+          <input
+            type="checkbox"
+            bind:checked={settings.autoDownloadAndInstallUpdates}
+            onchange={markDirty}
+            disabled={!settings.checkVersionAtStartup}
+          />
+          Automatically download and install updates
+          <span class="hint">(when a newer build is found at startup, install it and restart silently)</span>
         </label>
         <label>
           <input
