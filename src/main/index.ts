@@ -19,10 +19,12 @@ if (app.isPackaged) {
 import { createMainWindow } from './window'
 import { openAppDb, type AppDb } from './db'
 import { AssetsRepo } from './db/assets-repo'
+import { AccountsRepo } from './db/accounts-repo'
 import { SecureTokenStorage, type CryptoBackend } from './auth/secure-storage'
 import { OAuthClient } from './auth/oauth-client'
-import { Session, type AuthState } from './auth/session'
+import { Session, type AuthState, type AccountSummary } from './auth/session'
 import { registerAuthIpc } from './auth/ipc'
+import { registerAccountsIpc } from './auth/accounts-ipc'
 import { VaultClient } from './vault/vault-client'
 import { EpicWebSessionFactory } from './auth/epic-web-session'
 import { ElectronCloudflareWarmer } from './cloudflare/cf-warmup'
@@ -80,6 +82,11 @@ function broadcastAuthState(state: AuthState): void {
   mainWindow.webContents.send('auth:state-changed', state)
 }
 
+function broadcastAccounts(accounts: AccountSummary[]): void {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  mainWindow.webContents.send('accounts:changed', accounts)
+}
+
 // In dev the binary is `electron.exe`; the `brand-dev-electron` predev step
 // rewrites its Win32 version-info so Task Manager shows "ReHoarder". This
 // call sets the framework-level name (used by notifications, default dialog
@@ -95,14 +102,35 @@ app.whenReady().then(async () => {
 
   const storage = new SecureTokenStorage(db.kv, makeElectronCrypto())
   const oauthClient = new OAuthClient()
-  const session = new Session(storage, oauthClient)
+  const accountsRepo = new AccountsRepo(db.raw, db.kv)
+  const session = new Session(storage, accountsRepo, oauthClient)
   registerAuthIpc(session, broadcastAuthState)
+  registerAccountsIpc(session, broadcastAccounts, 'persist:cf-warmup')
 
-  const assetsRepo = new AssetsRepo(db.raw)
+  const getActiveAccountId = (): string | null => {
+    const s = session.getState()
+    return s.status === 'authenticated' ? s.accountId : null
+  }
+  const assetsRepo = new AssetsRepo(db.raw, getActiveAccountId)
   const vaultClient = new VaultClient()
   const CF_PARTITION = 'persist:cf-warmup'
   const cfWarmer = new ElectronCloudflareWarmer(CF_PARTITION)
-  const epicWebSessionFactory = new EpicWebSessionFactory(undefined, undefined, cfWarmer)
+  // Chromium-stack fetch used by EpicWebSessionFactory specifically for the
+  // unrealengine.com endpoints (`set-sid` / `cosmos/auth`). Cloudflare on
+  // unrealengine.com is in strict-fingerprint mode — Node fetch with the
+  // right cf_clearance still gets the CF challenge HTML because its JA3/JA4
+  // doesn't match the one Chromium presented when earning the cookie.
+  // `useSessionCookies: false` because the factory builds every `Cookie:`
+  // header explicitly from its in-memory jar.
+  const ueBrowserFetch = await createElectronFetch(CF_PARTITION, {
+    useSessionCookies: false
+  })
+  const epicWebSessionFactory = new EpicWebSessionFactory(
+    undefined,
+    undefined,
+    cfWarmer,
+    ueBrowserFetch
+  )
   // Fab API calls go through net.fetch on the CF-warmup partition so the
   // Chromium TLS fingerprint and the cf_clearance cookie persisted there
   // are reused — Cloudflare validates both before letting traffic through.
@@ -125,7 +153,8 @@ app.whenReady().then(async () => {
   registerLibraryIpc(assetsRepo, sync, session, () => mainWindow, {
     epicWebSessionFactory,
     fabSessionClient,
-    fabFetch
+    fabFetch,
+    kv: db.kv
   })
   registerDebugIpc({
     assetsRepo,
@@ -204,7 +233,7 @@ app.whenReady().then(async () => {
   })
   registerEnginesIpc(settingsStore)
   registerUpdatesIpc(() => mainWindow)
-  const downloadsRepo = new DownloadsRepo(db.raw)
+  const downloadsRepo = new DownloadsRepo(db.raw, getActiveAccountId)
   registerVaultIpc(settingsStore, downloadsRepo, assetsRepo)
   registerProjectsIpc(settingsStore, downloadsRepo, assetsRepo)
   const downloadsManager = new DownloadsManager({
@@ -226,10 +255,21 @@ app.whenReady().then(async () => {
   registerSettingsIpc(settingsStore, {
     onChange: () => downloadsManager.onSettingsChanged()
   })
+  // Bootstrap recovers interrupted rows (running → queued) eagerly so the
+  // recovery happens before any renderer query. The pump itself is fired
+  // AFTER `session.init()` below, because `nextQueued()` scopes by active
+  // account and that id isn't resolved yet here.
   downloadsManager.bootstrap()
 
   await session.init()
   console.warn(`[auth] initial state: ${session.getState().status}`)
+
+  // Now that the active account is known, pump the queue: rows recovered by
+  // `bootstrap()` get picked up, and any queued-while-anonymous row for the
+  // newly-active account starts. Same hook fires on every subsequent
+  // account switch so the queue belongs to the right user at any time.
+  downloadsManager.onAuthChanged()
+  session.on('state-changed', () => downloadsManager.onAuthChanged())
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)

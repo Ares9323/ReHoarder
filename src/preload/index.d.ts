@@ -17,12 +17,31 @@ export interface SubmitCodeResult {
   error?: { code: string; message: string }
 }
 
+export interface AccountSummary {
+  accountId: string
+  displayName: string
+  active: boolean
+}
+
+export interface AccountSwitchResult {
+  ok: boolean
+  error?: string
+}
+
 export interface AuthApi {
   getState(): Promise<AuthState>
   startLogin(): Promise<void>
   submitCode(code: string): Promise<SubmitCodeResult>
   logout(): Promise<void>
   onStateChanged(handler: (state: AuthState) => void): () => void
+}
+
+export interface AccountsApi {
+  list(): Promise<AccountSummary[]>
+  switchTo(accountId: string): Promise<AccountSwitchResult>
+  remove(accountId: string): Promise<void>
+  addLogin(): Promise<void>
+  onChanged(handler: (accounts: AccountSummary[]) => void): () => void
 }
 
 export type AssetSource = 'vault' | 'fab' | 'legacy'
@@ -96,6 +115,10 @@ export interface LibraryApi {
   setBookmarked(source: AssetSource, sourceId: string, bookmarked: boolean): Promise<void>
   sync(): Promise<{ ok: boolean; error?: string }>
   listFreebies(opts?: { force?: boolean }): Promise<FreebiesResult>
+  freebiesAutoCheck(): Promise<{
+    reason: 'synced' | 'within-cap' | 'all-claimed' | 'not-authenticated'
+    unclaimedCount: number
+  }>
   onSyncProgress(handler: (p: SyncProgress) => void): () => void
   onSyncLog(handler: (line: string) => void): () => void
 }
@@ -311,7 +334,7 @@ export interface AppSettings {
   compilePluginsOnInstall: boolean
   deleteExtraVaultPlatforms: boolean
   skipCruftAtDownload: boolean
-  focusFreebiesTabAtStartup: boolean
+  notifyAboutUnclaimedFreebiesOnStartup: boolean
   cruftPatterns: string[]
   downloadThreads: number
   maxConcurrentDownloads: number
@@ -975,6 +998,7 @@ declare global {
     electron: ElectronAPI
     api: {
       auth: AuthApi
+      accounts: AccountsApi
       library: LibraryApi
       debug: DebugApi
       vault: VaultApi

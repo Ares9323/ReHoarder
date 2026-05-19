@@ -21,12 +21,21 @@
   const library = createLibraryStore()
 
   let activeTab = $state<TabKey>('assets')
+  /** True when the user picked "Add account…" from the switcher — we bounce
+   *  back to LoginView so they can paste the OAuth code from the browser,
+   *  even though `auth.state` is still `authenticated` for the previous
+   *  account. Cleared once submitCode succeeds (or the user navigates away). */
+  let addingAccount = $state(false)
+  /** When the startup check finds unclaimed freebies and the user opted in,
+   *  this surfaces a non-blocking toast (bottom-right) with a "Go to
+   *  Freebies" action. Dismissed manually or by navigating to the tab. */
+  let freebiesToastCount = $state(0)
 
   onMount(async () => {
     await auth.refresh()
     if (auth.state.status === 'authenticated') {
       await library.refresh()
-      void maybeFocusFreebiesTab()
+      void maybeNotifyAboutFreebies()
       // Warm the Vault scan in the background so opening the Vault tab is
       // instant. `vault:list` walks every file under each configured root
       // (size + mtime + count) — on a populated vault it can take 10+ s
@@ -38,20 +47,63 @@
   })
 
   /**
-   * Opt-in startup behavior: if `focusFreebiesTabAtStartup` is on and the
-   * monthly freebies fetch reports unclaimed items, switch the active tab
-   * to Freebies so the user lands there directly. Network failures stay
-   * silent — they shouldn't disturb the normal boot flow.
+   * On launch, ask the main process to do the cheap freebies fetch and
+   * decide — based on a weekly throttle + Tuesday-window heuristic +
+   * "did the UID set change" check — whether to kick a full library sync
+   * in the background. The fetch updates the renderer cache so the badge
+   * is correct either way. When the user has opted into the popup AND
+   * there are still-unclaimed freebies, surface the non-blocking toast.
+   *
+   * Failures stay silent; this is best-effort startup polish.
    */
-  async function maybeFocusFreebiesTab(): Promise<void> {
+  async function maybeNotifyAboutFreebies(): Promise<void> {
     try {
-      const settings = await window.api.settings.get()
-      if (!settings.focusFreebiesTabAtStartup) return
+      const probe = await window.api.library.freebiesAutoCheck()
+      // Refresh the renderer-side store so the TabBar badge reflects the
+      // probe's cross-reference outcome (the main process just updated its
+      // 5-min cache).
+      freebiesStore.invalidate()
       await freebiesStore.ensureLoaded()
-      if (freebiesStore.unclaimedCount > 0) activeTab = 'freebies'
+      const settings = await window.api.settings.get()
+      if (!settings.notifyAboutUnclaimedFreebiesOnStartup) return
+      if (probe.unclaimedCount > 0 && freebiesStore.unclaimedCount > 0) {
+        freebiesToastCount = freebiesStore.unclaimedCount
+      }
     } catch {
       // Background check — never blocks the UI on failure.
     }
+  }
+
+  function openFreebiesFromToast(): void {
+    activeTab = 'freebies'
+    freebiesToastCount = 0
+  }
+
+  function dismissFreebiesToast(): void {
+    freebiesToastCount = 0
+  }
+
+  function handleTabChange(k: TabKey): void {
+    activeTab = k
+    // Opening Freebies from anywhere implicitly dismisses the startup toast.
+    if (k === 'freebies') freebiesToastCount = 0
+  }
+
+  /**
+   * Wired to TabBar → AccountSwitcher. After the main process swaps the
+   * active Epic account, every per-account store needs a fresh fetch:
+   * library re-queries by the new account id, freebies + downloads reset
+   * so the badges reflect the new account's state, and the startup toast
+   * for unclaimed freebies is dismissed (it's no longer relevant — a
+   * fresh check fires below).
+   */
+  async function handleAccountSwitched(_accountId: string): Promise<void> {
+    freebiesToastCount = 0
+    freebiesStore.invalidate()
+    downloadsStore.invalidate()
+    await auth.refresh()
+    await library.refresh()
+    void maybeNotifyAboutFreebies()
   }
 
   $effect(() => {
@@ -80,14 +132,33 @@
   }
 </script>
 
-{#if auth.state.status === 'authenticated'}
+{#if addingAccount}
+  <LoginView
+    busy={auth.busy}
+    onStartLogin={() => auth.startLogin()}
+    onSubmitCode={async (code) => {
+      const r = await auth.submitCode(code)
+      if (r.ok) {
+        // New account became active; refresh per-account stores so the
+        // library/downloads/freebies views render for the new identity.
+        addingAccount = false
+        freebiesStore.invalidate()
+        downloadsStore.invalidate()
+        await library.refresh()
+        void maybeNotifyAboutFreebies()
+      }
+      return r
+    }}
+  />
+{:else if auth.state.status === 'authenticated'}
   {#if library.initialLoading}
     <LoadingLibraryView />
   {:else}
     <TabBar
       active={activeTab}
-      onChange={(k) => (activeTab = k)}
-      onSignOut={() => auth.logout()}
+      onChange={handleTabChange}
+      onAccountSwitched={handleAccountSwitched}
+      onAddAccount={() => (addingAccount = true)}
     />
     {#if activeTab === 'assets'}
       {#if isLibraryEmpty()}
@@ -143,3 +214,94 @@
   />
 {/if}
 
+{#if freebiesToastCount > 0 && activeTab !== 'freebies'}
+  <div class="freebies-toast" role="status">
+    <div class="ft-body">
+      <strong>New freebies available</strong>
+      <span class="ft-sub">
+        {freebiesToastCount} unclaimed freebie{freebiesToastCount === 1 ? '' : 's'} this month
+      </span>
+    </div>
+    <div class="ft-actions">
+      <button type="button" class="ft-go" onclick={openFreebiesFromToast}>
+        Go to Freebies
+      </button>
+      <button
+        type="button"
+        class="ft-close"
+        onclick={dismissFreebiesToast}
+        aria-label="Dismiss"
+        title="Dismiss"
+      >×</button>
+    </div>
+  </div>
+{/if}
+
+<style>
+  .freebies-toast {
+    position: fixed;
+    bottom: 1.5rem;
+    right: 1.5rem;
+    z-index: 400;
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    max-width: 420px;
+    padding: 0.7rem 0.9rem 0.7rem 1rem;
+    background: #1f1f1f;
+    border: 1px solid #3a3a3a;
+    border-left: 3px solid #c084fc;
+    border-radius: 6px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+    color: #e0e0e0;
+    font-size: 0.85rem;
+  }
+  .ft-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .ft-body strong {
+    background: linear-gradient(135deg, #c084fc, #f472b6);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    font-size: 0.92rem;
+  }
+  .ft-sub {
+    color: #a0a0a0;
+    font-size: 0.78rem;
+  }
+  .ft-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: auto;
+  }
+  .ft-go {
+    background: linear-gradient(135deg, #c084fc, #f472b6);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.8rem;
+    font-family: inherit;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .ft-go:hover {
+    filter: brightness(1.1);
+  }
+  .ft-close {
+    background: transparent;
+    color: #888;
+    border: none;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: 0 0.25rem;
+    cursor: pointer;
+  }
+  .ft-close:hover {
+    color: #ddd;
+  }
+</style>

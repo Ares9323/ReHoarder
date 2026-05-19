@@ -140,6 +140,18 @@ export class FetchFabLoginDriver implements FabLoginDriver {
 
     const sess = this.sessionLoader ? await this.sessionLoader() : null
     if (sess) {
+      // Drop any stale `fab_sessionid` from a previous run. Fab's OAuth
+      // callback at F5 short-circuits the Set-Cookie when a sessionid is
+      // already present — even if it's anonymous (or worse, expired) — so
+      // /me/* endpoints keep returning 401 across launches. By wiping just
+      // the sessionid before F1 we force F5 to mint a fresh, authenticated
+      // one bound to the user we're logging in as right now. cf_clearance,
+      // __cf_bm and fab_csrftoken are kept so CF challenge / Django CSRF
+      // checks still pass without re-running the warmup.
+      const purged = await purgeStaleFabSession(sess)
+      if (purged > 0) {
+        onLog(`Fab driver: purged ${purged} stale fab_sessionid cookie(s) from partition`)
+      }
       const transferred = await syncJarIntoSession(jar, sess)
       onLog(`Fab driver: transferred ${transferred} jar cookies to partition`)
     }
@@ -347,7 +359,8 @@ export class FetchFabLoginDriver implements FabLoginDriver {
         )
       }
       const cookieHeader = fabCookies.map((c) => `${c.name}=${c.value}`).join('; ')
-      onLog(`Fab driver: F5 OK, ${fabCookies.length} .fab.com cookies from partition`)
+      const names = fabCookies.map((c) => c.name).join(',')
+      onLog(`Fab driver: F5 OK, ${fabCookies.length} .fab.com cookies from partition (${names})`)
       return cookieHeader
     }
 
@@ -402,6 +415,36 @@ export class FetchFabLoginDriver implements FabLoginDriver {
       ...extra
     }
   }
+}
+
+/**
+ * Remove any `fab_sessionid` cookie from the partition. Used to flush a
+ * stale Django session from a previous app session before re-running the
+ * F1-F5 dance — Fab's OAuth callback won't issue a fresh `fab_sessionid`
+ * if it already finds one in the request (even an anonymous/expired one),
+ * which leaves every `/i/users/me/...` endpoint returning 401 across
+ * launches. Returns the count of cookies actually deleted.
+ */
+async function purgeStaleFabSession(sess: Electron.Session): Promise<number> {
+  let purged = 0
+  // Cookies can live on `fab.com` OR `.fab.com` depending on which step set
+  // them; query both shapes so we don't miss one.
+  const candidates = [
+    ...(await sess.cookies.get({ name: 'fab_sessionid' })),
+    ...(await sess.cookies.get({ name: 'sessionid', domain: 'fab.com' }))
+  ]
+  for (const c of candidates) {
+    if (!c.domain) continue
+    const host = c.domain.startsWith('.') ? c.domain.slice(1) : c.domain
+    const url = `https://${host}${c.path ?? '/'}`
+    try {
+      await sess.cookies.remove(url, c.name)
+      purged++
+    } catch {
+      /* ignore */
+    }
+  }
+  return purged
 }
 
 function readSetCookies(headers: Headers): string[] {

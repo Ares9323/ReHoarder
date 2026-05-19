@@ -53,11 +53,29 @@ const UE_SET_SID_ENDPOINT = 'https://www.unrealengine.com/id/api/set-sid'
 const COSMOS_AUTH_ENDPOINT = 'https://www.unrealengine.com/api/cosmos/auth'
 
 export class EpicWebSessionFactory {
+  /**
+   * Chromium-stack fetch used specifically for **unrealengine.com** calls
+   * (`set-sid` and `cosmos/auth`). Cloudflare on that domain validates the
+   * TLS fingerprint of every request against the one that earned the
+   * `cf_clearance` cookie. The warmer hands out a clearance acquired by
+   * the hidden Chromium BrowserWindow, so subsequent requests MUST also
+   * come through the Chromium net stack — Node fetch reuses the cookie
+   * but has a different JA3/JA4 fingerprint and is served the challenge
+   * HTML (HTTP 403). Falls back to {@link fetchImpl} when not provided
+   * (tests, headless / non-Electron contexts).
+   */
   constructor(
     private readonly fetchImpl: typeof fetch = globalThis.fetch,
     private readonly jarFactory: () => CookieJar = () => new InMemoryCookieJar(),
-    private readonly cfWarmer: CloudflareWarmer = new NoopCloudflareWarmer()
+    private readonly cfWarmer: CloudflareWarmer = new NoopCloudflareWarmer(),
+    private readonly browserFetch: typeof fetch | null = null
   ) {}
+
+  /** Use the Chromium-stack fetch when available (TLS fingerprint = browser),
+   *  otherwise fall back to the standard fetch. */
+  private get ueFetch(): typeof fetch {
+    return this.browserFetch ?? this.fetchImpl
+  }
 
   async create(
     accessToken: string,
@@ -163,20 +181,39 @@ export class EpicWebSessionFactory {
 
   private async setUeSid(jar: CookieJar, sid: string): Promise<void> {
     const url = new URL(`${UE_SET_SID_ENDPOINT}?sid=${encodeURIComponent(sid)}`)
+    const cookieHeader = jar.getCookieHeader(url)
     try {
-      const response = await this.fetchImpl(url.toString(), {
+      const response = await this.ueFetch(url.toString(), {
         method: 'GET',
         headers: {
           'User-Agent': LAUNCHER_UA,
           ...EPIC_WEB_HEADERS,
           'x-epic-duration': epicDurationHeader(),
           Origin: 'https://www.epicgames.com',
-          Cookie: jar.getCookieHeader(url)
+          Cookie: cookieHeader
         }
       })
       jar.captureFromResponse(url, response.headers)
       if (!response.ok && response.status !== 204) {
-        console.warn(`[epic-web-session] E_H set-sid returned ${response.status}`)
+        // Dump the body + the cookies we sent so the 403/401 root cause is
+        // diagnosable. Epic-H replies with a JSON envelope (`{errorCode, …}`)
+        // when CSRF/origin checks fail; reading it is what tells us which
+        // header is missing.
+        let body = ''
+        try {
+          body = (await response.text()).slice(0, 500)
+        } catch {
+          /* ignore */
+        }
+        const sentCookieNames = cookieHeader
+          .split(';')
+          .map((c) => c.trim().split('=')[0])
+          .filter((n) => n.length > 0)
+          .join(',') || '(none)'
+        console.warn(
+          `[epic-web-session] E_H set-sid returned ${response.status}; ` +
+            `sent cookies=[${sentCookieNames}]; body=${body || '(empty)'}`
+        )
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
@@ -187,7 +224,7 @@ export class EpicWebSessionFactory {
   private async bootstrapUe4(jar: CookieJar): Promise<boolean> {
     const url = new URL(COSMOS_AUTH_ENDPOINT)
     try {
-      const response = await this.fetchImpl(COSMOS_AUTH_ENDPOINT, {
+      const response = await this.ueFetch(COSMOS_AUTH_ENDPOINT, {
         method: 'GET',
         headers: {
           'User-Agent': LAUNCHER_UA,

@@ -4,6 +4,110 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] — 2026-05-19
+
+Multi-account switcher (issue #1), Fab freebies UX overhaul, end-to-end Fab
+session hardening, and a quiet automatic library refresh tied to the
+unclaimed-freebies signal. Downloads that survived a previous shutdown now
+actually resume after auth lands.
+
+### Added
+
+#### Multi-account
+- **Per-account scoping across the catalog** — `assets`, `asset_tags`,
+  `sync_state`, `downloads` gain an `account_id` column, with primary keys
+  rebuilt so two Epic accounts on the same machine can each carry their
+  own owned-asset set without collision. New `accounts` table tracks the
+  authenticated identities and the active pointer (kv-backed). The v3 → v4
+  migration stamps pre-existing rows with `account_id = 'legacy'` and
+  rebinds them to the real Epic account id the first time `Session.init`
+  decrypts the legacy token slot — verified end-to-end on a real 6010-row
+  upgrade.
+- **Per-account encrypted tokens** — `SecureTokenStorage` is now keyed by
+  account id (`auth.tokens.<accountId>`), one safeStorage blob per
+  identity. The pre-multi-account `auth.tokens` slot is migrated in place
+  on first launch and then deleted.
+- **Multi-account `Session`** — holds a `Map<accountId, Tokens>` in memory,
+  resolves the active pointer on init, refreshes expired access tokens
+  per-account, and exposes `switchTo`, `addAccount`, `removeAccount`
+  alongside the legacy single-account API.
+- **Account switcher in the top bar** — chip with the active user's name +
+  avatar initials, dropdown listing every authenticated account with
+  per-row sign-out, "Add account…" that opens the Epic login in the
+  browser and bounces the app back to `LoginView` for the OAuth code, and
+  a context-aware "Sign out current". Per-account renderer stores
+  (library, freebies, downloads) reload on switch via the new
+  `accounts:changed` broadcast.
+- **Per-account data wipe on sign-out** — removing an account deletes its
+  scoped rows from `assets`, `asset_tags`, `sync_state` and `downloads`
+  in a single transaction, then clears the accounts row and falls back
+  to the next authenticated account (or to LoginView if none remain).
+- **CF partition reset on switch** — `persist:cf-warmup` cookies are
+  cleared on every account switch and remove, so the previous identity's
+  `fab_sessionid` / Epic state can't leak into the next sync's F1-F5
+  dance. Engine downloads carry a synthetic `__engine__` account id so
+  they remain visible regardless of which Epic account is active.
+
+#### Freebies
+- **Non-blocking startup toast** instead of the auto-focus tab switch.
+  Bottom-right pill with "Go to Freebies" + dismiss; the unread badge on
+  the Freebies tab is always on regardless of the setting, so users who
+  opt out of the toast still see the count. Setting renamed to
+  `notifyAboutUnclaimedFreebiesOnStartup` (with a one-shot read of the
+  old `focusFreebiesTabAtStartup` value for upgrades).
+- **Auto-refresh on startup, throttled** — new IPC
+  `library:freebies-auto-check` fetches the monthly freebies (cheap
+  blade endpoint) on every launch and kicks a full library sync in the
+  background only when AT LEAST ONE of: ≥ 7 days since the last
+  auto-sync, the UID set changed (new batch detected), or it's Tuesday
+  14:00-22:00 UTC and ≥ 24 h elapsed. State persisted in kv as
+  `freebies.lastAutoSyncAt` + `freebies.lastSeenUids`. Manual sync and
+  the Refresh button are unaffected.
+
+### Changed
+
+- **Full UE + Other library sync, no early-stop** — Fab orders both
+  libraries by listing `createdAt`, not acquisition time, so a freebie
+  the user claimed today (originally listed years ago) lived past the
+  early-stop and never reached the local DB. ReHoarder now paginates
+  every page on every sync, matching Asset Manager Studio's behaviour.
+  Costs ~20-30 s per sync on a 2 k+ library but makes the freebies
+  cross-reference trustworthy.
+- **Cloudflare warmup also covers `unrealengine.com`** — the
+  Epic-Houdini `set-sid` endpoint runs there and was 403-ing under the
+  CF challenge HTML without a per-domain `cf_clearance`. The hidden
+  warmup BrowserWindow now visits all three CF zones (fab.com,
+  epicgames.com, unrealengine.com) and retains the cookies for each.
+- **`set-sid` + `cosmos/auth` use the Electron net stack** — Cloudflare
+  on `unrealengine.com` validates JA3/JA4 alongside `cf_clearance`, so
+  Node fetch with the right cookie still got the challenge page. These
+  two calls go through the same `net.fetch` partition the Chromium
+  warmup used to earn the clearance.
+- **Stale `fab_sessionid` purge before F1** — the warmup window's first
+  visit to fab.com left an anonymous Django sessionid in the partition;
+  Fab's F5 OAuth callback declines to issue a fresh session when one is
+  already present, so /me/* kept 401-ing across launches. The driver
+  now drops the anonymous slot before the dance starts (cf_clearance,
+  __cf_bm and fab_csrftoken are kept).
+- **Freebies UA + Referer aligned to the dance** — the listings-states
+  fetch now uses the same `LAUNCHER_UA` and a `/library` Referer so
+  Fab's middleware sees the same client identity that earned the
+  session cookies.
+
+### Fixed
+
+- **Recovered downloads no longer stall in `queued`** — `bootstrap()`
+  used to pump the queue before `session.init()` had resolved the
+  active account, so `nextQueued()` (which scopes by active id)
+  silently found nothing. Bootstrap now only handles the running→queued
+  recovery and a new `onAuthChanged()` hook drives the first pump after
+  auth lands; the same hook re-fires on every account switch.
+- **Legacy `auth.tokens` slot drains cleanly** —
+  `SecureTokenStorage.migrateLegacySlot()` decrypts the
+  pre-multi-account blob exactly once and re-saves it under
+  `auth.tokens.<accountId>`, including the safeStorage-state flip when
+  the original blob was written in plaintext.
+
 ## [0.1.5] — 2026-05-16
 
 Quick-action set lifted from AMS, scoped to Projects and Engines tabs.

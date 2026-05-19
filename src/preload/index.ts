@@ -18,6 +18,17 @@ export interface SubmitCodeResult {
   error?: { code: string; message: string }
 }
 
+export interface AccountSummary {
+  accountId: string
+  displayName: string
+  active: boolean
+}
+
+export interface AccountSwitchResult {
+  ok: boolean
+  error?: string
+}
+
 export type AssetSource = 'vault' | 'fab' | 'legacy'
 export type AssetSubSource = 'fab-ue' | 'fab-other' | null
 
@@ -91,7 +102,7 @@ export interface AppSettings {
   compilePluginsOnInstall: boolean
   deleteExtraVaultPlatforms: boolean
   skipCruftAtDownload: boolean
-  focusFreebiesTabAtStartup: boolean
+  notifyAboutUnclaimedFreebiesOnStartup: boolean
   cruftPatterns: string[]
   downloadThreads: number
   maxConcurrentDownloads: number
@@ -760,6 +771,20 @@ const api = {
       return () => ipcRenderer.removeListener('auth:state-changed', listener)
     }
   },
+  accounts: {
+    list: (): Promise<AccountSummary[]> => ipcRenderer.invoke('accounts:list'),
+    switchTo: (accountId: string): Promise<AccountSwitchResult> =>
+      ipcRenderer.invoke('accounts:switch', accountId),
+    remove: (accountId: string): Promise<void> =>
+      ipcRenderer.invoke('accounts:remove', accountId),
+    addLogin: (): Promise<void> => ipcRenderer.invoke('accounts:add-login'),
+    onChanged: (handler: (accounts: AccountSummary[]) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, accounts: AccountSummary[]): void =>
+        handler(accounts)
+      ipcRenderer.on('accounts:changed', listener)
+      return () => ipcRenderer.removeListener('accounts:changed', listener)
+    }
+  },
   library: {
     list: (query: LibraryQuery): Promise<LibraryListResult> =>
       ipcRenderer.invoke('library:list', query),
@@ -770,6 +795,14 @@ const api = {
     sync: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('library:sync'),
     listFreebies: (opts: { force?: boolean } = {}): Promise<FreebiesResult> =>
       ipcRenderer.invoke('library:list-freebies', opts),
+    /** Startup probe: fetches freebies (cheap), and if any are unclaimed AND
+     *  the throttle says "due", kicks a full library sync in the background.
+     *  Renderer just consumes the returned reason for UX feedback; sync
+     *  progress arrives via the existing `library:sync-progress` channel. */
+    freebiesAutoCheck: (): Promise<{
+      reason: 'synced' | 'within-cap' | 'all-claimed' | 'not-authenticated'
+      unclaimedCount: number
+    }> => ipcRenderer.invoke('library:freebies-auto-check'),
     onSyncProgress: (handler: (p: SyncProgress) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, p: SyncProgress): void => handler(p)
       ipcRenderer.on('library:sync-progress', listener)

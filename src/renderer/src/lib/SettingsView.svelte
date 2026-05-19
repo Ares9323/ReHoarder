@@ -13,7 +13,7 @@
     compilePluginsOnInstall: boolean
     deleteExtraVaultPlatforms: boolean
     skipCruftAtDownload: boolean
-    focusFreebiesTabAtStartup: boolean
+    notifyAboutUnclaimedFreebiesOnStartup: boolean
     cruftPatterns: string[]
     downloadThreads: number
     maxConcurrentDownloads: number
@@ -538,11 +538,11 @@
         <label>
           <input
             type="checkbox"
-            bind:checked={settings.focusFreebiesTabAtStartup}
+            bind:checked={settings.notifyAboutUnclaimedFreebiesOnStartup}
             onchange={markDirty}
           />
-          Focus Freebies tab at startup if unclaimed
-          <span class="hint">(opens the Freebies tab on launch when this month's free assets haven't been claimed)</span>
+          Notify about unclaimed freebies on startup
+          <span class="hint">(shows a non-blocking toast on launch when this month's free assets haven't been claimed — the unread badge on the Freebies tab is always on regardless)</span>
         </label>
 
         <div class="sub-divider"></div>

@@ -78,6 +78,12 @@ function fromDb(r: AssetRowDb): AssetRow {
   }
 }
 
+/** Resolves the currently active Epic account id at query time. Returning
+ *  `null` means "no active account", and every method on the repo treats
+ *  that as an empty data set (no rows match). The repo never mutates this
+ *  function — it's a snapshot the caller controls. */
+export type AccountIdGetter = () => string | null
+
 export class AssetsRepo {
   private readonly upsertStmt: Database.Statement
   private readonly findByIdStmt: Database.Statement
@@ -91,15 +97,18 @@ export class AssetsRepo {
   private readonly getTagsStmt: Database.Statement
   private readonly getAllTagsStmt: Database.Statement
 
-  constructor(public readonly db: Database.Database) {
+  constructor(
+    public readonly db: Database.Database,
+    private readonly getActiveAccountId: AccountIdGetter
+  ) {
     // Upsert preserves the existing `hidden` and `bookmarked` flags on conflict
     // so sync doesn't undo user-driven state on previously-known assets.
     // `sub_source` IS refreshed: sync derives it from the raw payload and
     // overwriting keeps it consistent with the source endpoint the row came from.
     this.upsertStmt = db.prepare(`
-      INSERT INTO assets (source, source_id, sub_source, listing_type, title, description, image_url, product_url, owned_at, hidden, bookmarked, seller, raw, synced_at)
-      VALUES (@source, @source_id, @sub_source, @listing_type, @title, @description, @image_url, @product_url, @owned_at, @hidden, @bookmarked, @seller, @raw, @synced_at)
-      ON CONFLICT(source, source_id) DO UPDATE SET
+      INSERT INTO assets (account_id, source, source_id, sub_source, listing_type, title, description, image_url, product_url, owned_at, hidden, bookmarked, seller, raw, synced_at)
+      VALUES (@account_id, @source, @source_id, @sub_source, @listing_type, @title, @description, @image_url, @product_url, @owned_at, @hidden, @bookmarked, @seller, @raw, @synced_at)
+      ON CONFLICT(account_id, source, source_id) DO UPDATE SET
         sub_source = excluded.sub_source,
         listing_type = excluded.listing_type,
         title = excluded.title,
@@ -112,30 +121,45 @@ export class AssetsRepo {
         synced_at = excluded.synced_at
     `)
 
-    this.findByIdStmt = db.prepare('SELECT * FROM assets WHERE source = ? AND source_id = ?')
+    this.findByIdStmt = db.prepare(
+      'SELECT * FROM assets WHERE account_id = ? AND source = ? AND source_id = ?'
+    )
     this.setHiddenStmt = db.prepare(
-      'UPDATE assets SET hidden = ? WHERE source = ? AND source_id = ?'
+      'UPDATE assets SET hidden = ? WHERE account_id = ? AND source = ? AND source_id = ?'
     )
     this.setBookmarkedStmt = db.prepare(
-      'UPDATE assets SET bookmarked = ? WHERE source = ? AND source_id = ?'
+      'UPDATE assets SET bookmarked = ? WHERE account_id = ? AND source = ? AND source_id = ?'
     )
-    this.countAllStmt = db.prepare('SELECT COUNT(*) AS n FROM assets')
-    this.countBySourceStmt = db.prepare('SELECT source, COUNT(*) AS n FROM assets GROUP BY source')
-    this.knownIdsStmt = db.prepare('SELECT source_id FROM assets WHERE source = ?')
+    this.countAllStmt = db.prepare('SELECT COUNT(*) AS n FROM assets WHERE account_id = ?')
+    this.countBySourceStmt = db.prepare(
+      'SELECT source, COUNT(*) AS n FROM assets WHERE account_id = ? GROUP BY source'
+    )
+    this.knownIdsStmt = db.prepare(
+      'SELECT source_id FROM assets WHERE account_id = ? AND source = ?'
+    )
     this.addTagStmt = db.prepare(
-      'INSERT OR IGNORE INTO asset_tags (source, source_id, tag) VALUES (?, ?, ?)'
+      'INSERT OR IGNORE INTO asset_tags (account_id, source, source_id, tag) VALUES (?, ?, ?, ?)'
     )
     this.removeTagStmt = db.prepare(
-      'DELETE FROM asset_tags WHERE source = ? AND source_id = ? AND tag = ?'
+      'DELETE FROM asset_tags WHERE account_id = ? AND source = ? AND source_id = ? AND tag = ?'
     )
     this.getTagsStmt = db.prepare(
-      'SELECT tag FROM asset_tags WHERE source = ? AND source_id = ? ORDER BY tag ASC'
+      'SELECT tag FROM asset_tags WHERE account_id = ? AND source = ? AND source_id = ? ORDER BY tag ASC'
     )
-    this.getAllTagsStmt = db.prepare('SELECT DISTINCT tag FROM asset_tags ORDER BY tag ASC')
+    this.getAllTagsStmt = db.prepare(
+      'SELECT DISTINCT tag FROM asset_tags WHERE account_id = ? ORDER BY tag ASC'
+    )
+  }
+
+  private accountOrEmpty(): string | null {
+    return this.getActiveAccountId()
   }
 
   upsert(asset: AssetRow): void {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return
     this.upsertStmt.run({
+      account_id: accountId,
       source: asset.source,
       source_id: asset.sourceId,
       sub_source: asset.subSource,
@@ -154,13 +178,17 @@ export class AssetsRepo {
   }
 
   findById(source: AssetSource, sourceId: string): AssetRow | null {
-    const row = this.findByIdStmt.get(source, sourceId) as AssetRowDb | undefined
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return null
+    const row = this.findByIdStmt.get(accountId, source, sourceId) as AssetRowDb | undefined
     return row ? fromDb(row) : null
   }
 
   list(filters: ListFilters): AssetRow[] {
-    const clauses: string[] = []
-    const params: unknown[] = []
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return []
+    const clauses: string[] = ['account_id = ?']
+    const params: unknown[] = [accountId]
 
     if (filters.onlyHidden) {
       clauses.push('hidden = 1')
@@ -193,7 +221,8 @@ export class AssetsRepo {
       clauses.push(
         `EXISTS (
            SELECT 1 FROM asset_tags AS t
-            WHERE t.source = assets.source
+            WHERE t.account_id = assets.account_id
+              AND t.source = assets.source
               AND t.source_id = assets.source_id
               AND t.tag = ?
          )`
@@ -211,34 +240,43 @@ export class AssetsRepo {
       params.push(like, like, like)
     }
 
-    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : ''
+    const where = `WHERE ${clauses.join(' AND ')}`
     const sql = `SELECT * FROM assets ${where} ORDER BY title ASC`
     const rows = this.db.prepare(sql).all(...params) as AssetRowDb[]
     return rows.map(fromDb)
   }
 
   setHidden(source: AssetSource, sourceId: string, hidden: boolean): void {
-    this.setHiddenStmt.run(hidden ? 1 : 0, source, sourceId)
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return
+    this.setHiddenStmt.run(hidden ? 1 : 0, accountId, source, sourceId)
   }
 
   setBookmarked(source: AssetSource, sourceId: string, bookmarked: boolean): void {
-    this.setBookmarkedStmt.run(bookmarked ? 1 : 0, source, sourceId)
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return
+    this.setBookmarkedStmt.run(bookmarked ? 1 : 0, accountId, source, sourceId)
   }
 
   countAll(): number {
-    return (this.countAllStmt.get() as { n: number }).n
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return 0
+    return (this.countAllStmt.get(accountId) as { n: number }).n
   }
 
   /** Distinct, non-null `listing_type` values currently present in `assets`, sorted alphabetically. */
   availableListingTypes(): string[] {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return []
     const rows = this.db
       .prepare(
         `SELECT DISTINCT listing_type AS t
            FROM assets
-          WHERE listing_type IS NOT NULL
+          WHERE account_id = ?
+            AND listing_type IS NOT NULL
           ORDER BY t ASC`
       )
-      .all() as Array<{ t: string }>
+      .all(accountId) as Array<{ t: string }>
     return rows.map((r) => r.t)
   }
 
@@ -248,17 +286,20 @@ export class AssetsRepo {
    * alphabetically — populates the third filter dropdown in the renderer.
    */
   availableCategories(): string[] {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return []
     const rows = this.db
       .prepare(
         `SELECT DISTINCT tag
            FROM asset_tags
-          WHERE tag NOT IN (
-            '3d-model','animation','audio','game-system','game-template',
-            'material','tool-and-plugin','tutorials-examples','ui','vfx'
-          )
+          WHERE account_id = ?
+            AND tag NOT IN (
+              '3d-model','animation','audio','game-system','game-template',
+              'material','tool-and-plugin','tutorials-examples','ui','vfx'
+            )
           ORDER BY tag ASC`
       )
-      .all() as Array<{ tag: string }>
+      .all(accountId) as Array<{ tag: string }>
     return rows.map((r) => r.tag)
   }
 
@@ -268,20 +309,26 @@ export class AssetsRepo {
    * payload — categories added or removed upstream are mirrored exactly.
    */
   replaceTags(source: AssetSource, sourceId: string, tags: string[]): void {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return
     const txn = this.db.transaction(() => {
       this.db
-        .prepare('DELETE FROM asset_tags WHERE source = ? AND source_id = ?')
-        .run(source, sourceId)
+        .prepare(
+          'DELETE FROM asset_tags WHERE account_id = ? AND source = ? AND source_id = ?'
+        )
+        .run(accountId, source, sourceId)
       for (const tag of tags) {
         if (!tag) continue
-        this.addTagStmt.run(source, sourceId, tag.toLowerCase())
+        this.addTagStmt.run(accountId, source, sourceId, tag.toLowerCase())
       }
     })
     txn()
   }
 
   countBySource(): Record<string, number> {
-    const rows = this.countBySourceStmt.all() as Array<{ source: string; n: number }>
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return {}
+    const rows = this.countBySourceStmt.all(accountId) as Array<{ source: string; n: number }>
     return Object.fromEntries(rows.map((r) => [r.source, r.n]))
   }
 
@@ -291,25 +338,35 @@ export class AssetsRepo {
    * page contains only known IDs we can stop fetching further pages.
    */
   knownSourceIds(source: AssetSource): Set<string> {
-    const rows = this.knownIdsStmt.all(source) as Array<{ source_id: string }>
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return new Set()
+    const rows = this.knownIdsStmt.all(accountId, source) as Array<{ source_id: string }>
     return new Set(rows.map((r) => r.source_id))
   }
 
   addTag(source: AssetSource, sourceId: string, tag: string): void {
-    this.addTagStmt.run(source, sourceId, tag)
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return
+    this.addTagStmt.run(accountId, source, sourceId, tag)
   }
 
   removeTag(source: AssetSource, sourceId: string, tag: string): void {
-    this.removeTagStmt.run(source, sourceId, tag)
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return
+    this.removeTagStmt.run(accountId, source, sourceId, tag)
   }
 
   getTags(source: AssetSource, sourceId: string): string[] {
-    const rows = this.getTagsStmt.all(source, sourceId) as Array<{ tag: string }>
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return []
+    const rows = this.getTagsStmt.all(accountId, source, sourceId) as Array<{ tag: string }>
     return rows.map((r) => r.tag)
   }
 
   getAllTags(): string[] {
-    const rows = this.getAllTagsStmt.all() as Array<{ tag: string }>
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return []
+    const rows = this.getAllTagsStmt.all(accountId) as Array<{ tag: string }>
     return rows.map((r) => r.tag)
   }
 }

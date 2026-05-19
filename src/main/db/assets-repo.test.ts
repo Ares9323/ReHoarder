@@ -5,11 +5,17 @@ import { AssetsRepo, type AssetRow } from './assets-repo'
 
 let db: Database.Database
 let repo: AssetsRepo
+const TEST_ACCOUNT_ID = 'test-account'
 
 beforeEach(() => {
   db = new Database(':memory:')
   applySchema(db)
-  repo = new AssetsRepo(db)
+  // Seed the accounts row so the scoped repo has something to bind to.
+  db.prepare(
+    `INSERT OR IGNORE INTO accounts (id, display_name, created_at, last_used_at)
+       VALUES (?, ?, ?, ?)`
+  ).run(TEST_ACCOUNT_ID, 'Test', Date.now(), Date.now())
+  repo = new AssetsRepo(db, () => TEST_ACCOUNT_ID)
 })
 
 const sampleAsset = (over: Partial<AssetRow> = {}): AssetRow => ({
@@ -24,6 +30,7 @@ const sampleAsset = (over: Partial<AssetRow> = {}): AssetRow => ({
   bookmarked: false,
   subSource: null,
   listingType: null,
+  seller: null,
   raw: '{}',
   syncedAt: 1_700_000_000_000,
   ...over

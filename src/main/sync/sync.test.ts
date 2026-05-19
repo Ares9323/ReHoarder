@@ -30,7 +30,11 @@ function makeEpicSessionFactory(ueReady = true) {
 beforeEach(() => {
   db = new Database(':memory:')
   applySchema(db)
-  repo = new AssetsRepo(db)
+  db.prepare(
+    `INSERT OR IGNORE INTO accounts (id, display_name, created_at, last_used_at)
+       VALUES (?, ?, ?, ?)`
+  ).run('test-account', 'Test', Date.now(), Date.now())
+  repo = new AssetsRepo(db, () => 'test-account')
 
   vaultClient = {
     listOwnedAssets: vi.fn(),
@@ -114,7 +118,7 @@ describe('Sync.syncAll', () => {
     expect(repo.countAll()).toBe(1)
   })
 
-  it('early-stops Fab UE pagination when a page contains only already-known IDs', async () => {
+  it('paginates the entire Fab UE library — no incremental early-stop', async () => {
     // Seed the DB with one Fab asset already synced previously.
     repo.upsert({
       source: 'fab',
@@ -128,6 +132,7 @@ describe('Sync.syncAll', () => {
       bookmarked: false,
       subSource: 'fab-ue',
       listingType: null,
+      seller: null,
       raw: '{}',
       syncedAt: 0
     })
@@ -136,9 +141,11 @@ describe('Sync.syncAll', () => {
     vaultClient.fetchCatalogMetadata.mockResolvedValue({})
     fabSessionClient.establishSession.mockResolvedValue({ cookieHeader: 'c' })
 
-    // Page 1: 1 new + 1 old   → mixed → keep paginating
-    // Page 2: 1 old           → all known → STOP (don't request page 3)
-    // Page 3: would be 1 new  → MUST NOT be reached
+    // The previous version of this test asserted that page 3 was never
+    // reached when page 2 was "all known". That early-stop was dropped:
+    // Fab UE library is sorted by listing createdAt, not acquisition time,
+    // so freshly-claimed freebies (old listings) sit deep in the cursor
+    // and would be missed. The sync now walks every page.
     const pages = [
       {
         results: [
@@ -152,7 +159,7 @@ describe('Sync.syncAll', () => {
         cursors: { next: 'c-3' }
       },
       {
-        results: [{ assetId: 'new-2', title: 'Should NOT be reached' }],
+        results: [{ assetId: 'new-2', title: 'New 2 — late' }],
         cursors: { next: null }
       }
     ]
@@ -161,7 +168,8 @@ describe('Sync.syncAll', () => {
     await sync.syncAll('bearer', 'acct-1', () => {})
 
     expect(repo.findById('fab', 'new-1')?.title).toBe('New 1')
-    expect(repo.findById('fab', 'new-2')).toBeNull() // page 3 never fetched
+    // The previously-unreachable page now lands in the DB too.
+    expect(repo.findById('fab', 'new-2')?.title).toBe('New 2 — late')
   })
 
   it('full-syncs without early-stop when no Fab assets are in the DB yet', async () => {

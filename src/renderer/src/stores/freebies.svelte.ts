@@ -69,5 +69,15 @@ export const freebiesStore = {
   },
   async refresh(): Promise<void> {
     await fetchOnce(true)
+  },
+  /** Reset cached state so the next `ensureLoaded()` re-fetches against the
+   *  new active account. Used by App.svelte on account switch — the existing
+   *  list belongs to whoever was active a moment ago. */
+  invalidate(): void {
+    freebies = []
+    fetchedAt = null
+    loaded = false
+    loading = false
+    error = null
   }
 }

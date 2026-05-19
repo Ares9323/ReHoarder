@@ -6,6 +6,13 @@ import {
   slugifyCategory
 } from '../category-slug'
 
+/** Placeholder account id used to backfill pre-multi-account rows during the
+ *  v3 → v4 migration. The single-account legacy data is bound to this id
+ *  until the next successful login surfaces the real Epic account id, at
+ *  which point `AccountsRepo.rebindLegacy(realId)` rewrites every row with
+ *  `account_id = 'legacy'` to the real id. */
+export const LEGACY_ACCOUNT_ID = 'legacy'
+
 export function applySchema(db: Database.Database): void {
   // Order matters: create the base tables FIRST, then run migrations on top.
   // `tryAddColumn` silently no-ops "no such table" errors, so on a fresh DB
@@ -14,7 +21,15 @@ export function applySchema(db: Database.Database): void {
   // the next launch. Creating first then migrating means a single launch
   // converges to the full schema for both fresh installs and upgrades.
   db.exec(`
+    CREATE TABLE IF NOT EXISTS accounts (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      last_used_at INTEGER NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS assets (
+      account_id TEXT NOT NULL DEFAULT '${LEGACY_ACCOUNT_ID}',
       source TEXT NOT NULL,
       source_id TEXT NOT NULL,
       title TEXT NOT NULL,
@@ -26,31 +41,37 @@ export function applySchema(db: Database.Database): void {
       seller TEXT,
       raw TEXT,
       synced_at INTEGER NOT NULL,
-      PRIMARY KEY (source, source_id)
+      PRIMARY KEY (account_id, source, source_id)
     );
 
     CREATE INDEX IF NOT EXISTS idx_assets_hidden ON assets (hidden);
     CREATE INDEX IF NOT EXISTS idx_assets_source ON assets (source);
 
     CREATE TABLE IF NOT EXISTS asset_tags (
+      account_id TEXT NOT NULL DEFAULT '${LEGACY_ACCOUNT_ID}',
       source TEXT NOT NULL,
       source_id TEXT NOT NULL,
       tag TEXT NOT NULL,
-      PRIMARY KEY (source, source_id, tag),
-      FOREIGN KEY (source, source_id) REFERENCES assets(source, source_id) ON DELETE CASCADE
+      PRIMARY KEY (account_id, source, source_id, tag),
+      FOREIGN KEY (account_id, source, source_id)
+        REFERENCES assets(account_id, source, source_id)
+        ON DELETE CASCADE ON UPDATE CASCADE
     );
 
     CREATE INDEX IF NOT EXISTS idx_asset_tags_tag ON asset_tags (tag);
 
     CREATE TABLE IF NOT EXISTS sync_state (
-      source TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL DEFAULT '${LEGACY_ACCOUNT_ID}',
+      source TEXT NOT NULL,
       last_sync_at INTEGER,
       last_sync_status TEXT,
-      last_sync_error TEXT
+      last_sync_error TEXT,
+      PRIMARY KEY (account_id, source)
     );
 
     CREATE TABLE IF NOT EXISTS downloads (
       id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL DEFAULT '${LEGACY_ACCOUNT_ID}',
       source TEXT NOT NULL,
       source_id TEXT NOT NULL,
       title TEXT NOT NULL,
@@ -93,6 +114,171 @@ function applyMigrations(db: Database.Database): void {
   migrateCategoriesToSluggedNames(db)
   migrateFabUePathListingTypes(db)
   backfillSeller(db)
+  migrateAccountScoping(db)
+}
+
+/**
+ * Migration v3 → v4: introduce per-account scoping. The original PKs were
+ * `(source, source_id)` (assets), `(source, source_id, tag)` (asset_tags),
+ * `(source)` (sync_state). Those would collide the moment a second account
+ * owns the same listing or replays a sync. To keep cross-account isolation
+ * watertight we **rebuild the tables** with `account_id` baked into the
+ * primary key.
+ *
+ * Pre-existing rows are stamped with `account_id = 'legacy'`, and a matching
+ * row is inserted in `accounts`. The next successful login flips every
+ * `account_id = 'legacy'` to the real Epic account id (handled by
+ * `AccountsRepo.rebindLegacy`), at which point the legacy slot is collapsed.
+ *
+ * `downloads` doesn't need a rebuild — its PK is a synthetic UUID `id`, so
+ * the column is simply added with a default plus an index.
+ */
+function migrateAccountScoping(db: Database.Database): void {
+  let v: number
+  try {
+    v = db.pragma('user_version', { simple: true }) as number
+  } catch {
+    v = 0
+  }
+  if (v >= 4) return
+
+  const rebuildTx = db.transaction(() => {
+    // 1. Stamp the legacy account row up front so post-rebuild rows have
+    //    something to reference (we don't model an FK from assets to accounts,
+    //    but this keeps repo lookups consistent).
+    db.prepare(
+      `INSERT OR IGNORE INTO accounts (id, display_name, created_at, last_used_at)
+         VALUES (?, ?, ?, ?)`
+    ).run(LEGACY_ACCOUNT_ID, '(legacy)', Date.now(), Date.now())
+
+    // 2. Rebuild `assets` with `(account_id, source, source_id)` as the PK.
+    //    Only run when the existing table lacks `account_id` — re-running
+    //    after a partial failure shouldn't drop the rebuilt table.
+    if (!hasColumn(db, 'assets', 'account_id')) {
+      db.exec(`
+        CREATE TABLE assets_v4 (
+          account_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          image_url TEXT,
+          product_url TEXT,
+          owned_at INTEGER,
+          hidden INTEGER NOT NULL DEFAULT 0,
+          bookmarked INTEGER NOT NULL DEFAULT 0,
+          sub_source TEXT,
+          listing_type TEXT,
+          seller TEXT,
+          raw TEXT,
+          synced_at INTEGER NOT NULL,
+          PRIMARY KEY (account_id, source, source_id)
+        );
+        INSERT INTO assets_v4
+          (account_id, source, source_id, title, description, image_url, product_url,
+           owned_at, hidden, bookmarked, sub_source, listing_type, seller, raw, synced_at)
+          SELECT '${LEGACY_ACCOUNT_ID}', source, source_id, title, description, image_url,
+                 product_url, owned_at, hidden,
+                 COALESCE(bookmarked, 0),
+                 sub_source, listing_type, seller, raw, synced_at
+            FROM assets;
+        DROP TABLE assets;
+        ALTER TABLE assets_v4 RENAME TO assets;
+        CREATE INDEX idx_assets_hidden ON assets (hidden);
+        CREATE INDEX idx_assets_source ON assets (source);
+        CREATE INDEX idx_assets_account ON assets (account_id);
+      `)
+    }
+
+    // 3. Rebuild `asset_tags` with `(account_id, source, source_id, tag)` PK.
+    if (!hasColumn(db, 'asset_tags', 'account_id')) {
+      db.exec(`
+        CREATE TABLE asset_tags_v4 (
+          account_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          source_id TEXT NOT NULL,
+          tag TEXT NOT NULL,
+          PRIMARY KEY (account_id, source, source_id, tag),
+          FOREIGN KEY (account_id, source, source_id)
+            REFERENCES assets(account_id, source, source_id)
+            ON DELETE CASCADE ON UPDATE CASCADE
+        );
+        INSERT INTO asset_tags_v4 (account_id, source, source_id, tag)
+          SELECT '${LEGACY_ACCOUNT_ID}', source, source_id, tag FROM asset_tags;
+        DROP TABLE asset_tags;
+        ALTER TABLE asset_tags_v4 RENAME TO asset_tags;
+        CREATE INDEX idx_asset_tags_tag ON asset_tags (tag);
+        CREATE INDEX idx_asset_tags_account ON asset_tags (account_id);
+      `)
+    }
+
+    // 4. Rebuild `sync_state` with `(account_id, source)` PK.
+    if (!hasColumn(db, 'sync_state', 'account_id')) {
+      db.exec(`
+        CREATE TABLE sync_state_v4 (
+          account_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          last_sync_at INTEGER,
+          last_sync_status TEXT,
+          last_sync_error TEXT,
+          PRIMARY KEY (account_id, source)
+        );
+        INSERT INTO sync_state_v4 (account_id, source, last_sync_at, last_sync_status, last_sync_error)
+          SELECT '${LEGACY_ACCOUNT_ID}', source, last_sync_at, last_sync_status, last_sync_error
+            FROM sync_state;
+        DROP TABLE sync_state;
+        ALTER TABLE sync_state_v4 RENAME TO sync_state;
+      `)
+    }
+
+    // 5. `downloads` keeps its synthetic-UUID PK; just add account_id.
+    if (!hasColumn(db, 'downloads', 'account_id')) {
+      db.exec(
+        `ALTER TABLE downloads ADD COLUMN account_id TEXT NOT NULL DEFAULT '${LEGACY_ACCOUNT_ID}'`
+      )
+    }
+
+    // 6. account-scoped indexes — created here (rather than in `applySchema`)
+    //    because the `account_id` column doesn't exist yet at applySchema time
+    //    on legacy DBs (the rebuild/ALTER steps above add it). Idempotent so
+    //    fresh installs reach the same state.
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_assets_account ON assets (account_id);
+      CREATE INDEX IF NOT EXISTS idx_asset_tags_account ON asset_tags (account_id);
+      CREATE INDEX IF NOT EXISTS idx_downloads_account ON downloads (account_id);
+    `)
+
+    db.pragma('user_version = 4')
+  })
+
+  // SQLite forbids `PRAGMA foreign_keys = …` inside a transaction. The rebuild
+  // transaction drops `assets`, which violates the FK from `asset_tags` while
+  // the latter still exists, so we temporarily turn FK enforcement off for
+  // the duration of the migration and restore it afterwards.
+  let priorForeignKeys = 1
+  try {
+    priorForeignKeys = db.pragma('foreign_keys', { simple: true }) as number
+  } catch {
+    /* default ON */
+  }
+  try {
+    db.pragma('foreign_keys = OFF')
+    rebuildTx()
+    console.warn('[schema] account_id PK rebuild + accounts table ready (user_version → 4)')
+  } catch (err) {
+    console.warn('[schema] account scoping migration skipped:', err)
+  } finally {
+    if (priorForeignKeys === 1) db.pragma('foreign_keys = ON')
+  }
+}
+
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  try {
+    const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+    return rows.some((r) => r.name === column)
+  } catch {
+    return false
+  }
 }
 
 /**

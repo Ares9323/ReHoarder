@@ -1,4 +1,4 @@
-import { EPIC_USER_AGENT } from '../vault/user-agent'
+import { LAUNCHER_UA } from '../http/user-agents'
 
 /**
  * Single freebie surfaced on Fab's "Free for the Month" homepage blade.
@@ -35,11 +35,16 @@ interface RawListingState {
   [key: string]: unknown
 }
 
+// Use the same `LAUNCHER_UA` that the Fab F1-F5 dance + CF warmup use.
+// Cloudflare's `cf_clearance` cookie AND (suspected) Fab's own session
+// middleware bind the issued session to the UA that earned them. Mixing
+// `EpicGamesLauncher/...` UA on `/me/...` calls leads to a 401 even when
+// `fab_sessionid` is present in the request.
 const FREEBIE_HEADERS = (cookieHeader: string): Record<string, string> => ({
   Cookie: cookieHeader,
-  Referer: 'https://www.fab.com/',
+  Referer: 'https://www.fab.com/library',
   'X-Requested-With': 'XMLHttpRequest',
-  'User-Agent': EPIC_USER_AGENT,
+  'User-Agent': LAUNCHER_UA,
   Accept: 'application/json'
 })
 

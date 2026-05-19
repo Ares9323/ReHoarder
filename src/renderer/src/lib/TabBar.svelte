@@ -3,6 +3,7 @@
   import type { TabKey } from './tabs'
   import { downloadsStore } from '../stores/downloads.svelte'
   import { freebiesStore } from '../stores/freebies.svelte'
+  import AccountSwitcher from './AccountSwitcher.svelte'
 
   interface TabDef {
     key: TabKey
@@ -12,10 +13,16 @@
   interface Props {
     active: TabKey
     onChange: (key: TabKey) => void
-    onSignOut?: () => void
+    /** Callback fired after the user switched to a different Epic account.
+     *  The renderer-side per-account stores (library, freebies, downloads)
+     *  reload off this — App.svelte wires it up. */
+    onAccountSwitched?: (accountId: string) => void
+    /** Triggered by "Add account…" in the switcher dropdown — App.svelte
+     *  bounces back to the LoginView so the user can paste the OAuth code. */
+    onAddAccount?: () => void
   }
 
-  let { active, onChange, onSignOut }: Props = $props()
+  let { active, onChange, onAccountSwitched, onAddAccount }: Props = $props()
 
   // Live count of queued+running downloads, surfaced as a chip next to the
   // Downloads tab. Derived off the singleton store — no per-mount IPC.
@@ -75,9 +82,10 @@
       </button>
     {/each}
   </div>
-  {#if onSignOut}
-    <button type="button" class="signout" onclick={() => onSignOut()}>Sign out</button>
-  {/if}
+  <AccountSwitcher
+    onSwitched={(id) => onAccountSwitched?.(id)}
+    onAddAccount={() => onAddAccount?.()}
+  />
 </nav>
 
 <style>
@@ -148,20 +156,4 @@
     font-variant-numeric: tabular-nums;
   }
 
-  .signout {
-    align-self: center;
-    background: transparent;
-    color: #888;
-    border: 1px solid #333;
-    border-radius: 4px;
-    padding: 0.3rem 0.8rem;
-    font-size: 0.75rem;
-    font-family: inherit;
-    cursor: pointer;
-  }
-
-  .signout:hover {
-    color: #ccc;
-    border-color: #555;
-  }
 </style>

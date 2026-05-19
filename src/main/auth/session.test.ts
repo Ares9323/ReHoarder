@@ -4,6 +4,8 @@ import { KvStore } from '../db/kv'
 import { SecureTokenStorage, type CryptoBackend } from './secure-storage'
 import { OAuthClient } from './oauth-client'
 import { Session, type AuthState } from './session'
+import { AccountsRepo } from '../db/accounts-repo'
+import { applySchema } from '../db/schema'
 
 const passthroughCrypto: CryptoBackend = {
   isEncryptionAvailable: () => false,
@@ -46,19 +48,24 @@ function makeJsonResponse(body: unknown, status = 200): Response {
   })
 }
 
+let db: Database.Database
 let kv: KvStore
 let storage: SecureTokenStorage
+let accounts: AccountsRepo
 let fetchMock: ReturnType<typeof vi.fn>
 let client: OAuthClient
 let session: Session
 let stateChanges: AuthState[]
 
 beforeEach(() => {
-  kv = new KvStore(new Database(':memory:'))
+  db = new Database(':memory:')
+  applySchema(db)
+  kv = new KvStore(db)
   storage = new SecureTokenStorage(kv, passthroughCrypto)
+  accounts = new AccountsRepo(db, kv)
   fetchMock = vi.fn()
   client = new OAuthClient(fetchMock as unknown as typeof fetch)
-  session = new Session(storage, client)
+  session = new Session(storage, accounts, client)
   stateChanges = []
   session.on('state-changed', (s) => stateChanges.push(s))
 })
@@ -115,7 +122,7 @@ describe('Session.init', () => {
       status: 'authenticated',
       displayName: 'Ares'
     })
-    const persisted = storage.load()
+    const persisted = storage.load('acct')
     expect(persisted?.accessToken).toBe('a2')
     expect(persisted?.refreshToken).toBe('r2')
   })
@@ -135,7 +142,7 @@ describe('Session.init', () => {
     await session.init()
 
     expect(session.getState()).toEqual<AuthState>({ status: 'anonymous' })
-    expect(storage.load()).toBeNull()
+    expect(storage.load('acct')).toBeNull()
   })
 
   it('goes anonymous when refresh token itself has expired (no network call needed)', async () => {
@@ -151,7 +158,7 @@ describe('Session.init', () => {
 
     expect(session.getState()).toEqual<AuthState>({ status: 'anonymous' })
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(storage.load()).toBeNull()
+    expect(storage.load('acct')).toBeNull()
   })
 })
 
@@ -170,7 +177,7 @@ describe('Session.exchangeCode', () => {
       accountId: 'acct',
       displayName: 'Ares'
     })
-    expect(storage.load()).not.toBeNull()
+    expect(storage.load('acct')).not.toBeNull()
   })
 
   it('throws on bad code, leaves state anonymous, leaves storage empty', async () => {
@@ -180,7 +187,7 @@ describe('Session.exchangeCode', () => {
 
     await expect(session.exchangeCode('bad')).rejects.toThrow()
     expect(session.getState()).toEqual<AuthState>({ status: 'anonymous' })
-    expect(storage.load()).toBeNull()
+    expect(storage.load('acct')).toBeNull()
   })
 
   it('emits state-changed when transitioning to authenticated', async () => {
@@ -228,7 +235,7 @@ describe('Session.logout', () => {
     await session.logout()
 
     expect(session.getState()).toEqual<AuthState>({ status: 'anonymous' })
-    expect(storage.load()).toBeNull()
+    expect(storage.load('acct')).toBeNull()
     expect(stateChanges.at(-1)).toEqual<AuthState>({ status: 'anonymous' })
   })
 })

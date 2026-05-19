@@ -90,13 +90,24 @@ export class DownloadsManager {
 
   constructor(private readonly deps: DownloadsManagerDeps) {}
 
-  /** Called at startup, before the renderer connects. Recovers state from previous run. */
+  /** Called at startup BEFORE the active account is known. Recovers state
+   *  from previous run (`running` → `queued`) but does NOT pump the queue
+   *  yet — `nextQueued()` scopes by active account id, so pumping here
+   *  would silently skip every row. Call `onAuthChanged()` once the
+   *  session resolves to pick the rows up. */
   bootstrap(): void {
     const recovered = this.deps.repo.resetInterrupted()
     if (recovered > 0) {
       console.warn(`[downloads] recovered ${recovered} interrupted download(s) → queued`)
     }
-    // Pump the queue (fire-and-forget; UI doesn't need to wait).
+  }
+
+  /** Trigger a fresh pump after the session's active account has changed
+   *  (initial auth, account switch, account add). Lets recovered queued
+   *  rows from the previous launch start as soon as the right user is
+   *  active. Safe to call repeatedly — pump is idempotent under the
+   *  slot accounting. */
+  onAuthChanged(): void {
     void this.pump()
   }
 
@@ -383,7 +394,7 @@ export class DownloadsManager {
             const last = this.lastProgressBroadcastAt.get(row.id) ?? 0
             if (now - last > 200) {
               this.lastProgressBroadcastAt.set(row.id, now)
-              const fresh = this.deps.repo.findById(row.id)
+              const fresh = this.deps.repo.findById(row.id, { crossAccount: true })
               if (fresh) this.deps.broadcastProgress?.(row.id, fresh)
             }
           }
@@ -472,7 +483,7 @@ export class DownloadsManager {
           const last = this.lastProgressBroadcastAt.get(row.id) ?? 0
           if (now - last > 200) {
             this.lastProgressBroadcastAt.set(row.id, now)
-            const fresh = this.deps.repo.findById(row.id)
+            const fresh = this.deps.repo.findById(row.id, { crossAccount: true })
             if (fresh) this.deps.broadcastProgress?.(row.id, fresh)
           }
         },

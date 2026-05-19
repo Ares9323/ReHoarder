@@ -66,5 +66,14 @@ export const downloadsStore = {
   async rescan(): Promise<void> {
     loaded = false
     await fetchOnce()
+  },
+  /** Drop the cached snapshot so the next `ensureLoaded()` (or the next
+   *  `downloads:state-changed` broadcast) repopulates against the freshly
+   *  active Epic account. Called by App.svelte on account switch. */
+  invalidate(): void {
+    allDownloads = []
+    loaded = false
+    loading = false
+    error = null
   }
 }

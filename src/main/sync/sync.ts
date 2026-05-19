@@ -64,8 +64,8 @@ export class Sync {
     const fabPromise = this.syncFab(accessToken, accountId, now, result, onProgress, onLog)
     await Promise.allSettled([vaultPromise, fabPromise])
 
-    this.writeSyncState('vault', now, result.vault.error)
-    this.writeSyncState('fab', now, result.fab.error)
+    this.writeSyncState(accountId, 'vault', now, result.vault.error)
+    this.writeSyncState(accountId, 'fab', now, result.fab.error)
 
     onLog(
       `Sync complete. Vault: ${result.vault.persisted} persisted` +
@@ -159,17 +159,21 @@ export class Sync {
       onLog('Fab: establishing session…')
       const session = await this.fabSessionClient.establishSession(accessToken, epicSession, onLog)
 
-      // Incremental pagination: snapshot every Fab source_id currently in DB.
-      // Both the UE library and the Other library are ordered by -createdAt,
-      // so the moment we hit a page where every item is already known, the
-      // rest of the cursor is guaranteed to be older still-known territory
-      // and we stop fetching.
+      // Track which IDs were already in DB just for the `pageNew` diagnostic
+      // counter — it informs the user how much of each page they were missing.
+      // (We used to early-stop when `pageNew === 0`, but the Fab UE library is
+      // sorted by listing `createdAt`, NOT by acquisition time. Freebies of
+      // the month are routinely listings created years ago, so an item the
+      // user claimed yesterday appears DEEP in the paginated cursor — and the
+      // early-stop guarantees we miss it on page 1. Asset Manager Studio's
+      // approach is a full UE library sync every time; we follow suit for
+      // correctness. The cost is ~20-30 s on a 2k+ library, which is the
+      // price of a trustworthy "you already own this" indicator.)
       const knownFabIds = this.repo.knownSourceIds('fab')
-      const incremental = knownFabIds.size > 0
       onLog(
-        incremental
-          ? `Fab: incremental sync (${knownFabIds.size} assets already in DB)`
-          : 'Fab: full sync (DB empty for fab source)'
+        knownFabIds.size > 0
+          ? `Fab: full UE sync (${knownFabIds.size} fab assets already in DB)`
+          : 'Fab: full UE sync (DB empty for fab source)'
       )
       onLog('Fab: session established. Fetching library…')
 
@@ -197,10 +201,6 @@ export class Sync {
           `Fab: UE page ${pageNum} received (+${page.results.length} items, ${pageNew} new)`
         )
         this.emitProgress(onProgress, 'fab', result)
-        if (incremental && page.results.length > 0 && pageNew === 0) {
-          onLog(`Fab: UE early-stop at page ${pageNum} (no new items on page)`)
-          break
-        }
       }
       if (skipped > 0) {
         onLog(`Fab: skipped ${skipped} UE items with missing assetId`)
@@ -210,11 +210,14 @@ export class Sync {
       let otherPageNum = 0
       let otherSkipped = 0
       let otherDup = 0
+      // Same reasoning as the UE library: the Other library is sorted by
+      // listing creation date, not acquisition date, so an asset claimed
+      // today might show up only on page 12 of an old freebie listing.
+      // Paginate the full thing so the local cross-reference catches it.
       for await (const page of this.fabClient.listOtherLibrary(session.cookieHeader)) {
         otherPageNum += 1
         result.fab.fetched += page.results.length
         let pageNew = 0
-        let pageProcessable = 0
         for (const { listing } of page.results) {
           if (!listing || !listing.uid) {
             otherSkipped += 1
@@ -224,7 +227,6 @@ export class Sync {
             otherDup += 1
             continue
           }
-          pageProcessable += 1
           if (!knownFabIds.has(listing.uid)) pageNew += 1
           this.repo.upsert(normalizeFabOtherAsset(listing, now))
           this.repo.replaceTags('fab', listing.uid, extractFabOtherCategories(listing))
@@ -234,10 +236,6 @@ export class Sync {
           `Fab: Other page ${otherPageNum} received (+${page.results.length} listings, ${pageNew} new)`
         )
         this.emitProgress(onProgress, 'fab', result)
-        if (incremental && pageProcessable > 0 && pageNew === 0) {
-          onLog(`Fab: Other early-stop at page ${otherPageNum} (no new listings on page)`)
-          break
-        }
       }
       if (otherSkipped > 0) {
         onLog(`Fab: skipped ${otherSkipped} Other listings with missing uid`)
@@ -266,24 +264,41 @@ export class Sync {
     })
   }
 
-  private writeSyncState(source: string, at: number, error: string | null): void {
+  private writeSyncState(
+    accountId: string,
+    source: string,
+    at: number,
+    error: string | null
+  ): void {
     const status = error === null ? 'ok' : 'error'
     this.repo.db
       .prepare(
-        `INSERT INTO sync_state (source, last_sync_at, last_sync_status, last_sync_error)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(source) DO UPDATE SET
+        `INSERT INTO sync_state (account_id, source, last_sync_at, last_sync_status, last_sync_error)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(account_id, source) DO UPDATE SET
          last_sync_at = excluded.last_sync_at,
          last_sync_status = excluded.last_sync_status,
          last_sync_error = excluded.last_sync_error`
       )
-      .run(source, at, status, error)
+      .run(accountId, source, at, status, error)
   }
 
-  getLastSyncState(): Record<string, { at: number; status: string; error: string | null }> {
+  /**
+   * Read sync state for the given account. When `accountId` is null (no
+   * active account), returns an empty record so callers can render their
+   * "never synced" empty state without special-casing the auth gate.
+   */
+  getLastSyncState(
+    accountId: string | null
+  ): Record<string, { at: number; status: string; error: string | null }> {
+    if (accountId === null) return {}
     const rows = this.repo.db
-      .prepare('SELECT source, last_sync_at, last_sync_status, last_sync_error FROM sync_state')
-      .all() as Array<{
+      .prepare(
+        `SELECT source, last_sync_at, last_sync_status, last_sync_error
+           FROM sync_state
+          WHERE account_id = ?`
+      )
+      .all(accountId) as Array<{
       source: string
       last_sync_at: number
       last_sync_status: string

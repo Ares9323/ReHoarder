@@ -75,7 +75,12 @@ beforeEach(() => {
     vaultPaths: ['/tmp/test-vault'],
     maxConcurrentDownloads: 2
   })
-  repo = new DownloadsRepo(db)
+  // Seed an accounts row so the scoped repo's insert/listAll see something.
+  db.prepare(
+    `INSERT OR IGNORE INTO accounts (id, display_name, created_at, last_used_at)
+       VALUES (?, ?, ?, ?)`
+  ).run('test-account', 'Test', Date.now(), Date.now())
+  repo = new DownloadsRepo(db, () => 'test-account')
 
   pending = new Map()
   runFn.mockReset()

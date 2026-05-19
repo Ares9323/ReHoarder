@@ -50,7 +50,7 @@ describe('SecureTokenStorage — encryption available', () => {
   it('saves tokens encrypted (ciphertext on disk, not plaintext)', () => {
     const storage = new SecureTokenStorage(kv, makeEncryptingBackend())
     storage.save(fakeTokens)
-    const raw = kv.get('auth.tokens')
+    const raw = kv.get(`auth.tokens.${fakeTokens.accountId}`)
     expect(raw).not.toBeNull()
     expect(raw).not.toContain('"accessToken":"a"')
   })
@@ -58,27 +58,34 @@ describe('SecureTokenStorage — encryption available', () => {
   it('round-trips tokens through encrypted save+load', () => {
     const storage = new SecureTokenStorage(kv, makeEncryptingBackend())
     storage.save(fakeTokens)
-    expect(storage.load()).toEqual(fakeTokens)
+    expect(storage.load(fakeTokens.accountId)).toEqual(fakeTokens)
   })
 
   it('records that the on-disk blob is encrypted', () => {
     const storage = new SecureTokenStorage(kv, makeEncryptingBackend())
     storage.save(fakeTokens)
-    expect(kv.get('auth.encrypted')).toBe('1')
+    expect(kv.get(`auth.encrypted.${fakeTokens.accountId}`)).toBe('1')
   })
 
   it('returns null when no tokens are saved', () => {
     const storage = new SecureTokenStorage(kv, makeEncryptingBackend())
-    expect(storage.load()).toBeNull()
+    expect(storage.load(fakeTokens.accountId)).toBeNull()
   })
 
   it('clears tokens', () => {
     const storage = new SecureTokenStorage(kv, makeEncryptingBackend())
     storage.save(fakeTokens)
-    storage.clear()
-    expect(storage.load()).toBeNull()
-    expect(kv.get('auth.tokens')).toBeNull()
-    expect(kv.get('auth.encrypted')).toBeNull()
+    storage.clear(fakeTokens.accountId)
+    expect(storage.load(fakeTokens.accountId)).toBeNull()
+    expect(kv.get(`auth.tokens.${fakeTokens.accountId}`)).toBeNull()
+    expect(kv.get(`auth.encrypted.${fakeTokens.accountId}`)).toBeNull()
+  })
+
+  it('lists every account id that has a token blob', () => {
+    const storage = new SecureTokenStorage(kv, makeEncryptingBackend())
+    storage.save(fakeTokens)
+    storage.save({ ...fakeTokens, accountId: 'other' })
+    expect(storage.listAccountIds().sort()).toEqual(['acct', 'other'])
   })
 })
 
@@ -86,20 +93,20 @@ describe('SecureTokenStorage — encryption unavailable (fallback)', () => {
   it('falls back to plain JSON when encryption is unavailable', () => {
     const storage = new SecureTokenStorage(kv, makeUnavailableBackend())
     storage.save(fakeTokens)
-    const raw = kv.get('auth.tokens')
+    const raw = kv.get(`auth.tokens.${fakeTokens.accountId}`)
     expect(raw).toContain('"accessToken":"a"')
   })
 
   it('round-trips tokens through plain JSON save+load', () => {
     const storage = new SecureTokenStorage(kv, makeUnavailableBackend())
     storage.save(fakeTokens)
-    expect(storage.load()).toEqual(fakeTokens)
+    expect(storage.load(fakeTokens.accountId)).toEqual(fakeTokens)
   })
 
   it('records that the on-disk blob is NOT encrypted', () => {
     const storage = new SecureTokenStorage(kv, makeUnavailableBackend())
     storage.save(fakeTokens)
-    expect(kv.get('auth.encrypted')).toBe('0')
+    expect(kv.get(`auth.encrypted.${fakeTokens.accountId}`)).toBe('0')
   })
 })
 
@@ -113,7 +120,7 @@ describe('SecureTokenStorage — backend changes between save and load', () => {
       isEncryptionAvailable: () => false
     }
     const storage = new SecureTokenStorage(kv, stillCapable)
-    expect(storage.load()).toEqual(fakeTokens)
+    expect(storage.load(fakeTokens.accountId)).toEqual(fakeTokens)
   })
 
   it('returns null when an encrypted blob exists but decryption fails', () => {
@@ -128,6 +135,34 @@ describe('SecureTokenStorage — backend changes between save and load', () => {
       }
     }
     const storage = new SecureTokenStorage(kv, brokenBackend)
-    expect(storage.load()).toBeNull()
+    expect(storage.load(fakeTokens.accountId)).toBeNull()
+  })
+})
+
+describe('SecureTokenStorage.migrateLegacySlot', () => {
+  it('moves a legacy `auth.tokens` blob into the per-account slot', () => {
+    const backend = makeUnavailableBackend()
+    // Stamp the legacy kv keys directly (no API for that any more).
+    kv.set('auth.tokens', JSON.stringify(fakeTokens))
+    kv.set('auth.encrypted', '0')
+    const storage = new SecureTokenStorage(kv, backend)
+    const id = storage.migrateLegacySlot()
+    expect(id).toBe('acct')
+    expect(kv.get('auth.tokens')).toBeNull()
+    expect(kv.get(`auth.tokens.${fakeTokens.accountId}`)).not.toBeNull()
+    expect(storage.load(fakeTokens.accountId)).toEqual(fakeTokens)
+  })
+
+  it('is a no-op when no legacy blob exists', () => {
+    const storage = new SecureTokenStorage(kv, makeUnavailableBackend())
+    expect(storage.migrateLegacySlot()).toBeNull()
+  })
+
+  it('drops the legacy blob when it cannot be decrypted', () => {
+    kv.set('auth.tokens', 'garbage')
+    kv.set('auth.encrypted', '0')
+    const storage = new SecureTokenStorage(kv, makeUnavailableBackend())
+    expect(storage.migrateLegacySlot()).toBeNull()
+    expect(kv.get('auth.tokens')).toBeNull()
   })
 })

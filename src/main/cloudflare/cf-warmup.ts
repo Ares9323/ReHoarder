@@ -68,6 +68,13 @@ export function injectCookies(jar: CookieJar, cookies: ElectronCookieLike[]): vo
 
 const FAB_WARMUP_URL = 'https://www.fab.com/'
 const EPIC_WARMUP_URL = 'https://www.epicgames.com/id/login'
+/** unrealengine.com owns `cf_clearance` for the Epic-Houdini `set-sid`
+ *  endpoint (`/id/api/set-sid`). Without warming this domain, Node fetch
+ *  hits a Cloudflare challenge page and 403s — which cascades into a
+ *  half-built Epic web session, anonymous Fab session, and 401 on every
+ *  Fab `/me/...` endpoint. The warmup happens once per partition lifetime;
+ *  the resulting cookie is persisted across launches. */
+const UE_WARMUP_URL = 'https://www.unrealengine.com/'
 
 /**
  * Real Electron-backed warmer. Constructed lazily inside `warmupInto` so
@@ -114,8 +121,15 @@ export class ElectronCloudflareWarmer implements CloudflareWarmer {
       await this.navigateWithTimeout(win, EPIC_WARMUP_URL, onLog)
       await delay(this.settleMs)
 
+      // unrealengine.com owns its own CF zone; the Epic-Houdini `set-sid`
+      // call (cross-origin from epicgames.com → unrealengine.com) needs
+      // `cf_clearance` here or it 403s with the CF challenge HTML.
+      await this.navigateWithTimeout(win, UE_WARMUP_URL, onLog)
+      await delay(this.settleMs)
+
       const fabCookies = await sess.cookies.get({ domain: 'fab.com' })
       const epicCookies = await sess.cookies.get({ domain: 'epicgames.com' })
+      const ueCookies = await sess.cookies.get({ domain: 'unrealengine.com' })
 
       // For epicgames.com keep ONLY Cloudflare-managed cookies. Other
       // Epic state cookies (XSRF-TOKEN, EPIC_DEVICE, _tald, …) from the
@@ -130,20 +144,33 @@ export class ElectronCloudflareWarmer implements CloudflareWarmer {
       // 302 → /?error_code=1 with no fab_sessionid set.
       const isCfCookie = (c: ElectronCookieLike) =>
         c.name === 'cf_clearance' || c.name === '__cf_bm'
-      const keptFab = fabCookies
+      // Fab assigns an anonymous `fab_sessionid` on every first visit. If we
+      // forward it into the in-memory jar, `syncJarIntoSession` puts it back
+      // into the partition right after we purge the stale one — and Fab's F5
+      // OAuth callback then declines to issue a fresh authenticated session
+      // because it already finds a valid (anonymous) one in the request.
+      // Result: /me/listings-states 401 across launches. Drop it here.
+      const isAnonymousFabSession = (c: ElectronCookieLike) =>
+        c.name === 'fab_sessionid' || c.name === 'sessionid'
+      const keptFab = fabCookies.filter((c) => !isAnonymousFabSession(c))
       const keptEpic = epicCookies.filter(isCfCookie)
-      const total = keptFab.length + keptEpic.length
+      // For unrealengine.com we only need the CF cookies — the rest of
+      // the UE state is established later by `set-sid`.
+      const keptUe = ueCookies.filter(isCfCookie)
+      const total = keptFab.length + keptEpic.length + keptUe.length
       const hasFabClearance = keptFab.some((c) => c.name === 'cf_clearance')
       const hasEpicClearance = keptEpic.some((c) => c.name === 'cf_clearance')
+      const hasUeClearance = keptUe.some((c) => c.name === 'cf_clearance')
       const hasFabCsrf = keptFab.some((c) => c.name === 'fab_csrftoken')
       onLog(
         `CF warmup: ${total} cookies retained ` +
           `(cf_clearance fab=${hasFabClearance ? 'yes' : 'no'}, ` +
           `epic=${hasEpicClearance ? 'yes' : 'no'}, ` +
+          `ue=${hasUeClearance ? 'yes' : 'no'}, ` +
           `fab_csrftoken=${hasFabCsrf ? 'yes' : 'no'})`
       )
 
-      injectCookies(jar, [...keptFab, ...keptEpic])
+      injectCookies(jar, [...keptFab, ...keptEpic, ...keptUe])
     } finally {
       if (!win.isDestroyed()) win.destroy()
     }

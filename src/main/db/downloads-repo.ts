@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import type { AccountIdGetter } from './assets-repo'
 
 export type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
@@ -74,8 +75,17 @@ function fromDb(r: DownloadRowDb): DownloadRow {
   }
 }
 
+/** Reserved `account_id` for engine-installer downloads. Engines are a
+ *  per-machine concept (the install path lives on disk regardless of which
+ *  Epic account is active), so we stamp every engine row with this synthetic
+ *  id and always surface them in `listAll()` / `nextQueued()`. */
+export const ENGINE_ACCOUNT_ID = '__engine__'
+
 export class DownloadsRepo {
-  constructor(public readonly db: Database.Database) {}
+  constructor(
+    public readonly db: Database.Database,
+    private readonly getActiveAccountId: AccountIdGetter
+  ) {}
 
   insert(
     row: Omit<
@@ -83,17 +93,23 @@ export class DownloadsRepo {
       'startedAt' | 'finishedAt' | 'error' | 'currentFile' | 'destDir' | 'buildVersion'
     >
   ): DownloadRow {
+    const accountId =
+      row.source === 'engine' ? ENGINE_ACCOUNT_ID : this.getActiveAccountId()
+    if (accountId === null) {
+      throw new Error('No active account — cannot enqueue a download.')
+    }
     this.db
       .prepare(
         `INSERT INTO downloads
-           (id, source, source_id, title, status,
+           (id, account_id, source, source_id, title, status,
             bytes_done, bytes_total, files_done, files_total,
             current_file, dest_dir, engine_version, install_target_path,
             build_version, error, created_at, started_at, finished_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL, ?, NULL, NULL)`
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL, ?, NULL, NULL)`
       )
       .run(
         row.id,
+        accountId,
         row.source,
         row.sourceId,
         row.title,
@@ -106,32 +122,73 @@ export class DownloadsRepo {
         row.installTargetPath,
         row.createdAt
       )
-    return this.findById(row.id)!
+    return this.findById(row.id, { crossAccount: true })!
   }
 
-  findById(id: string): DownloadRow | null {
-    const r = this.db.prepare('SELECT * FROM downloads WHERE id = ?').get(id) as
-      | DownloadRowDb
-      | undefined
+  /**
+   * Find a download row. Internal manager flows (progress callbacks,
+   * status updates) hold the row id directly and need lookups regardless
+   * of which account is active — pass `crossAccount: true` for those.
+   * Default behaviour scopes to the active account plus the engine bucket.
+   */
+  findById(id: string, opts: { crossAccount?: boolean } = {}): DownloadRow | null {
+    if (opts.crossAccount) {
+      const r = this.db.prepare('SELECT * FROM downloads WHERE id = ?').get(id) as
+        | DownloadRowDb
+        | undefined
+      return r ? fromDb(r) : null
+    }
+    const accountId = this.getActiveAccountId()
+    if (accountId === null) {
+      // No active account → still expose engine rows so the Engines tab works
+      // before/without login.
+      const r = this.db
+        .prepare('SELECT * FROM downloads WHERE id = ? AND account_id = ?')
+        .get(id, ENGINE_ACCOUNT_ID) as DownloadRowDb | undefined
+      return r ? fromDb(r) : null
+    }
+    const r = this.db
+      .prepare(
+        'SELECT * FROM downloads WHERE id = ? AND account_id IN (?, ?)'
+      )
+      .get(id, accountId, ENGINE_ACCOUNT_ID) as DownloadRowDb | undefined
     return r ? fromDb(r) : null
   }
 
+  /** Active account's downloads + every engine row (cross-account). */
   listAll(): DownloadRow[] {
+    const accountId = this.getActiveAccountId()
+    if (accountId === null) {
+      const rows = this.db
+        .prepare(
+          'SELECT * FROM downloads WHERE account_id = ? ORDER BY created_at DESC'
+        )
+        .all(ENGINE_ACCOUNT_ID) as DownloadRowDb[]
+      return rows.map(fromDb)
+    }
     const rows = this.db
-      .prepare('SELECT * FROM downloads ORDER BY created_at DESC')
-      .all() as DownloadRowDb[]
+      .prepare(
+        `SELECT * FROM downloads
+           WHERE account_id IN (?, ?)
+           ORDER BY created_at DESC`
+      )
+      .all(accountId, ENGINE_ACCOUNT_ID) as DownloadRowDb[]
     return rows.map(fromDb)
   }
 
   nextQueued(): DownloadRow | null {
+    const accountId = this.getActiveAccountId()
+    const params =
+      accountId === null ? [ENGINE_ACCOUNT_ID, ENGINE_ACCOUNT_ID] : [accountId, ENGINE_ACCOUNT_ID]
     const r = this.db
       .prepare(
         `SELECT * FROM downloads
          WHERE status = 'queued'
+           AND account_id IN (?, ?)
          ORDER BY created_at ASC
          LIMIT 1`
       )
-      .get() as DownloadRowDb | undefined
+      .get(...params) as DownloadRowDb | undefined
     return r ? fromDb(r) : null
   }
 
@@ -169,15 +226,24 @@ export class DownloadsRepo {
   }
 
   removeCompleted(): number {
+    const accountId = this.getActiveAccountId()
+    const params =
+      accountId === null ? [ENGINE_ACCOUNT_ID, ENGINE_ACCOUNT_ID] : [accountId, ENGINE_ACCOUNT_ID]
     const r = this.db
-      .prepare(`DELETE FROM downloads WHERE status IN ('done', 'failed', 'cancelled')`)
-      .run()
+      .prepare(
+        `DELETE FROM downloads
+           WHERE account_id IN (?, ?)
+             AND status IN ('done', 'failed', 'cancelled')`
+      )
+      .run(...params)
     return r.changes ?? 0
   }
 
   /**
    * Recover from an unclean shutdown by moving every `running` row back to
    * `queued`. Called at startup, before the manager picks up the next item.
+   * Cross-account: shutdown affects every queued item regardless of who
+   * owned it.
    */
   resetInterrupted(): number {
     const r = this.db

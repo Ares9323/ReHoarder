@@ -5,6 +5,7 @@ import type { Session } from '../auth/session'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
 import type { FabSessionClient } from '../fab/fab-session'
 import { FabFreebiesClient, type FabFreebie } from '../fab/fab-freebies'
+import type { KvStore } from '../db/kv'
 
 export interface LibraryQuery {
   source?: AssetSource
@@ -40,6 +41,9 @@ export interface FreebiesDeps {
   epicWebSessionFactory: EpicWebSessionFactory
   fabSessionClient: FabSessionClient
   fabFetch: typeof fetch
+  /** Used to persist auto-sync throttle state (`freebies.lastAutoSyncAt`,
+   *  `freebies.lastSeenUids`) and to read settings inside IPC handlers. */
+  kv: KvStore
 }
 
 /**
@@ -135,13 +139,88 @@ export function registerLibraryIpc(
   const FREEBIES_TTL_MS = 5 * 60_000
   let freebiesCache: { freebies: FabFreebie[]; fetchedAt: number } | null = null
   const freebiesClient = new FabFreebiesClient(freebiesDeps.fabFetch)
+
+  /**
+   * Shared freebies fetch path used by both `library:list-freebies` (renderer
+   * "give me the current list") and `library:freebies-auto-check` (startup
+   * throttled refresh probe). Hits the in-process cache first, falls through
+   * to the network if missing/forced, and performs the local cross-reference
+   * so the returned items carry an authoritative `claimed` flag.
+   */
+  async function fetchFreebies(opts: { force: boolean }): Promise<FreebiesResult> {
+    if (!opts.force && freebiesCache && Date.now() - freebiesCache.fetchedAt < FREEBIES_TTL_MS) {
+      return {
+        ok: true,
+        freebies: freebiesCache.freebies,
+        fetchedAt: freebiesCache.fetchedAt
+      }
+    }
+    const token = session.getAccessToken()
+    const state = session.getState()
+    if (token === null || state.status !== 'authenticated') {
+      return { ok: false, error: 'Not authenticated.' }
+    }
+    try {
+      const onLog = (msg: string): void => console.warn(`[freebies/auth] ${msg}`)
+      const epicSession = await freebiesDeps.epicWebSessionFactory.create(token, onLog)
+      const { cookieHeader } = await freebiesDeps.fabSessionClient.establishSession(
+        token,
+        epicSession,
+        onLog
+      )
+      const freebies = await freebiesClient.listFreebies(cookieHeader)
+      // Local cross-reference: the Fab `/me/listings-states` endpoint is
+      // flaky for some session shapes (401 on otherwise-cleared sessions),
+      // so we also walk the local assets table and mark any freebie whose
+      // listing uid we already own as claimed. This catches anything the
+      // server check missed and reflects what the user actually has after
+      // their last library sync.
+      const ownedListingIds = collectOwnedFabListingIds(repo)
+      let localMatches = 0
+      for (const f of freebies) {
+        if (f.claimed === true) continue
+        const candidates = collectFreebieCandidateIds(f)
+        for (const id of candidates) {
+          if (ownedListingIds.has(id)) {
+            f.claimed = true
+            localMatches++
+            break
+          }
+        }
+      }
+      console.warn(
+        `[freebies] cross-ref: ${ownedListingIds.size} owned fab listing ids, ${localMatches}/${freebies.length} freebies matched locally`
+      )
+      if (localMatches === 0 && freebies.length > 0) {
+        for (const f of freebies) {
+          console.warn(`[freebies] freebie "${f.title}" candidates:`, collectFreebieCandidateIds(f))
+        }
+        console.warn('[freebies] sample owned ids:', [...ownedListingIds].slice(0, 5))
+      }
+      const fetchedAt = Date.now()
+      freebiesCache = { freebies, fetchedAt }
+      return { ok: true, freebies, fetchedAt }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
+  // The cache is account-scoped (the local cross-ref reads `repo`'s owned
+  // listing ids, which already account-filter). Stale entries from the
+  // previous account would leak the wrong "claimed" flags into the new
+  // session, so wipe the cache whenever the active account changes.
+  session.on('state-changed', () => {
+    freebiesCache = null
+  })
   ipcMain.handle('library:list', (_e, query: LibraryQuery): LibraryListResult => {
+    const state = session.getState()
+    const activeId = state.status === 'authenticated' ? state.accountId : null
     return {
       assets: repo.list(query),
       countsBySource: repo.countBySource(),
       availableListingTypes: repo.availableListingTypes(),
       availableCategories: repo.availableCategories(),
-      lastSync: sync.getLastSyncState()
+      lastSync: sync.getLastSyncState(activeId)
     }
   })
 
@@ -162,67 +241,115 @@ export function registerLibraryIpc(
   ipcMain.handle(
     'library:list-freebies',
     async (_e, opts: { force?: boolean } = {}): Promise<FreebiesResult> => {
-      if (!opts.force && freebiesCache && Date.now() - freebiesCache.fetchedAt < FREEBIES_TTL_MS) {
-        return {
-          ok: true,
-          freebies: freebiesCache.freebies,
-          fetchedAt: freebiesCache.fetchedAt
+      return fetchFreebies({ force: opts.force === true })
+    }
+  )
+
+  /**
+   * Startup-only "should we auto-refresh the library because freebies look
+   * stale?" probe. The renderer calls this once on every app launch and
+   * acts on the returned reason:
+   *
+   *   - `synced`        → a background library sync was just kicked.
+   *   - `within-cap`    → too soon since the last auto-sync (>= 7 days),
+   *                       no new batch detected; skip.
+   *   - `all-claimed`   → freebies cross-ref says every monthly item is
+   *                       already owned locally; nothing to recheck.
+   *   - `not-authenticated` → no active account; nothing to do.
+   *
+   * The trigger fires only when AT LEAST ONE of:
+   *   - It's been ≥ 7 days since the last auto-sync, OR
+   *   - The freebies UID set changed vs the last seen set (new batch), OR
+   *   - Today is Tuesday between 14:00 and 22:00 UTC and ≥ 24 h elapsed.
+   *
+   * Manual user-triggered syncs (Assets tab "Sync now", Freebies "Refresh")
+   * bypass this entirely.
+   */
+  const KV_LAST_AUTO_SYNC_AT = 'freebies.lastAutoSyncAt'
+  const KV_LAST_SEEN_UIDS = 'freebies.lastSeenUids'
+
+  function shouldAutoSync(currentUids: string[], lastAutoSyncAt: number | null): boolean {
+    const now = Date.now()
+    if (lastAutoSyncAt === null) return true
+    const elapsedDays = (now - lastAutoSyncAt) / 86_400_000
+    if (elapsedDays >= 7) return true
+    // New batch heuristic: UID set differs from the one we last saw.
+    const lastUidsRaw = freebiesDeps.kv.get(KV_LAST_SEEN_UIDS)
+    if (lastUidsRaw !== null) {
+      try {
+        const lastUids = JSON.parse(lastUidsRaw) as string[]
+        const currentSet = new Set(currentUids)
+        const lastSet = new Set(lastUids)
+        if (
+          currentSet.size !== lastSet.size ||
+          [...currentSet].some((u) => !lastSet.has(u))
+        ) {
+          return true
         }
+      } catch {
+        /* malformed — treat as missing */
       }
+    }
+    // Tuesday-window bypass (Fab drops most often on Tuesdays). Window is
+    // 14:00-22:00 UTC ≈ 16:00-24:00 CEST / 15:00-23:00 CET. Guard with a
+    // 24 h minimum gap so we don't re-fire the same Tuesday twice.
+    const d = new Date(now)
+    const isTuesdayWindow =
+      d.getUTCDay() === 2 && d.getUTCHours() >= 14 && d.getUTCHours() <= 22
+    if (isTuesdayWindow && now - lastAutoSyncAt >= 24 * 3600 * 1000) {
+      return true
+    }
+    return false
+  }
+
+  ipcMain.handle(
+    'library:freebies-auto-check',
+    async (): Promise<{
+      reason: 'synced' | 'within-cap' | 'all-claimed' | 'not-authenticated'
+      unclaimedCount: number
+    }> => {
       const token = session.getAccessToken()
       const state = session.getState()
       if (token === null || state.status !== 'authenticated') {
-        return { ok: false, error: 'Not authenticated.' }
+        return { reason: 'not-authenticated', unclaimedCount: 0 }
       }
-      try {
-        const epicSession = await freebiesDeps.epicWebSessionFactory.create(token)
-        const { cookieHeader } = await freebiesDeps.fabSessionClient.establishSession(
-          token,
-          epicSession
-        )
-        const freebies = await freebiesClient.listFreebies(cookieHeader)
-        // Local cross-reference: the Fab `/me/listings-states` endpoint is
-        // flaky for some session shapes (401 on otherwise-cleared sessions),
-        // so we also walk the local assets table and mark any freebie whose
-        // listing uid we already own as claimed. This catches anything the
-        // server check missed and reflects what the user actually has after
-        // their last library sync.
-        const ownedListingIds = collectOwnedFabListingIds(repo)
-        let localMatches = 0
-        for (const f of freebies) {
-          if (f.claimed === true) continue
-          // For each freebie try every plausible identifier — the Fab blade
-          // response uses one shape, the UE library endpoint uses another,
-          // and we want a match on any common ground.
-          const candidates = collectFreebieCandidateIds(f)
-          for (const id of candidates) {
-            if (ownedListingIds.has(id)) {
-              f.claimed = true
-              localMatches++
-              break
-            }
-          }
-        }
-        console.warn(
-          `[freebies] cross-ref: ${ownedListingIds.size} owned fab listing ids, ${localMatches}/${freebies.length} freebies matched locally`
-        )
-        if (localMatches === 0 && freebies.length > 0) {
-          // Diagnostic dump: show every candidate id per freebie + a sample
-          // of the owned-ids set so the mismatch is concrete in the log.
-          for (const f of freebies) {
-            console.warn(`[freebies] freebie "${f.title}" candidates:`, collectFreebieCandidateIds(f))
-          }
-          console.warn(
-            '[freebies] sample owned ids:',
-            [...ownedListingIds].slice(0, 5)
-          )
-        }
-        const fetchedAt = Date.now()
-        freebiesCache = { freebies, fetchedAt }
-        return { ok: true, freebies, fetchedAt }
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      // Fetch freebies (uses the in-process 5 min cache).
+      const r = await fetchFreebies({ force: false })
+      const freebies = r.ok && r.freebies ? r.freebies : []
+      const currentUids = freebies.map((f) => f.uid).filter((u) => u.length > 0)
+      // Stamp the latest UID set so the next launch can detect a new batch.
+      freebiesDeps.kv.set(KV_LAST_SEEN_UIDS, JSON.stringify(currentUids))
+      const unclaimedCount = freebies.filter((f) => f.claimed !== true).length
+      if (unclaimedCount === 0) {
+        return { reason: 'all-claimed', unclaimedCount: 0 }
       }
+      const lastAutoSyncAtStr = freebiesDeps.kv.get(KV_LAST_AUTO_SYNC_AT)
+      const lastAutoSyncAt =
+        lastAutoSyncAtStr === null ? null : Number(lastAutoSyncAtStr) || null
+      if (!shouldAutoSync(currentUids, lastAutoSyncAt)) {
+        return { reason: 'within-cap', unclaimedCount }
+      }
+      // Kick a full library sync in the background — same code path as the
+      // user-triggered "Sync now" button. Renderer doesn't wait for it; the
+      // existing `library:sync-progress` broadcast surfaces the work, and the
+      // freebies badge auto-refreshes once the cross-reference re-runs.
+      freebiesDeps.kv.set(KV_LAST_AUTO_SYNC_AT, String(Date.now()))
+      const sendProgress = (p: SyncProgress): void => {
+        const win = getMainWindow()
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('library:sync-progress', p)
+        }
+      }
+      const sendLog = (line: string): void => {
+        const win = getMainWindow()
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('library:sync-log', line)
+        }
+      }
+      void sync
+        .syncAll(token, state.accountId, sendProgress, sendLog)
+        .catch((err) => console.warn('[freebies] auto-sync failed:', err))
+      return { reason: 'synced', unclaimedCount }
     }
   )
 
