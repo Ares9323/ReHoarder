@@ -230,14 +230,23 @@ export class AssetsRepo {
       params.push(filters.category)
     }
     if (filters.search && filters.search.trim().length > 0) {
-      // Match on title, description AND seller — so a query like "infinity pbr"
-      // surfaces every asset by that creator in addition to titles that
-      // happen to contain the phrase.
-      clauses.push(
-        "(LOWER(title) LIKE ? OR LOWER(IFNULL(description, '')) LIKE ? OR LOWER(IFNULL(seller, '')) LIKE ?)"
-      )
-      const like = `%${filters.search.trim().toLowerCase()}%`
-      params.push(like, like, like)
+      // Tokenise on whitespace: every token must match somewhere across
+      // title / description / seller, but tokens can hit different fields.
+      // So "laya cry" surfaces "Crystal cave" by "Laya design" (one token in
+      // seller, one in title) — which a single LIKE '%laya cry%' would miss.
+      // LIKE wildcards (`%` / `_`) in the user query are escaped so a literal
+      // "100%" search means what it says.
+      const tokens = filters.search.trim().toLowerCase().split(/\s+/)
+      for (const tok of tokens) {
+        const escaped = tok.replace(/\\/g, '\\\\').replace(/[%_]/g, '\\$&')
+        clauses.push(
+          "(LOWER(title) LIKE ? ESCAPE '\\'" +
+            " OR LOWER(IFNULL(description, '')) LIKE ? ESCAPE '\\'" +
+            " OR LOWER(IFNULL(seller, '')) LIKE ? ESCAPE '\\')"
+        )
+        const like = `%${escaped}%`
+        params.push(like, like, like)
+      }
     }
 
     const where = `WHERE ${clauses.join(' AND ')}`

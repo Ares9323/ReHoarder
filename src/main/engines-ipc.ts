@@ -1,5 +1,6 @@
 import { ipcMain, shell, dialog, app } from 'electron'
 import * as path from 'node:path'
+import { spawn } from 'node:child_process'
 import { scanEngines, type EngineInfo } from './engines-local'
 import {
   uninstallEngine,
@@ -991,6 +992,40 @@ export function registerEnginesIpc(settings: SettingsStore): void {
         description: `Unreal Editor ${engine.version}`,
         iconPath: engine.editorExePath
       })
+    }
+  )
+
+  ipcMain.handle(
+    'engines:launch-editor',
+    async (_e, engineRoot: string): Promise<EnginesOpenResult> => {
+      if (!isInsideEngineRoots(engineRoot)) {
+        return { ok: false, error: 'Engine path is outside the configured engine roots' }
+      }
+      // Resolve the editor exe via the scanner so we honour the same UE4/UE5
+      // detection the rest of the tab uses (UnrealEditor.exe vs UE4Editor.exe).
+      const cfg = settings.load()
+      const engines = await scanEngines(cfg.enginePaths)
+      const resolved = path.resolve(engineRoot)
+      const engine = engines.find(
+        (e) => path.resolve(e.path).toLowerCase() === resolved.toLowerCase()
+      )
+      if (!engine) {
+        return { ok: false, error: 'Engine not found in the configured roots' }
+      }
+      if (!engine.editorExePath) {
+        return { ok: false, error: `Engine ${engine.name} has no editor executable on disk` }
+      }
+      try {
+        const proc = spawn(engine.editorExePath, [], {
+          detached: true,
+          stdio: 'ignore',
+          cwd: path.dirname(engine.editorExePath)
+        })
+        proc.unref()
+        return { ok: true }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
     }
   )
 

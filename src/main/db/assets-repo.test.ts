@@ -64,10 +64,14 @@ describe('AssetsRepo.upsert', () => {
 
 describe('AssetsRepo.list (filters)', () => {
   beforeEach(() => {
-    repo.upsert(sampleAsset({ sourceId: 'a', title: 'Alpha', source: 'vault' }))
+    // `list()` excludes `source = 'vault'` from the default result set (the
+    // Epic CDN scope for those is gone), so the fixture deliberately uses
+    // `legacy` / `fab` sources to keep the default-listing assertions
+    // meaningful. A separate test below covers the vault-exclusion contract.
+    repo.upsert(sampleAsset({ sourceId: 'a', title: 'Alpha', source: 'legacy' }))
     repo.upsert(sampleAsset({ sourceId: 'b', title: 'Beta', source: 'fab' }))
-    repo.upsert(sampleAsset({ sourceId: 'c', title: 'Gamma', source: 'vault' }))
-    repo.setHidden('vault', 'a', true)
+    repo.upsert(sampleAsset({ sourceId: 'c', title: 'Gamma', source: 'legacy' }))
+    repo.setHidden('legacy', 'a', true)
   })
 
   it('returns all non-hidden assets by default', () => {
@@ -90,9 +94,48 @@ describe('AssetsRepo.list (filters)', () => {
     expect(result.map((r) => r.sourceId)).toEqual(['b'])
   })
 
+  it('matches multi-token search across title + seller (any field per token)', () => {
+    repo.upsert(
+      sampleAsset({
+        sourceId: 'cry-cave',
+        source: 'fab',
+        title: 'Crystal Cave',
+        seller: 'Laya Design'
+      })
+    )
+    repo.upsert(
+      sampleAsset({
+        sourceId: 'other-laya',
+        source: 'fab',
+        title: 'Forest Pack',
+        seller: 'Laya Design'
+      })
+    )
+    // "laya cry" → token "laya" hits seller, token "cry" hits title;
+    // only the asset where BOTH tokens match anywhere should come back.
+    const result = repo.list({ search: 'laya cry' })
+    expect(result.map((r) => r.sourceId)).toEqual(['cry-cave'])
+  })
+
+  it('escapes LIKE wildcards in search input', () => {
+    repo.upsert(sampleAsset({ sourceId: 'pct', source: 'fab', title: '100% Discount' }))
+    repo.upsert(sampleAsset({ sourceId: 'plain', source: 'fab', title: 'Hundred Discount' }))
+    // The literal "%" must not act as a wildcard — only "100% Discount" should match.
+    const result = repo.list({ search: '100%' })
+    expect(result.map((r) => r.sourceId)).toEqual(['pct'])
+  })
+
   it('orders by title ASC by default', () => {
     const result = repo.list({})
     expect(result.map((r) => r.title)).toEqual(['Beta', 'Gamma'])
+  })
+
+  it('hides vault assets by default but surfaces them when source=vault is requested', () => {
+    repo.upsert(sampleAsset({ sourceId: 'v1', title: 'Vault Item', source: 'vault' }))
+    const defaultRows = repo.list({})
+    expect(defaultRows.map((r) => r.sourceId)).not.toContain('v1')
+    const vaultRows = repo.list({ source: 'vault' })
+    expect(vaultRows.map((r) => r.sourceId)).toEqual(['v1'])
   })
 })
 

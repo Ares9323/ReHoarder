@@ -161,6 +161,20 @@
     await window.api.engines.openInExplorer(engine.path)
   }
 
+  async function launchEditor(engine: EngineInfo): Promise<void> {
+    const id = startEngineAction(engine, 'Launching editor')
+    try {
+      const r = await window.api.engines.launchEditor(engine.path)
+      if (!r.ok) {
+        endEngineAction(id, 'error', r.error ?? 'Could not launch editor')
+        return
+      }
+      endEngineAction(id, 'ok', `Launched ${engine.name}.`)
+    } catch (err) {
+      endEngineAction(id, 'error', err instanceof Error ? err.message : String(err))
+    }
+  }
+
   /** Versions already on disk — `enginesStore.engines` is the locally-detected
    *  list, indexed by major.minor for dedup against owned SKUs. */
   const installedShortVersions = $derived.by(() => {
@@ -669,7 +683,17 @@
             <td class="num">{e.changelist || '—'}</td>
             <td class="editor">
               {#if e.hasEditor}
-                <span class="ok-pill">present</span>
+                <button
+                  type="button"
+                  class="launch-btn"
+                  onclick={(ev) => {
+                    ev.stopPropagation()
+                    void launchEditor(e)
+                  }}
+                  title={`Launch ${e.editorExePath ?? 'editor'}`}
+                >
+                  Launch
+                </button>
               {:else}
                 <span class="bad-pill">missing</span>
               {/if}
@@ -1373,6 +1397,25 @@
     color: #fca5a5;
     background: #3a1f1f;
     border: 1px solid #5a2727;
+  }
+  .launch-btn {
+    font-size: 0.72rem;
+    border-radius: 3px;
+    padding: 0.12rem 0.55rem;
+    color: #86efac;
+    background: #163524;
+    border: 1px solid #28553a;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-family: inherit;
+  }
+  .launch-btn:hover {
+    background: #1d4a31;
+    border-color: #357a51;
+  }
+  .launch-btn:active {
+    background: #122a1c;
   }
   /* Confirm modal — same look used in EnginePluginsPanel + SettingsView so
      the visual language of "yes/no on a destructive bulk operation" stays

@@ -4,6 +4,32 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] — 2026-05-26
+
+Quick-launch button on the Engines tab and a smarter Assets search that no
+longer needs the user's query tokens to appear in the same field.
+
+### Added
+
+- **Launch button on Engines tab** — the `present` pill in the Editor
+  column is now a green `Launch` action that spawns the engine's editor
+  exe directly (`UnrealEditor.exe` on UE5, `UE4Editor.exe` on UE4), so the
+  user can open the project browser of any installed engine in one click
+  without going through `UnrealVersionSelector` or a desktop shortcut. The
+  spawn is detached + `cwd`-pinned next to the exe, and the result lands
+  in the existing engine-action toast stack so failures are surfaced.
+  Engines with no editor binary on disk keep the `missing` pill.
+
+### Changed
+
+- **Assets search now matches across fields per-token** — typing
+  `laya cry` finds `Crystal Cave` by `Laya Design` even though no single
+  field contains both tokens. The library `WHERE` clause tokenises on
+  whitespace and requires each token to match (`LIKE`) at least one of
+  title / description / seller, AND-combined. LIKE wildcards (`%`, `_`)
+  in the user input are now escaped with `ESCAPE '\'` so a literal
+  `100%` searches for the percent sign instead of acting as a wildcard.
+
 ## [0.1.6] — 2026-05-19
 
 Multi-account switcher (issue #1), Fab freebies UX overhaul, end-to-end Fab
@@ -200,6 +226,8 @@ guarded Uninstall engine flow with HKCU registry de-registration.
   for a multi-GB Microsoft bootstrapper — enough surface area to deserve
   its own focused turn rather than getting bundled in here.
 
+[0.1.7]: https://github.com/Ares9323/ReHoarder/releases/tag/v0.1.7
+[0.1.6]: https://github.com/Ares9323/ReHoarder/releases/tag/v0.1.6
 [0.1.5]: https://github.com/Ares9323/ReHoarder/releases/tag/v0.1.5
 
 ## [0.1.4] — 2026-05-15

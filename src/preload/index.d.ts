@@ -660,6 +660,7 @@ export interface PreviewKeyBindingsResult {
 
 export interface EnginesApi {
   list(): Promise<EnginesListResult>
+  launchEditor(engineRoot: string): Promise<EnginesOpenResult>
   openInExplorer(absolutePath: string): Promise<EnginesOpenResult>
   listPlugins(engineRoot: string): Promise<EnginePluginsListResult>
   setPluginState(req: SetPluginStateRequest): Promise<SetPluginStateResult>

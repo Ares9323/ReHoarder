@@ -854,6 +854,8 @@ const api = {
   },
   engines: {
     list: (): Promise<EnginesListResult> => ipcRenderer.invoke('engines:list'),
+    launchEditor: (engineRoot: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('engines:launch-editor', engineRoot),
     openInExplorer: (absolutePath: string): Promise<EnginesOpenResult> =>
       ipcRenderer.invoke('engines:open-in-explorer', absolutePath),
     listPlugins: (engineRoot: string): Promise<EnginePluginsListResult> =>
