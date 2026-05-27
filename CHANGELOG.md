@@ -4,6 +4,20 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-05-28
+
+On-demand thumbnail refresh from Fab's listing-detail endpoint, surviving subsequent syncs.
+
+### Added
+
+- **"Refresh from Fab" right-click on Fab asset cards** — pulls the live listing detail from `https://www.fab.com/i/listings/<uid>` (the same endpoint fab.com's listing page uses, public + Cloudflare-gated → routed through the existing `electron.net.fetch` adapter on the `cf-warmup` partition) and updates the asset's `image_url` in the DB. Picks the URL from the dedicated top-level `thumbnails[]` block (`type: "thumbnail"`) — Fab's canonical featured image, the same one their search list shows — falling back to the first `medias[]` gallery slot when no `thumbnails[]` is present. Always takes the widest sized variant (1280 px on a typical listing). Solves the "creator updated the asset image but the library endpoint is still serving the snapshot from acquisition time" case that no amount of HTTP-cache flushing could fix. Errors surface inline below the card (cleared on click).
+- **`FabClient.fetchListingDetail(uid)` + `pickListingImageUrl(detail)`** — the new endpoint client and the image-picker heuristic.
+- **`assets.last_precise_at` column + `AssetsRepo.updateImageUrlAndPreciseAt`** — new nullable INTEGER (ms timestamp), stamped whenever a row's `image_url` is set via the listing-detail flow. Drives the upsert preservation rule (see Changed below) so the user's per-asset refresh isn't clobbered by the next manual sync.
+
+### Changed
+
+- **Asset upsert preserves `image_url` for rows previously refreshed via listing-detail** — the `INSERT ... ON CONFLICT` clause now uses `CASE WHEN assets.last_precise_at IS NULL THEN excluded.image_url ELSE assets.image_url END`, so re-syncing the library doesn't undo a per-asset Refresh-from-Fab. Rows never touched by the listing-detail flow still receive the library endpoint's `image_url` as before.
+
 ## [0.2.0] — 2026-05-27
 
 Preset system overhaul (provenance markers, per-entry user-override merge, renamed user files), curated `ares-recommended` bundle shipped for the three preset families, baseline policy for marketplace plugins with a custom hover popover that lists every plugin Restore would touch, an `Add to project` action on Local Vault asset entries, a startup-tab preference in Settings, account-switcher re-link affordance for accounts whose tokens have expired, and a temporary skip of the Fab Other-library sync (endpoint returns 401, root cause under investigation).

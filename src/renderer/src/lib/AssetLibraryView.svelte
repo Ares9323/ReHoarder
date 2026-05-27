@@ -58,6 +58,14 @@
     onSyncNow: () => void
     onToggleHidden: (asset: AssetRow) => void
     onToggleBookmark: (asset: AssetRow) => void
+    /** Fired when the user picks "Refresh from Fab" on a Fab asset card.
+     *  Parent triggers the IPC + refresh-from-DB; returns the IPC result
+     *  so the card can surface failure text inline. */
+    onRefreshFromFab: (asset: AssetRow) => Promise<{
+      ok: boolean
+      imageUrl?: string | null
+      error?: string
+    }>
   }
 
   let {
@@ -80,7 +88,8 @@
     onCategoryFilter,
     onSyncNow,
     onToggleHidden,
-    onToggleBookmark
+    onToggleBookmark,
+    onRefreshFromFab
   }: Props = $props()
 
   // Short engine version slugs (`5.4`, `4.27`) for engines the user has installed.
@@ -506,6 +515,7 @@
       isPlugin={plugin}
       onToggleHidden={() => onToggleHidden(a)}
       onToggleBookmark={() => onToggleBookmark(a)}
+      onRefreshFromFab={a.source === 'fab' ? () => onRefreshFromFab(a) : undefined}
       onDownloadVersion={a.source === 'fab' && versions.length > 0
         ? (v) =>
             window.api.downloads.enqueue(a.source, a.sourceId, a.title, {

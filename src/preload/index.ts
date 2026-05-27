@@ -815,7 +815,17 @@ const api = {
       const listener = (_e: IpcRendererEvent, line: string): void => handler(line)
       ipcRenderer.on('library:sync-log', listener)
       return () => ipcRenderer.removeListener('library:sync-log', listener)
-    }
+    },
+    /** Refresh a single Fab asset's thumbnail from `/i/listings/<uid>` (Fab's
+     *  listing-detail endpoint — the same one the public fab.com page uses).
+     *  Authoritative live data, bypasses the library endpoint's cached
+     *  snapshot. Returns the new `imageUrl` on success; only `source: 'fab'`
+     *  is supported. */
+    refreshAssetFromFab: (
+      source: 'vault' | 'fab' | 'legacy',
+      sourceId: string
+    ): Promise<{ ok: boolean; imageUrl?: string | null; error?: string }> =>
+      ipcRenderer.invoke('library:refresh-asset-from-fab', source, sourceId)
   },
   debug: {
     fetchSampleManifest: (assetId: string): Promise<DebugFetchSampleManifestResult> =>

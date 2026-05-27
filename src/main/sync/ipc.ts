@@ -408,4 +408,23 @@ export function registerLibraryIpc(
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
+
+  /**
+   * Per-asset thumbnail / metadata refresh. Calls Fab's public listing-detail
+   * endpoint (`/i/listings/<uid>`) — the same one fab.com's listing page uses —
+   * so we get the authoritative current image even when the library endpoint
+   * is still serving a stale cached snapshot. Only Fab assets are supported;
+   * Vault / Legacy callers receive `ok: false` with an explanatory error.
+   */
+  ipcMain.handle(
+    'library:refresh-asset-from-fab',
+    async (
+      _e,
+      source: AssetSource,
+      sourceId: string
+    ): Promise<{ ok: boolean; imageUrl?: string | null; error?: string }> => {
+      return await sync.refreshAssetFromFab(source, sourceId)
+    }
+  )
+
 }

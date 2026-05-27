@@ -33,6 +33,7 @@ const sampleAsset = (over: Partial<AssetRow> = {}): AssetRow => ({
   seller: null,
   raw: '{}',
   syncedAt: 1_700_000_000_000,
+  lastPreciseAt: null,
   ...over
 })
 

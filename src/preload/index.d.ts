@@ -124,6 +124,13 @@ export interface LibraryApi {
   }>
   onSyncProgress(handler: (p: SyncProgress) => void): () => void
   onSyncLog(handler: (line: string) => void): () => void
+  /** Per-asset thumbnail refresh via Fab's listing-detail endpoint. Only Fab
+   *  source is supported; returns `imageUrl: null` when the listing has no
+   *  image media block. */
+  refreshAssetFromFab(
+    source: 'vault' | 'fab' | 'legacy',
+    sourceId: string
+  ): Promise<{ ok: boolean; imageUrl?: string | null; error?: string }>
 }
 
 export interface DebugFetchSampleManifestResult {

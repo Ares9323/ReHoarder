@@ -1,8 +1,8 @@
-import type { AssetsRepo } from '../db/assets-repo'
+import type { AssetRow, AssetsRepo } from '../db/assets-repo'
 import type { VaultClient } from '../vault/vault-client'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
 import type { FabSessionClient } from '../fab/fab-session'
-import type { FabClient } from '../fab/fab-client'
+import { FabClient } from '../fab/fab-client'
 
 /**
  * TEMPORARY (0.2.0): `fab.com/i/library/search` (the Fab "Other library" — non-UE
@@ -270,6 +270,46 @@ export class Sync {
     }
   }
 
+  /**
+   * Refresh a single Fab asset's image_url (and only image_url for now —
+   * the listing-detail endpoint returns lots more we could splatter in
+   * later) by calling `https://www.fab.com/i/listings/<uid>`. This is the
+   * authoritative source for the current asset preview, unlike the
+   * library endpoint which can serve cached snapshots with stale image
+   * URLs for hours after a listing edit.
+   *
+   * Returns `imageUrl` on success — `null` if Fab has no image for the
+   * listing (rare). Returns `ok: false` on lookup failures, missing
+   * listing UID, or Fab errors / non-listing payloads (e.g. mature
+   * content gating). Caller is responsible for surfacing the error or
+   * triggering a UI refresh — this method does NOT emit events.
+   */
+  async refreshAssetFromFab(
+    source: 'vault' | 'fab' | 'legacy',
+    sourceId: string
+  ): Promise<{ ok: boolean; imageUrl?: string | null; error?: string }> {
+    if (source !== 'fab') {
+      return { ok: false, error: 'Refresh is only available for Fab assets' }
+    }
+    const asset = this.repo.findById(source, sourceId)
+    if (!asset) return { ok: false, error: 'Asset not found in local catalog' }
+    const listingUid = extractFabListingUid(asset)
+    if (!listingUid) {
+      return { ok: false, error: 'Cannot derive Fab listing UID for this asset' }
+    }
+    try {
+      const detail = await this.fabClient.fetchListingDetail(listingUid)
+      if (detail.detail) {
+        return { ok: false, error: `Fab listing skipped: ${detail.detail}` }
+      }
+      const imageUrl = FabClient.pickListingImageUrl(detail)
+      this.repo.updateImageUrlAndPreciseAt(source, sourceId, imageUrl, Date.now())
+      return { ok: true, imageUrl }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
   private emitProgress(
     onProgress: ProgressCallback,
     phase: 'vault' | 'fab',
@@ -330,4 +370,42 @@ export class Sync {
       ])
     )
   }
+}
+
+/**
+ * Derive the Fab listing UID (the canonical id used by `/i/listings/<uid>`)
+ * from a Fab asset row. The library endpoint splits its rows across two
+ * shapes that store the uid in different places:
+ *   - `sub_source = 'fab-other'`: the listing uid IS the `sourceId` field.
+ *   - `sub_source = 'fab-ue'`:    the listing uid lives in `productUrl`
+ *                                  (`https://www.fab.com/listings/<uid>[/<slug>]`)
+ *                                  or, when the URL is malformed, in the raw
+ *                                  payload's `customAttributes.ListingIdentifier`.
+ *
+ * Returns `null` when nothing usable is recoverable — caller should treat
+ * as "refresh unavailable for this asset" rather than retry.
+ */
+function extractFabListingUid(asset: AssetRow): string | null {
+  if (asset.subSource === 'fab-other') return asset.sourceId
+  if (asset.productUrl) {
+    const m = asset.productUrl.match(/\/listings\/([^/?#]+)/)
+    if (m && m[1].length > 0) return m[1]
+  }
+  if (asset.raw) {
+    try {
+      const parsed = JSON.parse(asset.raw) as {
+        customAttributes?: Array<{ ListingIdentifier?: unknown }>
+      }
+      if (Array.isArray(parsed.customAttributes)) {
+        for (const attr of parsed.customAttributes) {
+          if (typeof attr?.ListingIdentifier === 'string' && attr.ListingIdentifier.length > 0) {
+            return attr.ListingIdentifier
+          }
+        }
+      }
+    } catch {
+      /* malformed JSON — fall through to null */
+    }
+  }
+  return null
 }

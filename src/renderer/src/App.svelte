@@ -240,6 +240,12 @@
           onSyncNow={() => library.startSync()}
           onToggleHidden={(a) => library.setHidden(a, !a.hidden)}
           onToggleBookmark={(a) => library.setBookmarked(a, !a.bookmarked)}
+          onRefreshFromFab={async (a) => {
+            const r = await window.api.library.refreshAssetFromFab(a.source, a.sourceId)
+            // Re-pull the assets list so the updated image_url shows on the card.
+            if (r.ok) await library.refresh()
+            return r
+          }}
         />
       {/if}
     {:else if activeTab === 'engines'}

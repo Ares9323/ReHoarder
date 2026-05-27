@@ -109,6 +109,11 @@ function applyMigrations(db: Database.Database): void {
   tryAddColumn(db, 'downloads', 'engine_version', 'TEXT')
   tryAddColumn(db, 'downloads', 'install_target_path', 'TEXT')
   tryAddColumn(db, 'downloads', 'build_version', 'TEXT')
+  // Last `precise` refresh timestamp (ms): the most recent moment we
+  // hit `/i/listings/<uid>` and updated `image_url` for this asset.
+  // Used by the post-sync rolling refresh queue to pick the oldest
+  // entries first. Null = never touched by the Refresh-from-Fab flow.
+  tryAddColumn(db, 'assets', 'last_precise_at', 'INTEGER')
   backfillFabSubSource(db)
   backfillListingType(db)
   migrateCategoriesToSluggedNames(db)

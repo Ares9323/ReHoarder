@@ -32,7 +32,8 @@ export function normalizeVaultAsset(
     bookmarked: false,
     seller: pickString((catalog as { developer?: unknown }).developer),
     raw: JSON.stringify({ summary, catalog }),
-    syncedAt
+    syncedAt,
+    lastPreciseAt: null
   }
 }
 
@@ -135,7 +136,8 @@ export function normalizeFabAsset(item: FabLibraryItem, syncedAt: number): Asset
     bookmarked: false,
     seller: pickString((item as { seller?: unknown }).seller),
     raw: JSON.stringify(item),
-    syncedAt
+    syncedAt,
+    lastPreciseAt: null
   }
 }
 
@@ -192,7 +194,8 @@ export function normalizeFabOtherAsset(
     bookmarked: false,
     seller: pickString(listing.publisher?.sellerName),
     raw: JSON.stringify(listing),
-    syncedAt
+    syncedAt,
+    lastPreciseAt: null
   }
 }
 

@@ -134,7 +134,8 @@ describe('Sync.syncAll', () => {
       listingType: null,
       seller: null,
       raw: '{}',
-      syncedAt: 0
+      syncedAt: 0,
+      lastPreciseAt: null
     })
 
     vaultClient.listOwnedAssets.mockResolvedValue([])

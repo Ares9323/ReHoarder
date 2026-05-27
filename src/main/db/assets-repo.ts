@@ -21,6 +21,10 @@ export interface AssetRow {
   seller: string | null
   raw: string | null
   syncedAt: number
+  /** Last time `/i/listings/<uid>` was queried for this asset and `image_url`
+   *  was refreshed. Null = never. Drives the post-sync rolling refresh
+   *  queue's "oldest first" pick. */
+  lastPreciseAt: number | null
 }
 
 export interface ListFilters {
@@ -55,6 +59,7 @@ interface AssetRowDb {
   seller: string | null
   raw: string | null
   synced_at: number
+  last_precise_at: number | null
 }
 
 function fromDb(r: AssetRowDb): AssetRow {
@@ -74,7 +79,8 @@ function fromDb(r: AssetRowDb): AssetRow {
     bookmarked: r.bookmarked !== 0,
     seller: r.seller,
     raw: r.raw,
-    syncedAt: r.synced_at
+    syncedAt: r.synced_at,
+    lastPreciseAt: r.last_precise_at
   }
 }
 
@@ -89,6 +95,7 @@ export class AssetsRepo {
   private readonly findByIdStmt: Database.Statement
   private readonly setHiddenStmt: Database.Statement
   private readonly setBookmarkedStmt: Database.Statement
+  private readonly updateImageUrlAndPreciseAtStmt: Database.Statement
   private readonly countAllStmt: Database.Statement
   private readonly countBySourceStmt: Database.Statement
   private readonly knownIdsStmt: Database.Statement
@@ -113,7 +120,16 @@ export class AssetsRepo {
         listing_type = excluded.listing_type,
         title = excluded.title,
         description = excluded.description,
-        image_url = excluded.image_url,
+        -- Preserve image_url when the row has been touched by the
+        -- listing-detail flow (last_precise_at IS NOT NULL). Otherwise the
+        -- next library-endpoint sync would clobber the fresher value the
+        -- detail endpoint provided — every per-asset right-click refresh
+        -- and every rolling background refresh would lose its effect on the
+        -- next manual Sync now click.
+        image_url = CASE
+          WHEN assets.last_precise_at IS NULL THEN excluded.image_url
+          ELSE assets.image_url
+        END,
         product_url = excluded.product_url,
         owned_at = COALESCE(excluded.owned_at, owned_at),
         seller = excluded.seller,
@@ -129,6 +145,11 @@ export class AssetsRepo {
     )
     this.setBookmarkedStmt = db.prepare(
       'UPDATE assets SET bookmarked = ? WHERE account_id = ? AND source = ? AND source_id = ?'
+    )
+    this.updateImageUrlAndPreciseAtStmt = db.prepare(
+      `UPDATE assets
+         SET image_url = ?, last_precise_at = ?
+         WHERE account_id = ? AND source = ? AND source_id = ?`
     )
     this.countAllStmt = db.prepare('SELECT COUNT(*) AS n FROM assets WHERE account_id = ?')
     this.countBySourceStmt = db.prepare(
@@ -265,6 +286,25 @@ export class AssetsRepo {
     const accountId = this.accountOrEmpty()
     if (accountId === null) return
     this.setBookmarkedStmt.run(bookmarked ? 1 : 0, accountId, source, sourceId)
+  }
+
+  /**
+   * Targeted update used by `Sync.refreshAssetFromFab` (the right-click
+   * "Refresh from Fab" flow). Writes both `image_url` and stamps
+   * `last_precise_at` so the upsert's CASE WHEN preservation rule knows to
+   * leave this row's `image_url` alone on the next sync — otherwise the
+   * library endpoint's stale snapshot would clobber the user's fresh pick.
+   */
+  updateImageUrlAndPreciseAt(
+    source: AssetSource,
+    sourceId: string,
+    imageUrl: string | null,
+    at: number
+  ): boolean {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return false
+    const r = this.updateImageUrlAndPreciseAtStmt.run(imageUrl, at, accountId, source, sourceId)
+    return (r.changes ?? 0) > 0
   }
 
   countAll(): number {

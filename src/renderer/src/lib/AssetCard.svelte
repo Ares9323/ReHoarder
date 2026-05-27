@@ -34,6 +34,13 @@
     isPlugin?: boolean
     onToggleHidden: () => void
     onToggleBookmark: () => void
+    /** Fab-only: pulls the live listing detail and updates the asset's
+     *  thumbnail in the local DB. Resolves with `{ok, imageUrl?, error?}`. */
+    onRefreshFromFab?: () => Promise<{
+      ok: boolean
+      imageUrl?: string | null
+      error?: string
+    }>
     /** Click on an engine-version chip the user has installed. The version slug ("5.4") is what reached the chip. */
     onDownloadVersion?: (engineVersion: string) => Promise<EnqueueResult>
     /** Click on the gear chip OR on a non-installed version chip — opens the Custom Install menu. */
@@ -60,10 +67,14 @@
     isPlugin = false,
     onToggleHidden,
     onToggleBookmark,
+    onRefreshFromFab,
     onDownloadVersion,
     onCustomInstall,
     onDownload
   }: Props = $props()
+
+  let refreshingFromFab = $state(false)
+  let refreshFromFabError = $state<string | null>(null)
 
   // Context-menu state. Anchored in viewport coordinates (clientX/Y), shown as a
   // small floating menu. Closes on any pointerdown outside it, on Escape, or on
@@ -91,6 +102,21 @@
   function handleToggleBookmarkFromMenu(): void {
     closeMenu()
     onToggleBookmark()
+  }
+
+  async function handleRefreshFromFab(): Promise<void> {
+    closeMenu()
+    if (!onRefreshFromFab || refreshingFromFab) return
+    refreshingFromFab = true
+    refreshFromFabError = null
+    try {
+      const r = await onRefreshFromFab()
+      if (!r.ok) refreshFromFabError = r.error ?? 'Refresh failed'
+    } catch (err) {
+      refreshFromFabError = err instanceof Error ? err.message : String(err)
+    } finally {
+      refreshingFromFab = false
+    }
   }
 
   $effect(() => {
@@ -430,6 +456,21 @@
     <button type="button" role="menuitem" onclick={handleToggleHiddenFromMenu}>
       {hidden ? 'Show in library' : 'Hide from library'}
     </button>
+    {#if source === 'fab' && onRefreshFromFab}
+      <button
+        type="button"
+        role="menuitem"
+        onclick={() => void handleRefreshFromFab()}
+        disabled={refreshingFromFab}
+      >
+        {refreshingFromFab ? 'Refreshing from Fab…' : 'Refresh from Fab'}
+      </button>
+    {/if}
+  </div>
+{/if}
+{#if refreshFromFabError}
+  <div class="refresh-error" onclick={() => (refreshFromFabError = null)} role="button" tabindex="0" onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') refreshFromFabError = null }}>
+    {refreshFromFabError}
   </div>
 {/if}
 
@@ -726,6 +767,25 @@
   .ctx-menu button:hover {
     background: #2a1f3a;
     color: #fff;
+  }
+  .ctx-menu button:disabled {
+    color: #777;
+    cursor: wait;
+  }
+
+  .refresh-error {
+    position: absolute;
+    left: 0.4rem;
+    right: 0.4rem;
+    bottom: 0.4rem;
+    padding: 0.35rem 0.55rem;
+    background: rgba(60, 24, 24, 0.92);
+    border: 1px solid #5a2020;
+    border-radius: 4px;
+    color: #fca5a5;
+    font-size: 0.7rem;
+    cursor: pointer;
+    z-index: 5;
   }
 
   .body {
