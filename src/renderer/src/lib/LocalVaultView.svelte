@@ -2,6 +2,10 @@
   import { onMount } from 'svelte'
   import { settingsVersion } from '../stores/settings-events.svelte'
   import { vaultStore } from '../stores/vault.svelte'
+  import { projectsStore } from '../stores/projects.svelte'
+  import AddToProjectDialog from './AddToProjectDialog.svelte'
+
+  type LocalVaultKind = 'asset' | 'plugin' | 'unknown'
 
   interface LocalVaultEntry {
     name: string
@@ -13,6 +17,10 @@
     fileCount: number
     lastModified: number
     hasData: boolean
+    kind: LocalVaultKind
+    source: 'vault' | 'fab' | 'legacy' | null
+    sourceId: string | null
+    engineVersion: string | null
   }
 
   // Filesystem-derived state lives in the singleton store — switching to
@@ -163,6 +171,22 @@
   async function reveal(entry: LocalVaultEntry): Promise<void> {
     const target = entry.hasData ? entry.path + '\\data' : entry.path
     await window.api.vault.openInExplorer(target)
+  }
+
+  /** Add-to-project dialog state. Non-null = open against this vault entry. */
+  let addToProjectTarget = $state<LocalVaultEntry | null>(null)
+
+  async function openAddToProject(entry: LocalVaultEntry): Promise<void> {
+    // Lazy-load the projects list on first click — the Vault tab can open
+    // before the Projects tab ever does, so the store may be cold.
+    await projectsStore.ensureLoaded()
+    addToProjectTarget = entry
+  }
+
+  function kindLabel(k: LocalVaultKind): string {
+    if (k === 'asset') return 'asset'
+    if (k === 'plugin') return 'plugin'
+    return '—'
   }
 
   /** Confirm-dialog state. Holds the entry the user wants to delete; null = closed. */
@@ -386,6 +410,24 @@
   </div>
 {/if}
 
+{#if addToProjectTarget}
+  {@const t = addToProjectTarget}
+  <AddToProjectDialog
+    assetTitle={t.friendlyName ?? t.name}
+    assetSource={t.source as 'vault' | 'fab' | 'legacy'}
+    assetSourceId={t.sourceId as string}
+    requestedVersion={t.engineVersion ?? undefined}
+    availableVersions={t.engineVersion ? [t.engineVersion] : []}
+    knownProjects={projectsStore.projects.map((p) => ({
+      name: p.name,
+      uprojectPath: p.uprojectPath,
+      projectDir: p.projectDir,
+      engineAssociation: p.engineAssociation
+    }))}
+    onClose={() => (addToProjectTarget = null)}
+  />
+{/if}
+
 {#if pendingDelete}
   {@const target = pendingDelete}
   <div
@@ -457,6 +499,16 @@
               {/if}
               <div class="name-text">
                 <span class="entry-name">{e.friendlyName ?? e.name}</span>
+                {#if e.hasData}
+                  <span
+                    class="kind-pill"
+                    class:asset={e.kind === 'asset'}
+                    class:plugin={e.kind === 'plugin'}
+                    class:unknown={e.kind === 'unknown'}
+                  >
+                    {kindLabel(e.kind)}
+                  </span>
+                {/if}
                 {#if !e.hasData}<span class="badge">no data/</span>{/if}
                 {#if e.friendlyName}<span class="folder-hint">{e.name}</span>{/if}
                 <span class="path-hint">{e.path}</span>
@@ -468,6 +520,15 @@
           <td class="date">{formatDate(e.lastModified)}</td>
           <td class="actions">
             <button type="button" onclick={() => reveal(e)}>Open</button>
+            {#if e.kind === 'asset' && e.source && e.sourceId && e.engineVersion}
+              <button
+                type="button"
+                onclick={() => void openAddToProject(e)}
+                title={`Copy data/Content/ into an Unreal project's Content/ folder (engine ${e.engineVersion})`}
+              >
+                Add to project
+              </button>
+            {/if}
             <button
               type="button"
               class="icon-btn"
@@ -879,5 +940,29 @@
     padding: 0.05rem 0.4rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
+  }
+  .kind-pill {
+    margin-left: 0.5rem;
+    font-size: 0.65rem;
+    border-radius: 3px;
+    padding: 0.05rem 0.4rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid;
+  }
+  .kind-pill.asset {
+    color: #86efac;
+    background: #163524;
+    border-color: #28553a;
+  }
+  .kind-pill.plugin {
+    color: #93c5fd;
+    background: #1e3a5f;
+    border-color: #2b5d92;
+  }
+  .kind-pill.unknown {
+    color: #888;
+    background: #2a2a2a;
+    border-color: #333;
   }
 </style>

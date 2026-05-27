@@ -354,6 +354,8 @@ export interface SettingsApi {
   set(partial: Partial<AppSettings>): Promise<AppSettings>
 }
 
+export type LocalVaultKind = 'asset' | 'plugin' | 'unknown'
+
 export interface LocalVaultEntry {
   name: string
   friendlyName: string | null
@@ -364,6 +366,10 @@ export interface LocalVaultEntry {
   fileCount: number
   lastModified: number
   hasData: boolean
+  kind: LocalVaultKind
+  source: 'vault' | 'fab' | 'legacy' | null
+  sourceId: string | null
+  engineVersion: string | null
 }
 
 export interface VaultListResult {

@@ -1,3 +1,5 @@
+type LocalVaultKind = 'asset' | 'plugin' | 'unknown'
+
 interface LocalVaultEntry {
   name: string
   friendlyName: string | null
@@ -8,6 +10,10 @@ interface LocalVaultEntry {
   fileCount: number
   lastModified: number
   hasData: boolean
+  kind: LocalVaultKind
+  source: 'vault' | 'fab' | 'legacy' | null
+  sourceId: string | null
+  engineVersion: string | null
 }
 
 // Module-level $state — shared across every component that imports the store.

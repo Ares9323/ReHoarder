@@ -1,6 +1,19 @@
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 
+/**
+ * High-level kind of a vault payload, inferred from its `data/` layout.
+ * - `asset`: `data/Content/...` (the typical Fab asset pack — meshes /
+ *   materials / blueprints under a `Content/` folder, sometimes with
+ *   `Config/` or `Platforms/` siblings).
+ * - `plugin`: `data/Engine/Plugins/Marketplace/<name>/<name>.uplugin` —
+ *   an engine plugin install, intended to land in an UE install's
+ *   `Engine/Plugins/Marketplace/` directory.
+ * - `unknown`: neither shape recognised (in-flight download, hand-copied
+ *   folder without `data/`, or a payload we don't have a rule for yet).
+ */
+export type LocalVaultKind = 'asset' | 'plugin' | 'unknown'
+
 export interface LocalVaultEntry {
   /** Sub-directory name (= sanitized artifactId from `downloadAsset()`). */
   name: string
@@ -20,6 +33,13 @@ export interface LocalVaultEntry {
   lastModified: number
   /** True when the entry contains a `data/` subdirectory (= a successful download). */
   hasData: boolean
+  /** Inferred shape of the payload (see {@link LocalVaultKind}). */
+  kind: LocalVaultKind
+  /** Source asset record from the `downloads` table — filled by the IPC layer. */
+  source: 'vault' | 'fab' | 'legacy' | null
+  sourceId: string | null
+  /** Engine version recorded on the download row (`5.4`, `4.27`, …). Null when the download predates per-version tracking. */
+  engineVersion: string | null
 }
 
 /**
@@ -67,18 +87,20 @@ export async function listLocalVault(vaultDirs: string[]): Promise<LocalVaultEnt
           return null
         }
         if (!stat.isDirectory()) return null
-        const [walked, hasData] = await Promise.all([
+        const [walked, hasData, kind] = await Promise.all([
           walkEntry(entryPath),
           fsp
             .stat(path.join(entryPath, 'data'))
             .then((ds) => ds.isDirectory())
-            .catch(() => false)
+            .catch(() => false),
+          detectKind(path.join(entryPath, 'data'))
         ])
         const entry: LocalVaultEntry = {
           name,
-          // `friendlyName` and `imageUrl` are filled in by the IPC layer (where
-          // we have access to the downloads + assets repos). Keep `null` here so
-          // the on-disk scanner stays self-contained and easy to test without a DB.
+          // `friendlyName`, `imageUrl`, `source`, `sourceId`, `engineVersion`
+          // are filled in by the IPC layer (where we have access to the
+          // downloads + assets repos). Keep them `null` here so the on-disk
+          // scanner stays self-contained and easy to test without a DB.
           friendlyName: null,
           imageUrl: null,
           path: entryPath,
@@ -86,7 +108,11 @@ export async function listLocalVault(vaultDirs: string[]): Promise<LocalVaultEnt
           totalBytes: walked.totalBytes,
           fileCount: walked.fileCount,
           lastModified: walked.lastModified,
-          hasData
+          hasData,
+          kind,
+          source: null,
+          sourceId: null,
+          engineVersion: null
         }
         return { entry, key }
       })
@@ -107,6 +133,42 @@ interface WalkResult {
   totalBytes: number
   fileCount: number
   lastModified: number
+}
+
+/**
+ * Identify whether `<entry>/data/` looks like a plugin install or an asset
+ * pack. We only inspect the *immediate* children of `data/` (cheap — one
+ * `readdir`); going deeper would slow the scan unnecessarily since the two
+ * shapes are well-defined at the top level:
+ *   - plugin → `data/Engine/...` (Marketplace plugins always live under
+ *     `Engine/Plugins/Marketplace`, so the `Engine` folder at depth 0 is
+ *     the giveaway).
+ *   - asset → `data/Content/...` (Fab asset packs ship a `Content/` dir
+ *     that maps 1:1 into the project's `Content/`; siblings like
+ *     `Config/` or `Platforms/` are common for asset packs that ship
+ *     project-level configs or per-platform binaries — those don't change
+ *     the kind).
+ * A folder with both `Engine/` and `Content/` falls back to `'plugin'`
+ * (engine-deployed plugins occasionally bundle a small Content/ for demo
+ * maps, and the Add-to-project flow doesn't apply to plugins anyway).
+ */
+async function detectKind(dataDir: string): Promise<LocalVaultKind> {
+  let items
+  try {
+    items = await fsp.readdir(dataDir, { withFileTypes: true })
+  } catch {
+    return 'unknown'
+  }
+  let hasEngine = false
+  let hasContent = false
+  for (const it of items) {
+    if (!it.isDirectory()) continue
+    if (it.name === 'Engine') hasEngine = true
+    else if (it.name === 'Content') hasContent = true
+  }
+  if (hasEngine) return 'plugin'
+  if (hasContent) return 'asset'
+  return 'unknown'
 }
 
 async function walkEntry(entryPath: string): Promise<WalkResult> {

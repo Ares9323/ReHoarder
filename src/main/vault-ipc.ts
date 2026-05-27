@@ -140,7 +140,12 @@ export function registerVaultIpc(
       // assets-table lookup keyed by (source, sourceId).
       const downloadInfoByPath = new Map<
         string,
-        { title: string; source: AssetSource; sourceId: string }
+        {
+          title: string
+          source: AssetSource
+          sourceId: string
+          engineVersion: string | null
+        }
       >()
       for (const row of downloadsRepo.listAll()) {
         if (row.status !== 'done' || !row.destDir) continue
@@ -149,7 +154,8 @@ export function registerVaultIpc(
           downloadInfoByPath.set(key, {
             title: row.title,
             source: row.source as AssetSource,
-            sourceId: row.sourceId
+            sourceId: row.sourceId,
+            engineVersion: row.engineVersion
           })
         }
       }
@@ -158,6 +164,9 @@ export function registerVaultIpc(
         const info = downloadInfoByPath.get(key)
         if (!info) continue
         e.friendlyName = info.title
+        e.source = info.source
+        e.sourceId = info.sourceId
+        e.engineVersion = info.engineVersion
         const asset = assetsRepo.findById(info.source, info.sourceId)
         e.imageUrl = asset?.imageUrl ?? null
       }
