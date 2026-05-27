@@ -5,6 +5,8 @@
   import { enginesStore } from '../stores/engines.svelte'
 
   type ImageSize = 'small' | 'medium' | 'large'
+  type StartupTabKey = 'assets' | 'engines' | 'projects' | 'vault' | 'freebies' | 'downloads'
+  type StartupTabSelection = 'last-opened' | StartupTabKey
   interface AppSettings {
     loginAtStartup: boolean
     checkVersionAtStartup: boolean
@@ -31,6 +33,8 @@
     editorKeyBindingsMasterPath: string
     gameLaunchParams: string[]
     ownedEnginesCacheTtlDays: number
+    startupTab: StartupTabSelection
+    lastActiveTab: StartupTabKey
   }
 
   let settings = $state<AppSettings | null>(null)
@@ -382,8 +386,15 @@
     saving = true
     error = null
     try {
-      const payload: AppSettings = {
-        ...settings,
+      // `lastActiveTab` is owned by App.svelte (debounced on every tab
+      // change). The Settings panel snapshots it at mount and would
+      // otherwise overwrite the live value with stale data on save, so we
+      // drop it from the outbound payload — `saveAll` on the main side
+      // merges over the currently-stored settings.
+      const { lastActiveTab: _ignored, ...rest } = settings
+      void _ignored
+      const payload: Partial<AppSettings> = {
+        ...rest,
         projectPaths: toArray(projectPathsText),
         enginePaths: toArray(enginePathsText),
         vaultPaths: toArray(vaultPathsText),
@@ -499,6 +510,22 @@
     <div class="grid">
       <div class="group">
         <h3>Startup &amp; behavior</h3>
+        <label class="row">
+          <span class="lbl">Open this tab on startup</span>
+          <select
+            bind:value={settings.startupTab}
+            onchange={markDirty}
+          >
+            <option value="last-opened">Last opened</option>
+            <option value="assets">Assets</option>
+            <option value="projects">Projects</option>
+            <option value="engines">Engines</option>
+            <option value="vault">Vault</option>
+            <option value="freebies">Freebies</option>
+            <option value="downloads">Downloads</option>
+          </select>
+          <span class="hint">("Last opened" remembers where you were when you closed the app. Pin a specific tab to override.)</span>
+        </label>
         <label>
           <input
             type="checkbox"

@@ -222,10 +222,80 @@
    * a Restore would be a no-op, so the banner stays hidden — the safety net
    * exists silently in the background until the user actually mutates state.
    */
+  /**
+   * Marketplace plugins are user-managed by definition (Fab installs / removes,
+   * user toggles per-project). The baseline records them in a stable synthetic
+   * posture (off + installed) — we keep them OUT of the main divergence count
+   * so the banner only flags drift on Engine-shipped content, but we surface
+   * them as a separate section in the tooltip so the user can see what
+   * Restore would actually touch on the marketplace side.
+   *
+   * Exception: a few IDE-managed plugins (RiderLink — created by JetBrains
+   * Rider) sit under the Marketplace folder but aren't Fab content. They
+   * follow normal engine-plugin rules, not the synthetic marketplace policy.
+   * The same allow-list lives in `engine-plugin-baselines.ts:isMarketplacePath`
+   * — keep them in sync.
+   */
+  function isMarketplacePlugin(p: { bucket: string; upluginPath: string }): boolean {
+    if (p.bucket.toLowerCase() !== 'marketplace') return false
+    const norm = p.upluginPath.replace(/\\/g, '/').toLowerCase()
+    if (norm.endsWith('/riderlink.uplugin')) return false
+    return true
+  }
+
+  type DivergenceChange = {
+    field: 'EnabledByDefault' | 'Installed'
+    targetValue: boolean
+  }
+  type DivergenceItem = {
+    name: string
+    isMarketplace: boolean
+    changes: DivergenceChange[]
+  }
+
+  function buildDivergenceItem(
+    p: (typeof plugins)[number],
+    b: BaselineEntry
+  ): DivergenceItem | null {
+    const changes: DivergenceChange[] = []
+    if (p.enabledByDefault !== b.enabledByDefault) {
+      changes.push({ field: 'EnabledByDefault', targetValue: b.enabledByDefault })
+    }
+    if (p.installed !== b.installed) {
+      changes.push({ field: 'Installed', targetValue: b.installed })
+    }
+    if (changes.length === 0) return null
+    return {
+      name: p.friendlyName || p.name,
+      isMarketplace: isMarketplacePlugin(p),
+      changes
+    }
+  }
+
+  /**
+   * Look up the baseline state for a plugin. Marketplace plugins always use
+   * the synthetic policy (`enabledByDefault=false, installed=true`) regardless
+   * of what the literal baseline file records — so the diff stays correct
+   * even if the user manually edited the baseline JSON to drop marketplace
+   * entries. Engine-shipped plugins fall back to the actual baseline entry.
+   */
+  function effectiveBaseline(p: (typeof plugins)[number]): BaselineEntry | undefined {
+    if (isMarketplacePlugin(p)) {
+      return {
+        name: p.name,
+        upluginPath: p.upluginPath,
+        enabledByDefault: false,
+        installed: true
+      }
+    }
+    return baselineByPath.get(p.upluginPath)
+  }
+
   const baselineDivergenceCount = $derived(
     baseline.exists
       ? plugins.reduce((acc, p) => {
-          const b = baselineByPath.get(p.upluginPath)
+          if (isMarketplacePlugin(p)) return acc
+          const b = effectiveBaseline(p)
           if (!b) return acc
           return p.enabledByDefault !== b.enabledByDefault || p.installed !== b.installed
             ? acc + 1
@@ -233,6 +303,79 @@
         }, 0)
       : 0
   )
+
+  /**
+   * Structured list of plugins that diverge from baseline, used to render the
+   * popover next to the baseline banner. Each item carries only the target
+   * (post-Restore) value per field, so the popover reads as "what Restore
+   * will set things to". Engine-shipped and marketplace are split because
+   * marketplace plugins follow the synthetic policy regardless of literal
+   * baseline content.
+   */
+  // DOM refs and positioning logic for the diff popover. We size and place
+  // it via JS (instead of pure CSS) so the popover can flip above/below the
+  // banner based on which side has more room — and have its max-height
+  // clamped to that side so it never gets clipped off the viewport.
+  let baselineLabelEl: HTMLElement | undefined
+  let baselineDiffEl: HTMLElement | undefined
+
+  function positionDiffPopover(): void {
+    const trigger = baselineLabelEl
+    const popover = baselineDiffEl
+    if (!trigger || !popover) return
+    const rect = trigger.getBoundingClientRect()
+    const vh = window.innerHeight
+    const margin = 12
+    const spaceBelow = vh - rect.bottom - margin
+    const spaceAbove = rect.top - margin
+    const needed = popover.scrollHeight
+    // Prefer below when it fits; otherwise above when it fits; otherwise
+    // whichever side has more room, with max-height clamped so the popover
+    // scrolls internally instead of overflowing the viewport.
+    const placeBelow = spaceBelow >= needed || (spaceBelow >= spaceAbove && spaceAbove < needed)
+    if (placeBelow) {
+      popover.style.top = `${rect.bottom + 6}px`
+      popover.style.bottom = 'auto'
+      popover.style.maxHeight = `${Math.max(120, spaceBelow)}px`
+    } else {
+      popover.style.top = 'auto'
+      popover.style.bottom = `${vh - rect.top + 6}px`
+      popover.style.maxHeight = `${Math.max(120, spaceAbove)}px`
+    }
+    popover.style.left = `${rect.left}px`
+  }
+
+  $effect(() => {
+    // Re-position whenever the divergence list changes (content height may
+    // grow/shrink) and on window resize. Deferred to a microtask so the DOM
+    // has the new content laid out before we measure scrollHeight.
+    void baselineDivergenceItems
+    queueMicrotask(positionDiffPopover)
+  })
+
+  $effect(() => {
+    const handler = (): void => positionDiffPopover()
+    window.addEventListener('resize', handler)
+    return () => window.removeEventListener('resize', handler)
+  })
+
+  const baselineDivergenceItems = $derived.by(() => {
+    if (!baseline.exists) return { engine: [], marketplace: [] } as {
+      engine: DivergenceItem[]
+      marketplace: DivergenceItem[]
+    }
+    const engine: DivergenceItem[] = []
+    const marketplace: DivergenceItem[] = []
+    for (const p of plugins) {
+      const b = effectiveBaseline(p)
+      if (!b) continue
+      const item = buildDivergenceItem(p, b)
+      if (!item) continue
+      if (item.isMarketplace) marketplace.push(item)
+      else engine.push(item)
+    }
+    return { engine, marketplace }
+  })
 
   type Filter = 'all' | 'enabled' | 'installed' | 'modified'
   let filter = $state<Filter>('all')
@@ -607,7 +750,11 @@
 
   {#if baseline.exists && baselineDivergenceCount > 0}
     <div class="baseline-row">
-      <span class="baseline-label">
+      <span
+        class="baseline-label"
+        bind:this={baselineLabelEl}
+        onmouseenter={positionDiffPopover}
+      >
         <strong>{baselineDivergenceCount}</strong> plugin{baselineDivergenceCount === 1 ? '' : 's'}
         differ from the baseline captured {formatBaselineDate(baseline.createdAt)}.
       </span>
@@ -620,6 +767,45 @@
       >
         Restore baseline
       </button>
+      {#if baselineDivergenceItems.engine.length > 0 || baselineDivergenceItems.marketplace.length > 0}
+        <div class="diff-popover" role="tooltip" bind:this={baselineDiffEl}>
+          {#if baselineDivergenceItems.engine.length > 0}
+            <div class="diff-section">
+              {#each baselineDivergenceItems.engine as item (item.name)}
+                <div class="diff-item">
+                  <span class="diff-name">{item.name}</span>
+                  {#each item.changes as ch}
+                    <span class="diff-change">
+                      {ch.field}:
+                      <span class={ch.targetValue ? 'val-on' : 'val-off'}>
+                        {ch.targetValue ? 'On' : 'Off'}
+                      </span>
+                    </span>
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          {/if}
+          {#if baselineDivergenceItems.marketplace.length > 0}
+            <div class="diff-section-header">Marketplace (also reset by Restore):</div>
+            <div class="diff-section">
+              {#each baselineDivergenceItems.marketplace as item (item.name)}
+                <div class="diff-item">
+                  <span class="diff-name">{item.name}</span>
+                  {#each item.changes as ch}
+                    <span class="diff-change">
+                      {ch.field}:
+                      <span class={ch.targetValue ? 'val-on' : 'val-off'}>
+                        {ch.targetValue ? 'On' : 'Off'}
+                      </span>
+                    </span>
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
     </div>
   {/if}
 
@@ -992,6 +1178,7 @@
     background: linear-gradient(135deg, #6a4878, #75435c);
   }
   .baseline-row {
+    position: relative;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -1006,6 +1193,72 @@
   }
   .baseline-label {
     color: #b0b0b0;
+    flex: 1;
+    cursor: help;
+  }
+  /* Custom hover popover listing every diverging plugin and what Restore
+     would set it to. Triggered by hovering the label only — the Restore
+     button keeps its own native title attribute. */
+  .diff-popover {
+    /* top / left / bottom / max-height set inline by positionDiffPopover()
+       so the popover flips above/below the trigger based on viewport space. */
+    position: fixed;
+    z-index: 100;
+    min-width: 320px;
+    max-width: 560px;
+    overflow: auto;
+    padding: 0.55rem 0.75rem;
+    background: #14171c;
+    border: 1px solid #3a4250;
+    border-radius: 6px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+    color: #d0d0d0;
+    font-size: 0.78rem;
+    line-height: 1.45;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+    pointer-events: none;
+  }
+  .baseline-label:hover ~ .diff-popover,
+  .diff-popover:hover {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .diff-section + .diff-section-header {
+    margin-top: 0.55rem;
+  }
+  .diff-section-header {
+    font-size: 0.72rem;
+    color: #8a93a0;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.3rem;
+    padding-bottom: 0.2rem;
+    border-bottom: 1px solid #2a2f38;
+  }
+  .diff-item {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.9rem;
+    padding: 0.18rem 0;
+  }
+  .diff-name {
+    color: #e6e6e6;
+    font-weight: 500;
+    min-width: 12rem;
+  }
+  .diff-change {
+    color: #9ea4ad;
+  }
+  .val-on {
+    color: #4ade80;
+    font-weight: 600;
+  }
+  .val-off {
+    color: #f87171;
+    font-weight: 600;
   }
   .confirm-backdrop {
     position: fixed;

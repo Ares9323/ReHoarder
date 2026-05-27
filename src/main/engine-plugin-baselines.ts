@@ -140,3 +140,58 @@ export async function deleteBaseline(engineRoot: string): Promise<boolean> {
     return false
   }
 }
+
+/**
+ * Synthesise the baseline entry for a single plugin.
+ *
+ * Plugins shipped inside `Engine/Plugins/Marketplace/` are user-installed
+ * marketplace content whose live state reflects marketplace/user activity,
+ * not engine defaults. Capturing whatever transient state they happen to be
+ * in at "Day 0" would pin the baseline to a moving target. Instead we record
+ * a stable synthetic posture — `EnabledByDefault=false, Installed=true` —
+ * which means "tracked as installed, not auto-enabled" and matches Epic's
+ * out-of-the-box convention for marketplace content.
+ *
+ * All other plugins (Engine, Developer, Experimental, Runtime, MetaHuman,
+ * Media, etc.) are recorded as-is so the baseline preserves Epic's per-
+ * version defaults.
+ */
+export function toBaselineEntry(p: {
+  name: string
+  upluginPath: string
+  enabledByDefault: boolean
+  installed: boolean
+}): PluginBaselineEntry {
+  if (isMarketplacePath(p.upluginPath)) {
+    return {
+      name: p.name,
+      upluginPath: p.upluginPath,
+      enabledByDefault: false,
+      installed: true
+    }
+  }
+  return {
+    name: p.name,
+    upluginPath: p.upluginPath,
+    enabledByDefault: p.enabledByDefault,
+    installed: p.installed
+  }
+}
+
+/**
+ * Path is under `Engine/Plugins/Marketplace/` AND not on the IDE-managed
+ * allow-list (e.g. RiderLink, which JetBrains Rider drops in there but
+ * ReHoarder shouldn't treat as user-installed marketplace content).
+ */
+export function isMarketplacePath(upluginPath: string): boolean {
+  const norm = upluginPath.replace(/\\/g, '/').toLowerCase()
+  if (!norm.includes('/engine/plugins/marketplace/')) return false
+  if (isIdeManagedPlugin(norm)) return false
+  return true
+}
+
+/** Plugins that live in the Marketplace folder but are owned by an IDE,
+ *  not by the user via Fab. They should follow normal engine-plugin rules. */
+function isIdeManagedPlugin(normalisedPath: string): boolean {
+  return normalisedPath.endsWith('/riderlink.uplugin')
+}

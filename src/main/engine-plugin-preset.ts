@@ -12,6 +12,13 @@ export interface PluginPresetEntry {
   name: string
   enabledByDefault: boolean
   installed: boolean
+  /**
+   * Present and `true` on entries the user added or modified via the app
+   * ("Add to config"). Survives template re-apply: `useBuiltInPlugin` keeps
+   * entries flagged `fromUser` verbatim and overwrites only the others with
+   * fresh template state. Absent on template-default entries.
+   */
+  fromUser?: boolean
 }
 
 export interface PluginPreset {
@@ -108,10 +115,11 @@ export async function addPluginToPreset(
   presetPath: string,
   entry: PluginPresetEntry
 ): Promise<void> {
+  const meta = await readMetaFields(presetPath)
   const existing = await safeLoadPresetEntries(presetPath)
   const filtered = existing.filter((e) => !sameName(e.name, entry.name))
-  filtered.push(entry)
-  await writePresetAtomically(presetPath, filtered)
+  filtered.push({ ...entry, fromUser: true })
+  await writePresetAtomically(presetPath, filtered, meta)
 }
 
 /**
@@ -123,10 +131,11 @@ export async function removePluginFromPreset(
   presetPath: string,
   name: string
 ): Promise<boolean> {
+  const meta = await readMetaFields(presetPath)
   const existing = await safeLoadPresetEntries(presetPath)
   const next = existing.filter((e) => !sameName(e.name, name))
   if (next.length === existing.length) return false
-  await writePresetAtomically(presetPath, next)
+  await writePresetAtomically(presetPath, next, meta)
   return true
 }
 
@@ -148,12 +157,40 @@ async function safeLoadPresetEntries(presetPath: string): Promise<PluginPresetEn
   }
 }
 
+/**
+ * Provenance markers written by the "use built-in preset" flow. Preserved
+ * verbatim across user edits ("Add to config" / "Remove from config") so that
+ * `_source` always reflects the origin template and `_applied` the timestamp
+ * of the last actual template apply — not every plugin tweak. Missing fields
+ * (file built from scratch without a template) just propagate as missing.
+ */
+interface PresetMeta {
+  _source?: string
+  _applied?: string
+}
+
+async function readMetaFields(presetPath: string): Promise<PresetMeta> {
+  try {
+    const raw = await fsp.readFile(presetPath, 'utf-8')
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    const rec = parsed as Record<string, unknown>
+    const meta: PresetMeta = {}
+    if (typeof rec._source === 'string') meta._source = rec._source
+    if (typeof rec._applied === 'string') meta._applied = rec._applied
+    return meta
+  } catch {
+    return {}
+  }
+}
+
 async function writePresetAtomically(
   presetPath: string,
-  entries: PluginPresetEntry[]
+  entries: PluginPresetEntry[],
+  meta: PresetMeta = {}
 ): Promise<void> {
   await fsp.mkdir(path.dirname(presetPath), { recursive: true })
-  const payload: PluginPreset = { plugins: entries }
+  const payload = { ...meta, plugins: entries }
   const tmp = presetPath + '.tmp'
   await fsp.writeFile(tmp, JSON.stringify(payload, null, 2) + '\n', 'utf-8')
   await fsp.rename(tmp, presetPath)
@@ -187,7 +224,9 @@ export async function readPresetFile(absolutePath: string): Promise<PluginPreset
     const installed = rec.installed
     if (typeof name !== 'string' || name.length === 0) continue
     if (typeof enabledByDefault !== 'boolean' || typeof installed !== 'boolean') continue
-    out.push({ name, enabledByDefault, installed })
+    const entry: PluginPresetEntry = { name, enabledByDefault, installed }
+    if (rec.fromUser === true) entry.fromUser = true
+    out.push(entry)
   }
   return out
 }

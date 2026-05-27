@@ -34,6 +34,10 @@
   onMount(async () => {
     await auth.refresh()
     if (auth.state.status === 'authenticated') {
+      // Restore the user's startup-tab preference now that we know they're
+      // landing in the authenticated UI. Done before library.refresh so the
+      // visible tab is correct before any data lands.
+      await restoreStartupTab()
       await library.refresh()
       void maybeNotifyAboutFreebies()
       // Warm the Vault scan in the background so opening the Vault tab is
@@ -45,6 +49,33 @@
       void vaultStore.ensureLoaded()
     }
   })
+
+  /**
+   * Restore the post-auth startup tab based on the user's preference:
+   * - `last-opened` → the tab the user was on when they last closed the
+   *   app (recorded by `persistActiveTab` below). Falls back to `assets`
+   *   when there's no recorded value.
+   * - any other value → that tab, pinned regardless of session history.
+   *
+   * Failures fall back silently to the default `assets` (which is already
+   * the initial `$state` value), so a broken settings read can't trap the
+   * user on a blank screen.
+   */
+  async function restoreStartupTab(): Promise<void> {
+    try {
+      const s = await window.api.settings.get()
+      const wanted =
+        s.startupTab === 'last-opened'
+          ? (s.lastActiveTab ?? 'assets')
+          : s.startupTab
+      // Defensive: `settings` is never a valid landing destination — if it
+      // somehow ended up persisted, fall back so the user doesn't open the
+      // app into the settings page.
+      activeTab = wanted === 'settings' ? 'assets' : (wanted as TabKey)
+    } catch {
+      /* keep the default activeTab */
+    }
+  }
 
   /**
    * On launch, ask the main process to do the cheap freebies fetch and
@@ -75,8 +106,7 @@
   }
 
   function openFreebiesFromToast(): void {
-    activeTab = 'freebies'
-    freebiesToastCount = 0
+    handleTabChange('freebies')
   }
 
   function dismissFreebiesToast(): void {
@@ -87,6 +117,24 @@
     activeTab = k
     // Opening Freebies from anywhere implicitly dismisses the startup toast.
     if (k === 'freebies') freebiesToastCount = 0
+    // Persist the new tab so `startupTab: 'last-opened'` works on next launch.
+    // `settings` is intentionally excluded — landing in Settings on startup
+    // is awkward, so navigating there doesn't update the "last opened" memory.
+    if (k !== 'settings') persistActiveTab(k)
+  }
+
+  /** Debounce timer for `lastActiveTab` writes. Tab clicks shouldn't fire a
+   *  KV write each, especially when the user is shuffling tabs quickly. */
+  let lastActiveTabTimer: ReturnType<typeof setTimeout> | null = null
+
+  function persistActiveTab(k: TabKey): void {
+    if (lastActiveTabTimer) clearTimeout(lastActiveTabTimer)
+    lastActiveTabTimer = setTimeout(() => {
+      lastActiveTabTimer = null
+      // Cast: `settings` was already filtered out by the caller; the main
+      // process additionally sanitises with `sanitizeLastActiveTab`.
+      void window.api.settings.set({ lastActiveTab: k as Exclude<TabKey, 'settings'> })
+    }, 600)
   }
 
   /**

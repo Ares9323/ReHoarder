@@ -327,6 +327,16 @@ export interface DebugApi {
 
 export type ImageSize = 'small' | 'medium' | 'large'
 
+export type StartupTabKey =
+  | 'assets'
+  | 'engines'
+  | 'projects'
+  | 'vault'
+  | 'freebies'
+  | 'downloads'
+
+export type StartupTabSelection = 'last-opened' | StartupTabKey
+
 export interface AppSettings {
   loginAtStartup: boolean
   checkVersionAtStartup: boolean
@@ -347,6 +357,8 @@ export interface AppSettings {
   showVaultThumbnails: boolean
   showProjectThumbnails: boolean
   gameLaunchParams: string[]
+  startupTab: StartupTabSelection
+  lastActiveTab: StartupTabKey
 }
 
 export interface SettingsApi {

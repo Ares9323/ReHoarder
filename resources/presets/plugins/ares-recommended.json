@@ -1,0 +1,86 @@
+{
+  "label": "Ares Recommended",
+  "description": "Strips alternative Source Code Access providers (N10X, CLion, CodeLite, KDevelop, Null, VSCode, XCode), the Apple and SpeedTree modules engines ship enabled, and turns on BlueprintAssist plus five marketplace tools (OctaGraph, AdvancedEditorUtilities, AdvancedRestartEditor, LevelBookmarks, ComponentSorter) — entries for the marketplace plugins are no-op on engines that don't have them installed.",
+  "plugins": [
+    {
+      "name": "N10XSourceCodeAccess",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "CLionSourceCodeAccess",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "CodeLiteSourceCodeAccess",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "KDevelopSourceCodeAccess",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "NullSourceCodeAccess",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "VisualStudioCodeSourceCodeAccess",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "XCodeSourceCodeAccess",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "SpeedTreeImporter",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "AppleImageUtils",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "AppleMoviePlayer",
+      "enabledByDefault": false,
+      "installed": false
+    },
+    {
+      "name": "BlueprintAssist",
+      "enabledByDefault": true,
+      "installed": false
+    },
+    {
+      "name": "OctaGraph",
+      "enabledByDefault": true,
+      "installed": false
+    },
+    {
+      "name": "AdvancedEditorUtilities",
+      "enabledByDefault": true,
+      "installed": false
+    },
+    {
+      "name": "AdvancedRestartEditor",
+      "enabledByDefault": true,
+      "installed": false
+    },
+    {
+      "name": "LevelBookmarks",
+      "enabledByDefault": true,
+      "installed": false
+    },
+    {
+      "name": "ComponentSorter",
+      "enabledByDefault": true,
+      "installed": false
+    }
+  ]
+}

@@ -4,6 +4,45 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] — 2026-05-27
+
+Preset system overhaul (provenance markers, per-entry user-override merge, renamed user files), curated `ares-recommended` bundle shipped for the three preset families, baseline policy for marketplace plugins with a custom hover popover that lists every plugin Restore would touch, an `Add to project` action on Local Vault asset entries, a startup-tab preference in Settings, and an HTTP image-cache flush at the end of every manual library sync so stale CDN-cached thumbnails actually refresh.
+
+### Added
+
+#### Preset system
+- **Provenance markers on apply** — every template apply stamps `; @source <id>` / `; @applied <ISO>` on INI files and `_source` / `_applied` fields on the plugin JSON. They sit ignored by UE and survive subsequent user edits ("Add to config" / "Remove from config") so future flows can offer "reapply latest" or drift detection against the source template. INI directives are stripped on every fresh apply so they never accumulate.
+- **`fromUser` flag for user overrides** — plugin entries added or modified via "Add to config" carry `"fromUser": true`. When the template is re-applied, `useBuiltInPlugin` keeps every `fromUser` entry verbatim and overwrites only the rest with fresh template state. The user's hand-picked overrides survive upstream template updates instead of being silently blown away.
+- **Curated `ares-recommended` bundle** —
+  - Plugins (`resources/presets/plugins/ares-recommended.json`, 16 entries): strips 7 alternative Source Code Access providers (N10X, CLion, CodeLite, KDevelop, Null, VSCode, XCode), Apple ImageUtils / MoviePlayer / SpeedTreeImporter, and enables BlueprintAssist plus five marketplace tools (OctaGraph, AdvancedEditorUtilities, AdvancedRestartEditor, LevelBookmarks, ComponentSorter — no-op on engines that don't have them installed).
+  - Keybindings (`resources/presets/keybindings/ares-recommended.ini`, 92 entries / 184 chord lines): BlueprintAssist default cleanups (clear `X` / `Alt+S` / `Alt+G` / `Ctrl+Alt+S` / `Ctrl+Alt+G`), personal `Alt+L` Level Blueprint / `Alt+Shift+L` Find Actor / `Shift+Esc` Stop-PIE shortcuts, and a 79-entry Italian-keyboard alt-chord remap layer that pins `E_AccentGrave` / `+` / `ò` / `ù` as `ChordIndex:1` secondaries on every Epic command that uses `LeftBracket` / `RightBracket` / `SemiColon` / `Backslash` (brush size in 10 modeling contexts, sequencer navigation, editor viewport grid sizes, foliage / landscape / mesh-paint brushes, dataflow weight-map paint, curve editor selection, level viewport `EnablePreviewMesh` / `CyclePreviewMesh`, level editor `BuildLightingOnly`, landscape `IncreaseAlphaBrushRotation` / `DecreaseAlphaBrushRotation`). Each chord pair has an inline `;` comment documenting context + primary/secondary so the file stays readable in a diff.
+  - Editor settings (`resources/presets/editor-settings/ares-recommended.ini`): monitor resolution presets (HD/Full HD/QHD/4K/5K in 16:9, 16:10, 21:9), Live Coding disabled, Visual Studio set as Source Code Access provider, Blueprint editor tuned (`SaveOnCompile=SoC_SuccessOnly`, hover bubble for zoomed-out comments, NodeTemplateCache 50 MB, …), BlueprintAssist auto-formatter set to manual.
+- **`example` starter template** — replaces the old `empty` + `annotated` dual templates. INI variants ship inline format documentation plus commented-out example blocks (scalar override, `; @ReHoarder: CommentAll` section wipe, brand-new section) — applying as-is is a no-op so the user can uncomment the bits they want. Chooser sort pins `example` (and the still-present `empty` for plugins) above the curated entries.
+
+#### Plugin baseline policy
+- **Synthetic marketplace state** — when `toBaselineEntry` captures a `.uplugin` whose path sits under `Engine/Plugins/Marketplace/`, it records a stable `enabledByDefault=false, installed=true` posture regardless of the live state. Restoring against the baseline therefore brings marketplace plugins to that neutral "tracked but not auto-enabled" posture, leaving Engine-shipped plugins on Epic's per-version defaults. IDE-managed exceptions (currently `RiderLink`, dropped under the Marketplace folder by JetBrains Rider) are kept on the engine-plugin path so their `EnabledByDefault=true, Installed=false` IDE-side intent isn't clobbered.
+- **`Add to config` preserves provenance** — `writePresetAtomically` now reads existing `_source` / `_applied` from the on-disk JSON and re-emits them on every write, so user-side plugin tweaks no longer nuke the template-origin markers.
+
+#### Engine Plugins panel
+- **Baseline divergence popover** — the "X plugins differ from the baseline captured …" banner now opens a custom hover popover (anchored as `position: fixed`, smart-flipped above/below the trigger based on viewport space, `max-height` clamped so it never overflows). It lists every diverging plugin grouped by Engine-shipped vs Marketplace, showing the target `EnabledByDefault` / `Installed` value Restore would set the plugin to — `On` in green, `Off` in red, with only the fields that actually change rendered per row. Marketplace plugins are excluded from the banner count itself (they're user-managed, the synthetic policy keeps the noise out) but surfaced in the popover so the user sees the full Restore scope.
+
+#### Local Vault
+- **Payload kind classification** — each vault entry's `data/` layout is inspected at scan time and labelled `asset` (`data/Content/…`), `plugin` (`data/Engine/Plugins/Marketplace/<name>/<name>.uplugin`) or `unknown`. The kind is surfaced as a coloured pill next to the name.
+- **`Add to project` from Local Vault** — asset-kind rows expose a button that opens the existing `AddToProjectDialog` pre-filled with the source / sourceId / engineVersion captured in the `downloads` table. Lazy-loads the projects list on first click so the Vault tab works even before the Projects tab has been visited.
+
+#### Startup behaviour
+- **Open this tab on startup** — new Settings dropdown in the Startup & behavior pane: `Last opened` (default; remembers the tab the user closed the app on) or any of the six content tabs (`Assets`, `Projects`, `Engines`, `Vault`, `Freebies`, `Downloads`). `Settings` is intentionally excluded as a startup destination. App startup restores the chosen tab post-auth; tab changes are debounced and persisted as `lastActiveTab` for the `last-opened` mode. `SettingsStore.saveAll` now merges the partial payload onto the currently-stored settings instead of treating it as a full replace, so the narrow `{lastActiveTab: …}` writes from the renderer don't reset every other field to defaults.
+- **HTTP image-cache flush on manual sync** — every `library:sync` IPC call now ends with a `session.defaultSession.clearCache()` so the renderer's `<img>` tags re-fetch their bytes after a sync. Fab / Epic often keep the asset image URL stable while updating the file on the CDN, which used to leave stale thumbnails sticky even after a full catalog refresh; now the cache eviction happens automatically as part of the user-initiated sync. Failure is treated as best-effort and logged to the sync log line stream.
+
+### Changed
+
+- **User files renamed** for provenance clarity (no migration — these are fresh on the user's machine; pre-0.2 installs would need to re-apply the relevant preset):
+  - `userData/plugin-preset.json` → `userData/ReHoarderPluginConfig.json`
+  - `userData/EditorKeyBindings-master.ini` → `userData/ReHoarderEditorKeyBindings.ini`
+  - `userData/BaseEditorPerProjectUserSettings-master.ini` → `userData/ReHoarderEditorSettings.ini`
+- **`Restore baseline` semantics** — iterates the live on-disk plugin list (not just the captured baseline) so marketplace plugins are reset to the synthetic policy even when the user manually pruned them from the baseline JSON. Engine plugins still drop back to whatever the captured baseline recorded.
+- **Engine plugins panel tooltip** — removed the native `title=` overlay in favour of the custom popover above so the displayed state is the *destination* of Restore (the post-Restore value), not a `was → is` arrow that read backwards relative to the user's intent.
+
 ## [0.1.7] — 2026-05-26
 
 Quick-launch button on the Engines tab and a smarter Assets search that no

@@ -5,6 +5,27 @@ import type { KvStore } from './db/kv'
 
 export type ImageSize = 'small' | 'medium' | 'large'
 
+/** Tab keys that can be selected as the post-auth landing destination. `settings` is intentionally excluded — landing in Settings on launch is awkward. */
+export type StartupTabKey =
+  | 'assets'
+  | 'engines'
+  | 'projects'
+  | 'vault'
+  | 'freebies'
+  | 'downloads'
+
+/** Same as `StartupTabKey` but with the `'last-opened'` sentinel so the user can pick "wherever I was last time" instead of pinning a fixed tab. */
+export type StartupTabSelection = 'last-opened' | StartupTabKey
+
+const STARTUP_TAB_VALUES: readonly StartupTabKey[] = [
+  'assets',
+  'engines',
+  'projects',
+  'vault',
+  'freebies',
+  'downloads'
+] as const
+
 export interface AppSettings {
   /** Auto-refresh Epic session on app startup so the user lands authenticated. */
   loginAtStartup: boolean
@@ -60,6 +81,10 @@ export interface AppSettings {
   ownedEnginesCacheTtlDays: number
   /** Short version slug (`5.5`, `4.27`) of the engine ReHoarder treats as the user's default — surfaced as a "Default" badge in the Engines tab and used as the fallback when a project's EngineAssociation is empty or unresolvable. Empty string = no default selected. */
   defaultEngineVersion: string
+  /** Which tab to land on after auth on startup. `last-opened` means "restore the tab the user had active when they last closed the app" (falls back to `assets` when there's no recorded last tab). Picking a fixed tab here pins it regardless of session history. `settings` is intentionally not exposed as a choice. */
+  startupTab: StartupTabSelection
+  /** Last tab the user navigated to that isn't `settings` — used to drive the `last-opened` startup behaviour. Updated automatically as the user moves between tabs (debounced). Not user-editable in the Settings panel. */
+  lastActiveTab: StartupTabKey
 }
 
 const SETTINGS_KEY = 'app_settings_v1'
@@ -122,8 +147,25 @@ export function defaultSettings(): AppSettings {
     editorSettingsMasterPath: '',
     editorKeyBindingsMasterPath: '',
     ownedEnginesCacheTtlDays: 7,
-    defaultEngineVersion: ''
+    defaultEngineVersion: '',
+    startupTab: 'last-opened',
+    lastActiveTab: 'assets'
   }
+}
+
+function sanitizeStartupTab(raw: unknown): StartupTabSelection {
+  if (raw === 'last-opened') return 'last-opened'
+  if (typeof raw === 'string' && (STARTUP_TAB_VALUES as readonly string[]).includes(raw)) {
+    return raw as StartupTabKey
+  }
+  return 'last-opened'
+}
+
+function sanitizeLastActiveTab(raw: unknown): StartupTabKey {
+  if (typeof raw === 'string' && (STARTUP_TAB_VALUES as readonly string[]).includes(raw)) {
+    return raw as StartupTabKey
+  }
+  return 'assets'
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -233,7 +275,9 @@ export function mergeSettings(partial: Partial<AppSettings> | null | undefined):
     defaultEngineVersion:
       typeof partial.defaultEngineVersion === 'string'
         ? partial.defaultEngineVersion.trim()
-        : d.defaultEngineVersion
+        : d.defaultEngineVersion,
+    startupTab: sanitizeStartupTab(partial.startupTab),
+    lastActiveTab: sanitizeLastActiveTab(partial.lastActiveTab)
   }
 }
 
@@ -266,8 +310,16 @@ export class SettingsStore {
     return mergeSettings(raw)
   }
 
-  saveAll(s: Partial<AppSettings>): AppSettings {
-    const merged = mergeSettings(s)
+  /**
+   * Merge `partial` onto the currently-stored settings. Callers can pass a
+   * true partial — fields absent from the payload are preserved from disk
+   * rather than reset to defaults. This makes concurrent writers safe (e.g.
+   * the renderer's full Settings-panel save vs. App.svelte's narrow
+   * `{lastActiveTab: …}` ping don't clobber each other).
+   */
+  saveAll(partial: Partial<AppSettings>): AppSettings {
+    const current = this.load()
+    const merged = mergeSettings({ ...current, ...partial })
     this.kv.setJson(SETTINGS_KEY, merged)
     return merged
   }

@@ -1,4 +1,4 @@
-import { ipcMain, type BrowserWindow } from 'electron'
+import { ipcMain, session as electronSession, type BrowserWindow } from 'electron'
 import type { AssetsRepo, AssetSource } from '../db/assets-repo'
 import type { Sync, SyncProgress } from './sync'
 import type { Session } from '../auth/session'
@@ -379,6 +379,23 @@ export function registerLibraryIpc(
       if (result.vault.error || result.fab.error) {
         const combined = [result.vault.error, result.fab.error].filter(Boolean).join('; ')
         return { ok: false, error: combined }
+      }
+      // Manual sync just landed fresh image URLs (and other catalog fields)
+      // into the DB. Wipe Chromium's HTTP cache so the renderer's <img> tags
+      // actually fetch the new bytes — Fab / Epic often keep the URL stable
+      // while updating the file on the CDN, so without a cache flush the
+      // user would keep seeing the stale image even after the round-trip.
+      // Side effect: other cached responses re-fetch on next access; trivial
+      // cost for a user-initiated sync.
+      try {
+        await electronSession.defaultSession.clearCache()
+      } catch (err) {
+        // Cache flush is best-effort. A failure here doesn't invalidate the
+        // sync — the DB is already up to date, we just won't dodge the
+        // stale-image edge case until the user reloads the window.
+        sendLog(
+          `[warn] image cache flush failed: ${err instanceof Error ? err.message : String(err)}`
+        )
       }
       return { ok: true }
     } catch (err) {

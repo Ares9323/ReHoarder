@@ -19,6 +19,8 @@ import {
 } from './engine-plugins'
 import {
   ensureBaseline,
+  isMarketplacePath,
+  toBaselineEntry,
   readBaseline,
   readBaselineInfo,
   type BaselineInfo
@@ -285,15 +287,7 @@ export function registerEnginesIpc(settings: SettingsStore): void {
           const info = await readBaselineInfo(engineRoot)
           if (!info.exists) {
             const allPlugins = await listEnginePluginsRich(engineRoot)
-            await ensureBaseline(
-              engineRoot,
-              allPlugins.map((p) => ({
-                name: p.name,
-                upluginPath: p.upluginPath,
-                enabledByDefault: p.enabledByDefault,
-                installed: p.installed
-              }))
-            )
+            await ensureBaseline(engineRoot, allPlugins.map(toBaselineEntry))
           }
         }
       } catch (err) {
@@ -678,7 +672,7 @@ export function registerEnginesIpc(settings: SettingsStore): void {
   ipcMain.handle(
     'engines:use-keybindings-preset-from-library',
     async (_e, id: string): Promise<UseIniPresetResult> => {
-      const dest = path.join(app.getPath('userData'), 'EditorKeyBindings-master.ini')
+      const dest = path.join(app.getPath('userData'), 'ReHoarderEditorKeyBindings.ini')
       const r = await useIniPreset({ subdir: 'keybindings', dest, id })
       if (!r.ok || !r.path) return r
       const cfg = settings.load()
@@ -740,10 +734,7 @@ export function registerEnginesIpc(settings: SettingsStore): void {
   ipcMain.handle(
     'engines:use-editor-settings-preset-from-library',
     async (_e, id: string): Promise<UseIniPresetResult> => {
-      const dest = path.join(
-        app.getPath('userData'),
-        'BaseEditorPerProjectUserSettings-master.ini'
-      )
+      const dest = path.join(app.getPath('userData'), 'ReHoarderEditorSettings.ini')
       const r = await useIniPreset({ subdir: 'editor-settings', dest, id })
       if (!r.ok || !r.path) return r
       const cfg = settings.load()
@@ -823,7 +814,7 @@ export function registerEnginesIpc(settings: SettingsStore): void {
       // click just works. The user can move it later (Settings → Engines)
       // or override it per-engine.
       if ('error' in target) {
-        const defaultPath = path.join(app.getPath('userData'), 'plugin-preset.json')
+        const defaultPath = path.join(app.getPath('userData'), 'ReHoarderPluginConfig.json')
         settings.saveAll({ ...cfg, pluginPresetGlobalPath: defaultPath })
         cfg = settings.load()
         target = resolvePresetTargetPath(path.resolve(engineRoot), cfg)
@@ -885,15 +876,7 @@ export function registerEnginesIpc(settings: SettingsStore): void {
         const info = await readBaselineInfo(engineRoot)
         if (!info.exists) {
           const all = await listEnginePluginsRich(engineRoot)
-          await ensureBaseline(
-            engineRoot,
-            all.map((q) => ({
-              name: q.name,
-              upluginPath: q.upluginPath,
-              enabledByDefault: q.enabledByDefault,
-              installed: q.installed
-            }))
-          )
+          await ensureBaseline(engineRoot, all.map(toBaselineEntry))
         }
       } catch {
         /* non-fatal */
@@ -918,20 +901,36 @@ export function registerEnginesIpc(settings: SettingsStore): void {
       }
       let restored = 0
       const failures: Array<{ name: string; error: string }> = []
-      for (const entry of baseline.plugins) {
-        // Defensive: if the uplugin moved or was deleted, skip rather than
-        // creating a phantom file. We only rewrite plugins that still exist.
-        if (!isInsideEngineRoots(entry.upluginPath)) {
-          failures.push({ name: entry.name, error: 'Plugin path outside engine roots' })
+      // Marketplace plugins are governed by a synthetic policy
+      // (`enabledByDefault=false, installed=true`) that holds regardless of
+      // whether the literal baseline file contains them. We resolve them via
+      // the on-disk plugin list so Restore stays correct even if the user
+      // manually edited the baseline to drop marketplace entries.
+      const onDiskPlugins = await listEnginePluginsRich(engineRoot)
+      const baselineByName = new Map(baseline.plugins.map((p) => [p.upluginPath, p]))
+
+      for (const live of onDiskPlugins) {
+        if (!isInsideEngineRoots(live.upluginPath)) {
+          failures.push({ name: live.name, error: 'Plugin path outside engine roots' })
           continue
         }
+        const baselineEntry = isMarketplacePath(live.upluginPath)
+          ? { upluginPath: live.upluginPath, enabledByDefault: false, installed: true }
+          : baselineByName.get(live.upluginPath)
+        if (!baselineEntry) continue // engine plugin not recorded in baseline → leave alone
+        if (
+          live.enabledByDefault === baselineEntry.enabledByDefault &&
+          live.installed === baselineEntry.installed
+        ) {
+          continue // already matches the baseline / synthetic policy
+        }
         const r = await setEnginePluginState({
-          upluginPath: entry.upluginPath,
-          enabledByDefault: entry.enabledByDefault,
-          installed: entry.installed
+          upluginPath: baselineEntry.upluginPath,
+          enabledByDefault: baselineEntry.enabledByDefault,
+          installed: baselineEntry.installed
         })
         if (r.ok) restored++
-        else failures.push({ name: entry.name, error: r.error ?? 'unknown error' })
+        else failures.push({ name: live.name, error: r.error ?? 'unknown error' })
       }
       return { ok: true, restored, failures }
     }

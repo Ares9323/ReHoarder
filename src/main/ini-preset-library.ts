@@ -86,10 +86,12 @@ export async function listIniPresets(subdir: string, countFn?: CountFn): Promise
       /* skip unreadable file */
     }
   }
-  // Empty first when present, then alphabetical by label.
+  // "example" / "empty" starter templates pinned first; rest alphabetical by label.
   out.sort((a, b) => {
-    if (a.id === 'empty') return -1
-    if (b.id === 'empty') return 1
+    const aPinned = a.id === 'example' || a.id === 'empty'
+    const bPinned = b.id === 'example' || b.id === 'empty'
+    if (aPinned && !bPinned) return -1
+    if (!aPinned && bPinned) return 1
     return a.label.localeCompare(b.label)
   })
   return out
@@ -129,10 +131,15 @@ export async function useIniPreset(opts: {
     }
   }
   const cleaned = stripHeaderDirectives(content)
+  // Provenance markers stamped at apply time. Future flows can read these to
+  // offer "reapply latest" / drift detection. UE's INI parser ignores `;`
+  // comments so they're inert at runtime; `stripHeaderDirectives` removes
+  // them on the next apply so they don't accumulate.
+  const provenance = `; @source ${id}\r\n; @applied ${new Date().toISOString()}\r\n\r\n`
   try {
     await fsp.mkdir(path.dirname(dest), { recursive: true })
     const tmp = dest + '.tmp'
-    await fsp.writeFile(tmp, cleaned, 'utf-8')
+    await fsp.writeFile(tmp, provenance + cleaned, 'utf-8')
     await fsp.rename(tmp, dest)
   } catch (err) {
     return {
@@ -144,9 +151,11 @@ export async function useIniPreset(opts: {
 }
 
 /**
- * Drop the leading `; @label …` / `; @description …` lines (only those — any
- * other comment is preserved). Stops at the first non-directive content so
- * mid-file `;` comments are untouched.
+ * Drop the leading `; @label`, `; @description`, `; @source`, `; @applied`
+ * directive lines (only those — any other comment is preserved). Stops at the
+ * first non-directive content so mid-file `;` comments are untouched.
+ * Stripping `@source` / `@applied` on every apply keeps the markers fresh
+ * instead of accumulating one stale pair per apply.
  */
 function stripHeaderDirectives(content: string): string {
   const lines = content.split(/\r?\n/)
@@ -157,7 +166,7 @@ function stripHeaderDirectives(content: string): string {
       drop++
       continue
     }
-    if (/^;\s*@(label|description)\s+/i.test(trimmed)) {
+    if (/^;\s*@(label|description|source|applied)\s+/i.test(trimmed)) {
       drop++
       continue
     }
