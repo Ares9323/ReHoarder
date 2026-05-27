@@ -38,6 +38,13 @@
     if (ok) onSwitched?.(accountId)
   }
 
+  /** Signed-out accounts have a row in the DB but no usable tokens — clicking
+   *  them routes to the same Add-account flow so the user can paste a fresh
+   *  OAuth code, which then re-links the account by id. */
+  function relink(): void {
+    startAddAccount()
+  }
+
   async function remove(accountId: string, ev: MouseEvent): Promise<void> {
     ev.stopPropagation()
     if (
@@ -81,15 +88,22 @@
       {#if others.length > 0}
         <div class="section-label">Switch to</div>
         {#each others as a (a.accountId)}
-          <div class="row">
+          <div class="row" class:signed-out={a.signedOut}>
             <button
               type="button"
               class="item switchable"
-              onclick={() => switchTo(a.accountId)}
+              class:relink={a.signedOut}
+              onclick={() => (a.signedOut ? relink() : switchTo(a.accountId))}
               disabled={accountsStore.busy}
+              title={a.signedOut
+                ? 'Session expired — click to re-link this account with a fresh login'
+                : `Switch to ${a.displayName}`}
             >
               <span class="avatar small">{initials(a.displayName)}</span>
               <span class="item-name">{a.displayName}</span>
+              {#if a.signedOut}
+                <span class="badge">re-link</span>
+              {/if}
             </button>
             <button
               type="button"
@@ -231,6 +245,23 @@
   }
   .row .item {
     flex: 1;
+  }
+  .row.signed-out .avatar,
+  .row.signed-out .item-name {
+    opacity: 0.55;
+  }
+  .item.relink .badge {
+    margin-left: auto;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid #c084fc;
+    border-radius: 999px;
+    color: #c084fc;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .item.relink:hover:not(:disabled) {
+    background: #2a213a;
   }
   .remove {
     background: transparent;

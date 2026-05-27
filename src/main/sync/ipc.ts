@@ -126,6 +126,15 @@ function collectFreebieCandidateIds(f: FabFreebie): string[] {
   return [...ids]
 }
 
+/**
+ * Partition name used by both Fab and UE Vault `electron.net.fetch` adapters
+ * (see `CF_PARTITION` in `main/index.ts`). The Chromium HTTP cache on this
+ * partition is what `library:sync` flushes before each manual sync, so
+ * library-API responses are re-fetched from origin instead of served stale
+ * from cache — keep this string in sync if `CF_PARTITION` ever changes.
+ */
+const FAB_SYNC_PARTITION = 'persist:cf-warmup'
+
 export function registerLibraryIpc(
   repo: AssetsRepo,
   sync: Sync,
@@ -374,28 +383,25 @@ export function registerLibraryIpc(
       }
     }
 
+    // Defensive: wipe the partition's HTTP response cache at the start of
+    // every manual sync so library-API responses are re-fetched from origin
+    // rather than served stale from Chromium's cache. Cookies + CF clearance
+    // state are untouched (`clearCache` only evicts response bodies). Note:
+    // this does NOT solve the case where Fab's library endpoint itself serves
+    // stale `images[0].url` for assets whose listing was recently edited —
+    // that needs a per-listing detail fetch (planned 0.3.0). Failure is
+    // silently swallowed; the sync is best-effort independent of this.
+    try {
+      await electronSession.fromPartition(FAB_SYNC_PARTITION).clearCache()
+    } catch {
+      /* best-effort, not worth surfacing to the user */
+    }
+
     try {
       const result = await sync.syncAll(token, state.accountId, sendProgress, sendLog)
       if (result.vault.error || result.fab.error) {
         const combined = [result.vault.error, result.fab.error].filter(Boolean).join('; ')
         return { ok: false, error: combined }
-      }
-      // Manual sync just landed fresh image URLs (and other catalog fields)
-      // into the DB. Wipe Chromium's HTTP cache so the renderer's <img> tags
-      // actually fetch the new bytes — Fab / Epic often keep the URL stable
-      // while updating the file on the CDN, so without a cache flush the
-      // user would keep seeing the stale image even after the round-trip.
-      // Side effect: other cached responses re-fetch on next access; trivial
-      // cost for a user-initiated sync.
-      try {
-        await electronSession.defaultSession.clearCache()
-      } catch (err) {
-        // Cache flush is best-effort. A failure here doesn't invalidate the
-        // sync — the DB is already up to date, we just won't dodge the
-        // stale-image edge case until the user reloads the window.
-        sendLog(
-          `[warn] image cache flush failed: ${err instanceof Error ? err.message : String(err)}`
-        )
       }
       return { ok: true }
     } catch (err) {

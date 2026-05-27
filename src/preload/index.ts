@@ -22,6 +22,9 @@ export interface AccountSummary {
   accountId: string
   displayName: string
   active: boolean
+  /** True when the account row exists but tokens are gone — switcher
+   *  should route the click into the re-login flow instead of `switchTo`. */
+  signedOut: boolean
 }
 
 export interface AccountSwitchResult {

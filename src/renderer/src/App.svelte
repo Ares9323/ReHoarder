@@ -124,8 +124,10 @@
   }
 
   /** Debounce timer for `lastActiveTab` writes. Tab clicks shouldn't fire a
-   *  KV write each, especially when the user is shuffling tabs quickly. */
-  let lastActiveTabTimer: ReturnType<typeof setTimeout> | null = null
+   *  KV write each, especially when the user is shuffling tabs quickly.
+   *  `$state` only to silence Svelte 5's dev-mode `non_reactive_update`
+   *  warning; nothing in the template depends on this value. */
+  let lastActiveTabTimer = $state<ReturnType<typeof setTimeout> | null>(null)
 
   function persistActiveTab(k: TabKey): void {
     if (lastActiveTabTimer) clearTimeout(lastActiveTabTimer)

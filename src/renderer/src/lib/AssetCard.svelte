@@ -435,7 +435,7 @@
 
 <style>
   article {
-    background: #242424;
+    background: #232325;
     border: 1px solid #333;
     border-radius: 8px;
     overflow: hidden;

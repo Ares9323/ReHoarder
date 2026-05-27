@@ -632,7 +632,7 @@
   }
   .row-btn {
     width: 100%;
-    background: #242424;
+    background: #232325;
     border: 1px solid #2e2e2e;
     border-radius: 6px;
     padding: 0.5rem 0.75rem;

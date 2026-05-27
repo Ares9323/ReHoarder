@@ -6,7 +6,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.2.0] — 2026-05-27
 
-Preset system overhaul (provenance markers, per-entry user-override merge, renamed user files), curated `ares-recommended` bundle shipped for the three preset families, baseline policy for marketplace plugins with a custom hover popover that lists every plugin Restore would touch, an `Add to project` action on Local Vault asset entries, a startup-tab preference in Settings, and an HTTP image-cache flush at the end of every manual library sync so stale CDN-cached thumbnails actually refresh.
+Preset system overhaul (provenance markers, per-entry user-override merge, renamed user files), curated `ares-recommended` bundle shipped for the three preset families, baseline policy for marketplace plugins with a custom hover popover that lists every plugin Restore would touch, an `Add to project` action on Local Vault asset entries, a startup-tab preference in Settings, account-switcher re-link affordance for accounts whose tokens have expired, and a temporary skip of the Fab Other-library sync (endpoint returns 401, root cause under investigation).
 
 ### Added
 
@@ -32,7 +32,16 @@ Preset system overhaul (provenance markers, per-entry user-override merge, renam
 
 #### Startup behaviour
 - **Open this tab on startup** — new Settings dropdown in the Startup & behavior pane: `Last opened` (default; remembers the tab the user closed the app on) or any of the six content tabs (`Assets`, `Projects`, `Engines`, `Vault`, `Freebies`, `Downloads`). `Settings` is intentionally excluded as a startup destination. App startup restores the chosen tab post-auth; tab changes are debounced and persisted as `lastActiveTab` for the `last-opened` mode. `SettingsStore.saveAll` now merges the partial payload onto the currently-stored settings instead of treating it as a full replace, so the narrow `{lastActiveTab: …}` writes from the renderer don't reset every other field to defaults.
-- **HTTP image-cache flush on manual sync** — every `library:sync` IPC call now ends with a `session.defaultSession.clearCache()` so the renderer's `<img>` tags re-fetch their bytes after a sync. Fab / Epic often keep the asset image URL stable while updating the file on the CDN, which used to leave stale thumbnails sticky even after a full catalog refresh; now the cache eviction happens automatically as part of the user-initiated sync. Failure is treated as best-effort and logged to the sync log line stream.
+
+#### Accounts
+- **Account-switcher "re-link" affordance** — accounts whose refresh tokens are gone (decrypt failure on startup, manual clear, or refresh-grant rejection) are now flagged `signedOut: true` in `listAccounts` and surface in the switcher dropdown with a dimmed avatar/name plus a purple `re-link` pill. Clicking that row routes into the existing Add-account login flow (Epic OAuth code paste); the new tokens get re-bound to the same `accountId`, so the per-account library / bookmarks / downloads stay intact. Replaces the previous silent failure where the dropdown would error out with "Unknown or signed-out account: …" and no path to recovery.
+
+#### Sync
+- **Fab Other-library sync temporarily disabled** — `/i/library/search?source=acquired` started returning 401 across the board (suspected missing CSRF header on the request — same symptom as `/i/users/me/listings-states` in the freebies flow). Until that's confirmed and fixed, the Other-library pass is gated behind a `SKIP_FAB_OTHER_LIBRARY` const so users with mixed UE+Other libraries don't see the 401 on every manual sync. UE library sync is unaffected.
+- **Defensive cache flushes around manual sync** — `library:sync` IPC clears the Chromium HTTP response cache on the `persist:cf-warmup` partition at the start of every manual sync, and `FabClient.listLibrary` / `listOtherLibrary` append a per-call `_=<timestamp>` cache-bust query to the request URL. Both are safety nets against intermediate cache layers (Chromium session cache, CDN edge cache). They do NOT address the case where Fab's library endpoint itself serves stale `images[0].url` for assets whose listing was recently edited by the creator — that's a server-side data freshness limitation that needs a per-listing detail-endpoint refresh (planned for 0.3.0).
+
+#### Debug
+- **`debug:clear-library` is now account-scoped** — the IPC handler previously wiped every account's rows from `assets` / `asset_tags` / `sync_state`, which made re-testing on one account also nuke any other authenticated account's library. Now scoped to `session.getState().accountId` when authenticated; falls back to the original "wipe everything" behaviour only when there's no active account (anonymous mode).
 
 ### Changed
 

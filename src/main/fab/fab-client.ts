@@ -108,10 +108,17 @@ export class FabClient {
     cookieHeader: string,
     accountId: string
   ): AsyncGenerator<FabLibraryPage> {
+    // Per-call cache-bust query so any intermediate CDN / proxy along the
+    // path is forced to treat each sync as a unique request. Fab ignores
+    // unknown query params at the server. Note: Fab's library endpoint can
+    // still serve stale data from its own server-side cache (see release
+    // notes for 0.2.0 — per-listing detail refresh planned for 0.3.0).
+    const cacheBust = String(Date.now())
     let cursor: string | null = null
     do {
       const params = new URLSearchParams({ count: String(FAB_PAGE_SIZE) })
       if (cursor) params.set('cursor', cursor)
+      params.set('_', cacheBust)
 
       const url = `https://www.fab.com/e/accounts/${encodeURIComponent(accountId)}/ue/library?${params}`
       const response = await this.fetchImpl(url, {
@@ -147,6 +154,8 @@ export class FabClient {
     for (const fmt of FAB_OTHER_ASSET_FORMATS) {
       params.append('asset_formats', fmt)
     }
+    // Cache-bust the first-page request (same rationale as listLibrary).
+    params.set('_', String(Date.now()))
     let url: string | null = `https://www.fab.com/i/library/search?${params}`
     while (url !== null) {
       const response = await this.fetchImpl(url, {

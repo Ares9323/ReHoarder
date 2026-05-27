@@ -33,7 +33,7 @@
   .card {
     max-width: 640px;
     width: 100%;
-    background: #242424;
+    background: #232325;
     border: 1px solid #333;
     border-radius: 8px;
     padding: 1.75rem 2rem;

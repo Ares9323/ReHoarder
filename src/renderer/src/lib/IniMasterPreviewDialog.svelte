@@ -365,7 +365,7 @@
     text-align: right;
     user-select: none;
     padding-right: 0.4rem;
-    border-right: 1px solid #242424;
+    border-right: 1px solid #232325;
   }
   .text {
     margin: 0;

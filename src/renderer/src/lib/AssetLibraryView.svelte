@@ -622,7 +622,7 @@
 
   input[type='search'],
   select {
-    background: #242424;
+    background: #232325;
     color: #e0e0e0;
     border: 1px solid #444;
     border-radius: 4px;

@@ -277,7 +277,7 @@
   }
   .row:hover {
     border-color: #555;
-    background: #242424;
+    background: #232325;
   }
   .row.selected {
     border-color: #c084fc;

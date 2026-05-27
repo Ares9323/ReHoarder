@@ -2,6 +2,9 @@ interface AccountSummary {
   accountId: string
   displayName: string
   active: boolean
+  /** True when the row exists but tokens are gone — switcher routes the
+   *  click into the re-login flow instead of `switchTo`. */
+  signedOut: boolean
 }
 
 let accounts = $state<AccountSummary[]>([])

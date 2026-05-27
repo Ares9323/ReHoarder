@@ -18,6 +18,11 @@ export interface AccountSummary {
   displayName: string
   /** True for the currently active account (the one whose tokens back library queries). */
   active: boolean
+  /** True when the account row exists (so we still know the display name) but
+   *  the refresh token has been dropped (failed refresh, manual clear, encrypted
+   *  blob unreadable on startup). The switcher can't `switchTo` such an account
+   *  — instead it should route the click into the re-login flow. */
+  signedOut: boolean
 }
 
 /**
@@ -60,12 +65,16 @@ export class Session extends EventEmitter {
     return this.tokensByAccount.get(this.activeId)?.accessToken ?? null
   }
 
-  /** Snapshot of every account that has valid credentials (including the active one). */
+  /** Snapshot of every account known to the repo. Accounts whose tokens
+   *  are no longer loaded (refresh expired, decrypt failure, manually
+   *  cleared) are flagged `signedOut: true` instead of being hidden, so
+   *  the switcher can offer a re-login affordance. */
   listAccounts(): AccountSummary[] {
     return this.accountsRepo.list().map((a) => ({
       accountId: a.id,
       displayName: a.displayName,
-      active: a.id === this.activeId
+      active: a.id === this.activeId,
+      signedOut: !this.tokensByAccount.has(a.id)
     }))
   }
 

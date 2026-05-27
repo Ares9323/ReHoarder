@@ -665,7 +665,7 @@
     border-color: #c084fc;
   }
   .state {
-    background: #242424;
+    background: #232325;
     border: 1px solid #333;
     border-radius: 8px;
     padding: 2rem;
@@ -679,7 +679,7 @@
   table {
     width: 100%;
     border-collapse: collapse;
-    background: #242424;
+    background: #232325;
     border: 1px solid #333;
     border-radius: 8px;
     overflow: hidden;

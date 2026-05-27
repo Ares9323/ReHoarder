@@ -334,7 +334,7 @@
     color: #c084fc;
   }
   .state {
-    background: #242424;
+    background: #232325;
     border: 1px solid #333;
     border-radius: 8px;
     padding: 2rem;
@@ -350,7 +350,7 @@
     gap: 0.6rem;
   }
   .row {
-    background: #242424;
+    background: #232325;
     border: 1px solid #333;
     border-radius: 8px;
     padding: 0.75rem 0.95rem;

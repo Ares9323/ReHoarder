@@ -35,7 +35,12 @@ describe('FabClient.listLibrary', () => {
     expect(pages).toHaveLength(1)
     expect(pages[0]).toHaveLength(1)
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('https://www.fab.com/e/accounts/acct-1/ue/library?count=100')
+    // URL carries a per-call cache-bust timestamp (`&_=<ms>`) so CDN caches
+    // can't pin stale `images[0].url`. Match the stable prefix and assert
+    // the bust is a numeric value rather than nailing the exact string.
+    expect(url).toMatch(
+      /^https:\/\/www\.fab\.com\/e\/accounts\/acct-1\/ue\/library\?count=100&_=\d+$/
+    )
     expect(init.headers['Authorization']).toBe('bearer the-bearer')
     expect(init.headers['Cookie']).toBe('cookies=here')
   })

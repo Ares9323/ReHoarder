@@ -3,6 +3,21 @@ import type { VaultClient } from '../vault/vault-client'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
 import type { FabSessionClient } from '../fab/fab-session'
 import type { FabClient } from '../fab/fab-client'
+
+/**
+ * TEMPORARY (0.2.0): `fab.com/i/library/search` (the Fab "Other library" — non-UE
+ * assets) is returning 401 on every authenticated request we make to it, even
+ * though the same session.cookieHeader works fine for `/e/accounts/.../ue/library`.
+ * Suspected root cause is a missing CSRF header or a Fab API change; until we
+ * confirm the fix, skip the entire Other-library sync pass so we don't waste a
+ * round-trip and pollute the log with the error. The UE library is the only
+ * source for ReHoarder's primary use case anyway — non-UE assets will simply
+ * stop being mirrored locally until this is re-enabled.
+ *
+ * Flip back to `false` once the 401 is fixed (see `fab-client.ts:listOtherLibrary`).
+ */
+const SKIP_FAB_OTHER_LIBRARY = true
+
 import {
   normalizeVaultAsset,
   normalizeFabAsset,
@@ -206,6 +221,9 @@ export class Sync {
         onLog(`Fab: skipped ${skipped} UE items with missing assetId`)
       }
 
+      if (SKIP_FAB_OTHER_LIBRARY) {
+        onLog('Fab: Other library sync skipped (temporarily disabled — endpoint returns 401)')
+      } else {
       onLog('Fab: fetching Other library (non-UE assets)…')
       let otherPageNum = 0
       let otherSkipped = 0
@@ -244,6 +262,7 @@ export class Sync {
         onLog(`Fab: skipped ${otherDup} Other listings already covered by UE library`)
       }
       onLog(`Fab: done. ${result.fab.persisted} assets persisted.`)
+      } // close `else` branch of SKIP_FAB_OTHER_LIBRARY
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       result.fab.error = msg

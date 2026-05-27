@@ -493,25 +493,35 @@ function clearLibrary(
   sources?: Array<'vault' | 'fab' | 'legacy'>
 ): DebugClearLibraryResult {
   const db = deps.assetsRepo.db
+  // Scope the wipe to the currently active Epic account so a clear-library
+  // call from one account doesn't blow away another account's library too.
+  // Falls back to "no scope" only when there's no active account (anonymous /
+  // not signed in) — in that mode there's nothing meaningful to scope to.
+  const activeId = deps.session.getState().status === 'authenticated'
+    ? (deps.session.getState() as { accountId: string }).accountId
+    : null
+  const accountFilter = activeId !== null ? ' AND account_id = ?' : ''
+  const accountArgs: unknown[] = activeId !== null ? [activeId] : []
   const txn = db.transaction(() => {
     let assetsRemoved = 0
     let tagsRemoved = 0
     let syncStateRowsReset = 0
     if (!sources || sources.length === 0) {
-      tagsRemoved = (db.prepare('DELETE FROM asset_tags').run().changes ?? 0) as number
-      assetsRemoved = (db.prepare('DELETE FROM assets').run().changes ?? 0) as number
-      syncStateRowsReset = (db.prepare('DELETE FROM sync_state').run().changes ?? 0) as number
+      const where = activeId !== null ? ' WHERE account_id = ?' : ''
+      tagsRemoved = (db.prepare(`DELETE FROM asset_tags${where}`).run(...accountArgs).changes ?? 0) as number
+      assetsRemoved = (db.prepare(`DELETE FROM assets${where}`).run(...accountArgs).changes ?? 0) as number
+      syncStateRowsReset = (db.prepare(`DELETE FROM sync_state${where}`).run(...accountArgs).changes ?? 0) as number
     } else {
       const placeholders = sources.map(() => '?').join(',')
       tagsRemoved = (db
-        .prepare(`DELETE FROM asset_tags WHERE source IN (${placeholders})`)
-        .run(...sources).changes ?? 0) as number
+        .prepare(`DELETE FROM asset_tags WHERE source IN (${placeholders})${accountFilter}`)
+        .run(...sources, ...accountArgs).changes ?? 0) as number
       assetsRemoved = (db
-        .prepare(`DELETE FROM assets WHERE source IN (${placeholders})`)
-        .run(...sources).changes ?? 0) as number
+        .prepare(`DELETE FROM assets WHERE source IN (${placeholders})${accountFilter}`)
+        .run(...sources, ...accountArgs).changes ?? 0) as number
       syncStateRowsReset = (db
-        .prepare(`DELETE FROM sync_state WHERE source IN (${placeholders})`)
-        .run(...sources).changes ?? 0) as number
+        .prepare(`DELETE FROM sync_state WHERE source IN (${placeholders})${accountFilter}`)
+        .run(...sources, ...accountArgs).changes ?? 0) as number
     }
     return { assetsRemoved, tagsRemoved, syncStateRowsReset }
   })
@@ -519,7 +529,7 @@ function clearLibrary(
   console.warn(
     `[debug] clear-library: removed ${result.assetsRemoved} assets, ` +
       `${result.tagsRemoved} tags, ${result.syncStateRowsReset} sync_state rows ` +
-      `(sources=${sources?.join(',') ?? 'ALL'})`
+      `(sources=${sources?.join(',') ?? 'ALL'}, account=${activeId ?? 'ALL'})`
   )
   return { ok: true, ...result }
 }
