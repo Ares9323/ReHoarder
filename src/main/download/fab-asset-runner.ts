@@ -1,9 +1,8 @@
-import * as path from 'node:path'
 import type { AssetsRepo } from '../db/assets-repo'
 import type { Session } from '../auth/session'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
 import type { FabSessionClient } from '../fab/fab-session'
-import { downloadAsset, planAssetDownload } from './download-orchestrator'
+import { downloadAsset, planAssetDownload, resolveReportedAssetDir } from './download-orchestrator'
 import { EPIC_USER_AGENT } from '../vault/user-agent'
 import {
   fetchManifestLocator,
@@ -149,7 +148,15 @@ export async function runFabAssetDownload(
   const bytesTotal = plan.bytesTotal
   const filesTotal = plan.filesTotal
   const subdir = opts.assetSubdir ?? artifactId
-  const assetDir = path.join(opts.vaultDir, subdir.replace(/[/\\:*?"<>|]/g, '_'))
+  // For plugin installs (no `data/` wrapper) this resolves to the folder that
+  // holds the `.uplugin`, so the persisted `destDir` / "Open" button lands on
+  // the plugin folder instead of the engine root or the project's Plugins dir.
+  const assetDir = resolveReportedAssetDir(plan.filesToDownload, {
+    vaultDir: opts.vaultDir,
+    subdir,
+    noWrapDataDir: opts.noWrapDataDir,
+    pathStripPrefix: opts.pathStripPrefix
+  })
   const buildVersion = manifest.meta.buildVersion
   onStart?.({ artifactId, buildVersion, bytesTotal, filesTotal, assetDir })
 

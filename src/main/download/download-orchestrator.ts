@@ -30,6 +30,36 @@ function stripPrefix(filePath: string, prefix: string | undefined): string {
   return filePath
 }
 
+/**
+ * Compute the folder ReHoarder persists as a download's `destDir` — the path
+ * the Downloads-tab "Open" button reveals.
+ *
+ * For a normal (wrapped) asset that's just `<vaultDir>/<subdir>`, the folder
+ * holding `data/` and `cache/`. But plugin installs (engine-route /
+ * project-install) write the manifest's file tree straight onto disk with no
+ * `data/` wrapper, so `<vaultDir>/<subdir>` collapses onto the engine root (or
+ * the project's `Plugins` parent) — too high. For those we walk the file list,
+ * find the `.uplugin`, and return the folder that actually contains it. When a
+ * plugin nests sub-plugins (each with their own `.uplugin`) we pick the
+ * shallowest one, i.e. the plugin root.
+ */
+export function resolveReportedAssetDir(
+  files: ReadonlyArray<{ filename: string }>,
+  opts: { vaultDir: string; subdir: string; noWrapDataDir?: boolean; pathStripPrefix?: string }
+): string {
+  const subdir = opts.subdir === '' ? '' : sanitizeSubdir(opts.subdir)
+  const baseDir = subdir === '' ? opts.vaultDir : path.join(opts.vaultDir, subdir)
+  if (!opts.noWrapDataDir) return baseDir
+  // No-wrap install: files land straight under `baseDir`. Anchor on the
+  // shallowest `.uplugin` so "Open" reveals the plugin folder, not its parent.
+  const upluginRel = files
+    .filter((f) => /\.uplugin$/i.test(f.filename))
+    .map((f) => stripPrefix(f.filename, opts.pathStripPrefix))
+    .sort((a, b) => a.replace(/\\/g, '/').split('/').length - b.replace(/\\/g, '/').split('/').length)[0]
+  if (!upluginRel) return baseDir
+  return path.dirname(path.join(baseDir, upluginRel))
+}
+
 export interface AssetDownloadPlan {
   /** Manifest entries that will actually be assembled to disk, in manifest order. */
   filesToDownload: FileManifestEntry[]
