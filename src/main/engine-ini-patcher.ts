@@ -56,7 +56,11 @@ export interface PatchResult {
 }
 
 const DIRECTIVE_PREFIX = '@ReHoarder:'
-const SENTINEL_RE = /^\s*;\s*===\s*Patched by ReHoarder/
+// Our own sentinel, and the legacy one written by the predecessor tool
+// (UnrealPluginToggler). A file authored by either must be recognised as
+// "already patched" so its stale header is stripped before re-patching instead
+// of being buried in the merged output.
+const SENTINEL_RE = /^\s*;\s*===\s*Patched by (?:ReHoarder|UnrealPluginToggler)\b/
 
 // ---------------- Sentinel ----------------
 
@@ -81,10 +85,15 @@ export function stripSentinelHeader(content: string): string {
   const out: string[] = []
   let dropped = false
   for (const line of lines) {
-    if (!dropped && SENTINEL_RE.test(line)) {
+    // Drop every sentinel line (ours or the legacy tool's), wherever it sits —
+    // not just the first — so a file that carries both a fresh ReHoarder header
+    // and a stale UnrealPluginToggler one ends up with neither buried inside.
+    if (SENTINEL_RE.test(line)) {
       dropped = true
       continue
     }
+    // Swallow the blank separator(s) left at the very top once a sentinel has
+    // been removed, so we don't leave a dangling leading blank line.
     if (dropped && out.length === 0 && line.trim() === '') continue
     out.push(line)
   }
@@ -485,6 +494,20 @@ function removeKeyFromSection(section: IniSection, key: string): number {
       section.lines.splice(i, 1)
       firstRemoved = i
     }
+  }
+  if (firstRemoved < 0) return firstRemoved
+  // Symmetrically with extractValueBlocks (which folds the leading comment /
+  // directive block into the value block), drop the contiguous comment /
+  // directive lines that precede the first removed value. Otherwise re-patching
+  // re-inserts the master block — comments included — on top of the comments
+  // already present, duplicating them on every pass.
+  while (
+    firstRemoved > 0 &&
+    (section.lines[firstRemoved - 1].kind === 'comment' ||
+      section.lines[firstRemoved - 1].kind === 'directive')
+  ) {
+    section.lines.splice(firstRemoved - 1, 1)
+    firstRemoved--
   }
   return firstRemoved
 }

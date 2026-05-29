@@ -4,6 +4,15 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-05-29
+
+Re-patch hygiene for the INI master patcher: idempotent comment handling and removal of the legacy UnrealPluginToggler sentinel.
+
+### Fixed
+
+- **Comment blocks no longer duplicate when re-patching** — `removeKeyFromSection` now drops the contiguous comment / directive lines that precede a multi-value key alongside the value lines, mirroring how `extractValueBlocks` folds that leading block into the value block. Previously every re-patch re-inserted the master's comment block on top of the comments already present, so documentation lines above arrays like `UserDefinedChords` doubled on each apply.
+- **Legacy `UnrealPluginToggler` sentinel is now stripped on patch** — `hasSentinel` recognises the predecessor tool's `; === Patched by UnrealPluginToggler … ===` header, so the strip path actually fires for files only the old tool had touched, and `stripSentinelHeader` removes *every* sentinel line rather than just the first. A stale legacy header can no longer survive buried below a fresh ReHoarder one.
+
 ## [0.2.1] — 2026-05-28
 
 On-demand thumbnail refresh from Fab's listing-detail endpoint, surviving subsequent syncs.
