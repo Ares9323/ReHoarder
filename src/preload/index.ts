@@ -798,12 +798,18 @@ const api = {
     sync: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('library:sync'),
     listFreebies: (opts: { force?: boolean } = {}): Promise<FreebiesResult> =>
       ipcRenderer.invoke('library:list-freebies', opts),
-    /** Startup probe: fetches freebies (cheap), and if any are unclaimed AND
-     *  the throttle says "due", kicks a full library sync in the background.
-     *  Renderer just consumes the returned reason for UX feedback; sync
-     *  progress arrives via the existing `library:sync-progress` channel. */
+    setFreebiesClaimed: (
+      uids: string[],
+      claimed: boolean
+    ): Promise<{ ok: boolean; error?: string; claimedUids?: string[] }> =>
+      ipcRenderer.invoke('library:set-freebies-claimed', uids, claimed),
+    /** Startup probe: within 7 days of the last check for this account,
+     *  reports the count off the last-seen set with no network call;
+     *  otherwise fetches fresh and diffs against the last-seen uids. No
+     *  library sync is kicked; the renderer just consumes the reason and
+     *  count for UX feedback (toast / badge). */
     freebiesAutoCheck: (): Promise<{
-      reason: 'synced' | 'within-cap' | 'all-claimed' | 'not-authenticated'
+      reason: 'changed' | 'unchanged' | 'within-cap' | 'not-authenticated'
       unclaimedCount: number
     }> => ipcRenderer.invoke('library:freebies-auto-check'),
     onSyncProgress: (handler: (p: SyncProgress) => void): (() => void) => {

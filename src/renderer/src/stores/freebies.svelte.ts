@@ -18,6 +18,7 @@ let fetchedAt = $state<number | null>(null)
 let loading = $state(false)
 let loaded = $state(false)
 let error = $state<string | null>(null)
+let claimError = $state<string | null>(null)
 
 async function fetchOnce(force = false): Promise<void> {
   loading = true
@@ -36,6 +37,13 @@ async function fetchOnce(force = false): Promise<void> {
   } finally {
     loading = false
   }
+}
+
+/** Overwrite each freebie's `claimed` flag from the authoritative set the main
+ *  process returned, so the optimistic flip and the KV truth agree. */
+function reconcileClaimed(claimedUids: string[]): void {
+  const set = new Set(claimedUids)
+  freebies = freebies.map((f) => ({ ...f, claimed: set.has(f.uid) }))
 }
 
 /**
@@ -70,6 +78,49 @@ export const freebiesStore = {
   async refresh(): Promise<void> {
     await fetchOnce(true)
   },
+  get claimError(): string | null {
+    return claimError
+  },
+  /** Toggle a single freebie's claimed flag. Optimistic: flips the local flag
+   *  first so the badge/card react instantly, then reconciles from the KV set
+   *  the main process returns. Rolls back on failure. */
+  async markClaimed(uid: string, claimed: boolean): Promise<void> {
+    claimError = null
+    const prev = freebies
+    freebies = freebies.map((f) => (f.uid === uid ? { ...f, claimed } : f))
+    try {
+      const r = await window.api.library.setFreebiesClaimed([uid], claimed)
+      if (r.ok && r.claimedUids) {
+        reconcileClaimed(r.claimedUids)
+      } else {
+        freebies = prev
+        claimError = r.error ?? 'Failed to update claimed state'
+      }
+    } catch (err) {
+      freebies = prev
+      claimError = err instanceof Error ? err.message : String(err)
+    }
+  },
+  /** Mark every currently-listed freebie as claimed in one call. */
+  async markAllClaimed(): Promise<void> {
+    claimError = null
+    const prev = freebies
+    const uids = freebies.map((f) => f.uid).filter((u) => u.length > 0)
+    if (uids.length === 0) return
+    freebies = freebies.map((f) => ({ ...f, claimed: true }))
+    try {
+      const r = await window.api.library.setFreebiesClaimed(uids, true)
+      if (r.ok && r.claimedUids) {
+        reconcileClaimed(r.claimedUids)
+      } else {
+        freebies = prev
+        claimError = r.error ?? 'Failed to update claimed state'
+      }
+    } catch (err) {
+      freebies = prev
+      claimError = err instanceof Error ? err.message : String(err)
+    }
+  },
   /** Reset cached state so the next `ensureLoaded()` re-fetches against the
    *  new active account. Used by App.svelte on account switch — the existing
    *  list belongs to whoever was active a moment ago. */
@@ -79,5 +130,6 @@ export const freebiesStore = {
     loaded = false
     loading = false
     error = null
+    claimError = null
   }
 }

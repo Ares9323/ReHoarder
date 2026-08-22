@@ -7,6 +7,7 @@
   const error = $derived(freebiesStore.error)
   const fetchedAt = $derived(freebiesStore.fetchedAt)
   const unclaimed = $derived(freebiesStore.unclaimedCount)
+  const claimError = $derived(freebiesStore.claimError)
 
   onMount(() => {
     void freebiesStore.ensureLoaded()
@@ -42,11 +43,24 @@
           <span class="hint">checked at {formatTime(fetchedAt)}</span>
         {/if}
       {/if}
+      <button
+        type="button"
+        class="markall"
+        onclick={() => freebiesStore.markAllClaimed()}
+        disabled={loading || unclaimed === 0}
+        title="Mark every listed freebie as already claimed"
+      >
+        Mark all as claimed
+      </button>
       <button type="button" onclick={() => freebiesStore.refresh()} disabled={loading}>
         {loading ? 'Loading…' : 'Refresh'}
       </button>
     </div>
   </header>
+
+  {#if claimError}
+    <div class="state err">{claimError}</div>
+  {/if}
 
   {#if loading && freebies.length === 0}
     <div class="state">Loading freebies…</div>
@@ -77,6 +91,13 @@
             <h3 class="title" title={f.title}>{f.title}</h3>
             <button type="button" class="claim" onclick={() => claimOnFab(f.productUrl)}>
               {f.claimed === true ? 'Open on Fab' : 'Claim on Fab'}
+            </button>
+            <button
+              type="button"
+              class="mark"
+              onclick={() => freebiesStore.markClaimed(f.uid, f.claimed !== true)}
+            >
+              {f.claimed === true ? 'Claimed ✓ (undo)' : 'Mark as claimed'}
             </button>
           </div>
         </article>
@@ -250,5 +271,38 @@
   }
   .claim:hover:not(:disabled) {
     filter: brightness(1.08);
+  }
+  .stats .markall {
+    margin-left: 0.5rem;
+    background: transparent;
+    color: #c0c0c0;
+    border: 1px solid #444;
+    border-radius: 4px;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.75rem;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .stats .markall:hover:not(:disabled) {
+    color: #fff;
+    border-color: #666;
+  }
+  .stats .markall:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .mark {
+    background: transparent;
+    color: #b0b0b0;
+    border: 1px solid #444;
+    border-radius: 5px;
+    padding: 0.35rem 0.7rem;
+    font-size: 0.75rem;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .mark:hover {
+    color: #fff;
+    border-color: #666;
   }
 </style>

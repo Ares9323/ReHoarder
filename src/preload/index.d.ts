@@ -118,8 +118,12 @@ export interface LibraryApi {
   setBookmarked(source: AssetSource, sourceId: string, bookmarked: boolean): Promise<void>
   sync(): Promise<{ ok: boolean; error?: string }>
   listFreebies(opts?: { force?: boolean }): Promise<FreebiesResult>
+  setFreebiesClaimed(
+    uids: string[],
+    claimed: boolean
+  ): Promise<{ ok: boolean; error?: string; claimedUids?: string[] }>
   freebiesAutoCheck(): Promise<{
-    reason: 'synced' | 'within-cap' | 'all-claimed' | 'not-authenticated'
+    reason: 'changed' | 'unchanged' | 'within-cap' | 'not-authenticated'
     unclaimedCount: number
   }>
   onSyncProgress(handler: (p: SyncProgress) => void): () => void

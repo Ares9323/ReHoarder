@@ -8,8 +8,9 @@ import { LAUNCHER_UA } from '../http/user-agents'
  * via the `[key: string]` index signature.
  */
 export interface FabFreebie {
-  /** Fab listing uid — primary key for `listings-states` lookups and for the
-   *  productUrl construction. */
+  /** Fab listing uid: the freebie's identity, matched against the
+   *  per-account `freebies.claimedUids` KV set and used for the productUrl
+   *  construction. */
   uid: string
   title: string
   /** A representative thumbnail URL when one is known. `null` when nothing
@@ -18,20 +19,10 @@ export interface FabFreebie {
   /** Direct deep-link to the listing on fab.com (we open this in the user's
    *  default browser for the actual claim flow). */
   productUrl: string
-  /** True iff `/i/users/me/listings-states` reports the listing as already
-   *  added to the user's library. Undefined while the second call hasn't
-   *  resolved (the caller may render a "checking…" pill in the meantime). */
+  /** True iff the user manually marked this freebie as already claimed. Set by
+   *  the IPC layer from the per-account `freebies.claimedUids` KV set, never by
+   *  the network. Undefined until that resolution runs. */
   claimed?: boolean
-  [key: string]: unknown
-}
-
-interface RawListingState {
-  listingId?: string
-  uid?: string
-  state?: string
-  isOwned?: boolean
-  owned?: boolean
-  isClaimed?: boolean
   [key: string]: unknown
 }
 
@@ -83,17 +74,6 @@ function extractImageUrl(raw: Record<string, unknown>): string | null {
 }
 
 /**
- * Pull the `fab_csrftoken` value out of the cookie header so we can echo it
- * back in the `X-CSRFToken` request header — Django enforces double-submit
- * cookie+header for state-affecting routes, and some Fab `/me/` endpoints
- * (notably `listings-states`) reject the request as 401 without it.
- */
-function extractCsrfToken(cookieHeader: string): string | null {
-  const match = /(?:^|;\s*)fab_csrftoken=([^;]+)/.exec(cookieHeader)
-  return match ? decodeURIComponent(match[1]) : null
-}
-
-/**
  * Read an entry from the response in a way that doesn't assume a single
  * envelope. Fab's blade endpoints have wrapped listings in `results[]`,
  * `tiles[]`, `items[]` and (less often) at the top level in the past;
@@ -122,9 +102,7 @@ export class FabFreebiesClient {
    * Fetch the current month's freebies. Hits Fab's internal blade endpoint;
    * Cloudflare clearance + a logged-in Fab session cookie are both
    * prerequisites — pass the same `cookieHeader` the rest of the Fab client
-   * uses. The second `listings-states` call enriches each entry with the
-   * `claimed` flag; if it fails (e.g. the user isn't signed in to Fab) the
-   * freebies still come back, just without claim status.
+   * uses.
    */
   async listFreebies(cookieHeader: string): Promise<FabFreebie[]> {
     const bladeUrl = 'https://www.fab.com/i/blades/free_content_blade'
@@ -137,27 +115,6 @@ export class FabFreebiesClient {
     }
     const raw = (await response.json()) as unknown
     const tiles = pickListings(raw)
-    if (tiles.length > 0) {
-      const firstListing =
-        tiles[0].listing && typeof tiles[0].listing === 'object'
-          ? (tiles[0].listing as Record<string, unknown>)
-          : null
-      if (firstListing) {
-        console.warn('[freebies] first tile.listing keys:', Object.keys(firstListing))
-        // Dump candidate id fields so we can confirm which one matches
-        // `customAttributes.ListingIdentifier` stored on owned assets.
-        const ids = {
-          'listing.uid': firstListing.uid,
-          'listing.id': firstListing.id,
-          'listing.listingId': firstListing.listingId,
-          'listing.legacyAssetId': firstListing.legacyAssetId,
-          'listing.legacyItemId': firstListing.legacyItemId,
-          'tile.uid': tiles[0].uid,
-          'tile.url': tiles[0].url
-        }
-        console.warn('[freebies] candidate id fields:', ids)
-      }
-    }
     const freebies: FabFreebie[] = tiles.map((tile) => {
       // Each tile wraps a `listing` object that carries the real metadata
       // (title, images, slug, …). The tile's own top-level fields are mostly
@@ -200,88 +157,6 @@ export class FabFreebiesClient {
       }
     })
 
-    // Enrich with claim state. We only call this when we have at least one
-    // listing — an empty `listing_ids` query just wastes a round-trip.
-    if (freebies.length === 0) return freebies
-    try {
-      const stateMap = await this.fetchListingStates(
-        cookieHeader,
-        freebies.map((f) => f.uid).filter((u) => u !== '')
-      )
-      for (const f of freebies) {
-        const st = stateMap.get(f.uid)
-        if (st !== undefined) f.claimed = st
-      }
-    } catch (err) {
-      // Non-fatal — keep the list, just without claim flags.
-      console.warn('[freebies] listings-states enrichment failed:', err)
-    }
     return freebies
   }
-
-  /**
-   * Fetch claim state for a batch of listing ids. Returns a Map keyed by
-   * listing uid → `true` when the user already owns the listing.
-   */
-  async fetchListingStates(
-    cookieHeader: string,
-    listingIds: string[]
-  ): Promise<Map<string, boolean>> {
-    if (listingIds.length === 0) return new Map()
-    const params = new URLSearchParams()
-    for (const id of listingIds) params.append('listing_ids', id)
-    const url = `https://www.fab.com/i/users/me/listings-states?${params}`
-    const headers: Record<string, string> = FREEBIE_HEADERS(cookieHeader)
-    const csrf = extractCsrfToken(cookieHeader)
-    if (csrf) headers['X-CSRFToken'] = csrf
-    const response = await this.fetchImpl(url, { method: 'GET', headers })
-    if (!response.ok) {
-      // Dump the body to make 401/403 diagnoses concrete — Fab's `/me/`
-      // endpoints often respond with a JSON error payload that tells us
-      // exactly why (CSRF missing, session expired, anon user, etc.).
-      let body = ''
-      try {
-        body = (await response.text()).slice(0, 300)
-      } catch {
-        /* ignore */
-      }
-      throw new Error(
-        `Fab listings-states returned ${response.status}${body ? `: ${body}` : ''}`
-      )
-    }
-    const raw = (await response.json()) as unknown
-    const out = new Map<string, boolean>()
-    // Two shapes seen in the wild:
-    //   1. `{ results: [{ listingId, state: "owned" }, ...] }`
-    //   2. `{ <uid>: { isOwned: true }, ... }` — keyed object
-    if (raw && typeof raw === 'object') {
-      const obj = raw as Record<string, unknown>
-      const results = pickListings(obj) as RawListingState[]
-      if (results.length > 0) {
-        for (const r of results) {
-          const id = r.listingId ?? r.uid
-          if (typeof id !== 'string') continue
-          out.set(id, isOwnedFlag(r))
-        }
-        return out
-      }
-      // Fallback to the object-keyed shape.
-      for (const [key, val] of Object.entries(obj)) {
-        if (val && typeof val === 'object') {
-          out.set(key, isOwnedFlag(val as RawListingState))
-        }
-      }
-    }
-    return out
-  }
-}
-
-function isOwnedFlag(r: RawListingState): boolean {
-  if (typeof r.isOwned === 'boolean') return r.isOwned
-  if (typeof r.owned === 'boolean') return r.owned
-  if (typeof r.isClaimed === 'boolean') return r.isClaimed
-  if (typeof r.state === 'string') {
-    return ['owned', 'claimed', 'acquired'].includes(r.state.toLowerCase())
-  }
-  return false
 }

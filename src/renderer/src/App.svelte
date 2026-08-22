@@ -78,12 +78,13 @@
   }
 
   /**
-   * On launch, ask the main process to do the cheap freebies fetch and
-   * decide — based on a weekly throttle + Tuesday-window heuristic +
-   * "did the UID set change" check — whether to kick a full library sync
-   * in the background. The fetch updates the renderer cache so the badge
-   * is correct either way. When the user has opted into the popup AND
-   * there are still-unclaimed freebies, surface the non-blocking toast.
+   * On launch, ask the main process to do the cheap freebies probe: within
+   * 7 days of the last check for this account it reports the last-seen
+   * count with no network call, otherwise it fetches fresh and diffs
+   * against the last-seen uids. No library sync is kicked either way. The
+   * fetch updates the renderer cache so the badge is correct regardless of
+   * the reason. When the user has opted into the popup AND there are
+   * still-unclaimed freebies, surface the non-blocking toast.
    *
    * Failures stay silent; this is best-effort startup polish.
    */
@@ -91,8 +92,8 @@
     try {
       const probe = await window.api.library.freebiesAutoCheck()
       // Refresh the renderer-side store so the TabBar badge reflects the
-      // probe's cross-reference outcome (the main process just updated its
-      // 5-min cache).
+      // per-account claimed set the main process just resolved during the
+      // weekly change-diff check.
       freebiesStore.invalidate()
       await freebiesStore.ensureLoaded()
       const settings = await window.api.settings.get()
@@ -159,6 +160,16 @@
   $effect(() => {
     if (auth.state.status === 'authenticated') {
       void library.refresh()
+    }
+  })
+
+  // Marking freebies as claimed (single or "mark all") updates
+  // `freebiesStore.unclaimedCount` optimistically. Once nothing is left
+  // unclaimed, the startup toast is no longer relevant and should disappear
+  // even if the user never opened the Freebies tab.
+  $effect(() => {
+    if (freebiesStore.unclaimedCount === 0) {
+      freebiesToastCount = 0
     }
   })
 
