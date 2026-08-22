@@ -4,6 +4,30 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-08-22
+
+Local Vault gains project-kind handling, persistent per-asset metadata, and engine-version inference, so downloaded projects and orphan asset packs get first-class Create / Add-to-project actions. Freebies moves to a manual per-account claim model with a change-only weekly notification.
+
+### Added
+
+- **Project kind in the Vault**: `detectKind` recognises a `data/*.uproject` as a `project` (checked before plugin / asset), surfaced as a pill. Project rows offer **Create project** (default name taken from the `.uproject` basename) and **Add to project** (copies only `Content/`, with a warning that files outside `Content/` are not copied).
+- **Metadata sidecar**: a per-asset `.rehoarder.json` (`type: vault-asset`) persists source / sourceId / engineVersion / kind independent of the downloads DB. Written on download completion and backfilled during the scan, so hand-copied and orphaned assets keep working.
+- **Engine-version inference for orphans**: assets with no DB row get a version from the `.uproject` `EngineAssociation` (projects) or the `.uasset` / `.umap` header `FileVersionUE5` (asset packs), so the version guard runs even without library metadata.
+- **Custom-folder pickers**: both dialogs get a "Custom folder…" button (native picker) so the parent (Create) or the target project (Add) can live outside the configured roots. Add-to-project inspects the chosen folder for a `.uproject` and reads its `EngineAssociation`.
+- **Manual freebie claims**: per-card "Mark as claimed" toggle and a "Mark all as claimed" action, stored per account. Marking clears the tab badge and the startup toast.
+
+### Changed
+
+- **Add-to-project version guard is now target-newer-or-equal**: a project is compatible when its engine is the same as or newer than the asset's version (UE is forward-compatible). An unknown asset version is allowed with a warning instead of being blocked, and the backend re-checks the same rule. Add / Create operate on the vault folder path, so they no longer require a downloads row.
+- **Freebies claimed state is manual-only**: the flaky `/me/listings-states` auto-detection and the local ownership cross-reference were removed. A freebie is claimed only when the user marks it.
+- **Freebies auto-check** is a per-account 7-day cap plus a UID change-diff. It no longer kicks a full library sync, and the startup notification re-shows only when the free set changes.
+- **Vault auto-refresh** is app-lifetime: a download finishing while the Vault tab is closed still invalidates the cached scan, so reopening the tab shows the new asset without a manual Rescan.
+
+### Fixed
+
+- **Vault sidecar and the project marker no longer collide**: the vault sidecar carries a `type: vault-asset` discriminator, so a created-project `.rehoarder.json` marker inside a scanned folder is not misread as vault metadata.
+- **On-disk kind wins over a stale sidecar**: the scan prefers the freshly detected kind unless the disk read is inconclusive.
+
 ## [0.2.2] — 2026-05-29
 
 Re-patch hygiene for the INI master patcher: idempotent comment handling and removal of the legacy UnrealPluginToggler sentinel.
