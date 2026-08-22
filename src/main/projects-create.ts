@@ -10,6 +10,10 @@ export interface CreateProjectRequest {
   name: string
   /** Absolute path to the parent directory (must be inside one of `settings.projectPaths`). */
   parentDir: string
+  /** When set, used directly as the source asset folder (the folder
+   *  containing `data/`), skipping the `downloads`-row lookup entirely. For
+   *  orphan vault assets that have no matching download row. */
+  vaultAssetDir?: string
 }
 
 export interface CreateProjectResult {
@@ -34,28 +38,32 @@ export async function createProjectFromVault(
   repo: DownloadsRepo,
   req: CreateProjectRequest
 ): Promise<CreateProjectResult> {
-  const candidates = repo
-    .listAll()
-    .filter(
-      (r) =>
-        r.status === 'done' &&
-        r.source === req.source &&
-        r.sourceId === req.sourceId &&
-        (req.engineVersion === null || r.engineVersion === req.engineVersion) &&
-        r.destDir !== null
-    )
-    .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))
+  let assetDir: string
+  if (req.vaultAssetDir) {
+    assetDir = req.vaultAssetDir
+  } else {
+    const candidates = repo
+      .listAll()
+      .filter(
+        (r) =>
+          r.status === 'done' &&
+          r.source === req.source &&
+          r.sourceId === req.sourceId &&
+          (req.engineVersion === null || r.engineVersion === req.engineVersion) &&
+          r.destDir !== null
+      )
+      .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))
 
-  if (candidates.length === 0) {
-    return {
-      ok: false,
-      error:
-        `No completed download in the local vault for ${req.source}/${req.sourceId}` +
-        (req.engineVersion ? ` (engine ${req.engineVersion})` : '')
+    if (candidates.length === 0) {
+      return {
+        ok: false,
+        error:
+          `No completed download in the local vault for ${req.source}/${req.sourceId}` +
+          (req.engineVersion ? ` (engine ${req.engineVersion})` : '')
+      }
     }
+    assetDir = candidates[0].destDir as string
   }
-  const row = candidates[0]
-  const assetDir = row.destDir as string
 
   const wrappedDataDir = path.join(assetDir, 'data')
   let sourceRoot: string
@@ -125,12 +133,14 @@ export async function createProjectFromVault(
   // Stamp a `.rehoarder.json` next to the .uproject so the Projects scanner
   // can later cross-reference back to the source asset (and pull the thumbnail
   // out of `assets.image_url`). Non-fatal: a project without the marker still
-  // works, it just won't show a thumbnail.
+  // works, it just won't show a thumbnail. Orphan vault assets (materialised
+  // via `vaultAssetDir`) have no meaningful Fab identity, so the marker omits
+  // it rather than writing whatever placeholder the caller sent.
   try {
     const marker = {
       version: 1,
-      source: req.source,
-      sourceId: req.sourceId,
+      source: req.vaultAssetDir ? null : req.source,
+      sourceId: req.vaultAssetDir ? null : req.sourceId,
       engineVersion: req.engineVersion,
       createdAt: Date.now()
     }

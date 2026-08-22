@@ -3,6 +3,7 @@ import { promises as fsp } from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { listLocalVault } from './vault-local'
+import { SIDECAR_FILENAME } from './vault-sidecar'
 
 /**
  * Spin up a throwaway directory layout mirroring what the chunk assembler
@@ -21,7 +22,7 @@ afterEach(async () => {
 
 async function seedEntry(
   name: string,
-  layout: 'asset' | 'asset-with-config' | 'asset-with-platforms' | 'plugin' | 'plugin-with-content' | 'empty' | 'no-data'
+  layout: 'asset' | 'asset-with-config' | 'asset-with-platforms' | 'plugin' | 'plugin-with-content' | 'project' | 'project-no-content' | 'empty' | 'no-data'
 ): Promise<void> {
   const entry = path.join(root, name)
   await fsp.mkdir(entry, { recursive: true })
@@ -64,6 +65,18 @@ async function seedEntry(
       await fsp.writeFile(path.join(dataDir, 'Content', 'Demo', 'demo.uasset'), 'x')
       break
     }
+    case 'project': {
+      // A real COMPLETE_PROJECT: a `.uproject` at the top of data/ next to Content/.
+      await fsp.writeFile(path.join(dataDir, 'BigOffice.uproject'), '{ "EngineAssociation": "5.7" }')
+      await fsp.mkdir(path.join(dataDir, 'Content', 'Maps'), { recursive: true })
+      await fsp.writeFile(path.join(dataDir, 'Content', 'Maps', 'Office.umap'), 'x')
+      break
+    }
+    case 'project-no-content': {
+      // A `.uproject` with no sibling Content/ still counts as a project.
+      await fsp.writeFile(path.join(dataDir, 'BareProject.uproject'), '{ "EngineAssociation": "5.7" }')
+      break
+    }
     case 'empty': {
       // `data/` exists but has no recognisable children.
       break
@@ -104,6 +117,26 @@ describe('listLocalVault — kind detection', () => {
     expect(entries[0].kind).toBe('plugin')
   })
 
+  it('classifies a .uproject payload as project', async () => {
+    await seedEntry('BigOffice', 'project')
+    const entries = await listLocalVault([root])
+    expect(entries[0].kind).toBe('project')
+    expect(entries[0].hasData).toBe(true)
+  })
+
+  it('classifies a .uproject with no sibling Content as project', async () => {
+    await seedEntry('BareProject', 'project-no-content')
+    const entries = await listLocalVault([root])
+    expect(entries[0].kind).toBe('project')
+  })
+
+  it('prefers project over asset when both .uproject and Content are present', async () => {
+    await seedEntry('BigOffice', 'project')
+    const entries = await listLocalVault([root])
+    // 'project' seeds both a .uproject and Content/ — the .uproject wins.
+    expect(entries[0].kind).toBe('project')
+  })
+
   it('reports unknown for a data/ folder with neither Content nor Engine', async () => {
     await seedEntry('Empty', 'empty')
     const entries = await listLocalVault([root])
@@ -124,5 +157,35 @@ describe('listLocalVault — kind detection', () => {
     expect(entries[0].source).toBeNull()
     expect(entries[0].sourceId).toBeNull()
     expect(entries[0].engineVersion).toBeNull()
+  })
+
+  it('resolves uprojectName to the .uproject base name for a project entry', async () => {
+    await seedEntry('Modularl09408fa4d0abV2', 'project')
+    const entries = await listLocalVault([root])
+    expect(entries[0].kind).toBe('project')
+    expect(entries[0].uprojectName).toBe('BigOffice')
+  })
+
+  it('leaves uprojectName null for a non-project (asset) entry', async () => {
+    await seedEntry('AssetPack', 'asset')
+    const entries = await listLocalVault([root])
+    expect(entries[0].kind).toBe('asset')
+    expect(entries[0].uprojectName).toBeNull()
+  })
+
+  it('excludes the .rehoarder.json sidecar from file count and size', async () => {
+    await seedEntry('AssetPack', 'asset')
+    const before = await listLocalVault([root])
+    const beforeCount = before[0].fileCount
+    const beforeBytes = before[0].totalBytes
+    // Drop a sidecar at the asset-folder top level (next to data/).
+    await fsp.writeFile(
+      path.join(root, 'AssetPack', SIDECAR_FILENAME),
+      JSON.stringify({ version: 1, kind: 'asset' }) + '\n',
+      'utf-8'
+    )
+    const after = await listLocalVault([root])
+    expect(after[0].fileCount).toBe(beforeCount)
+    expect(after[0].totalBytes).toBe(beforeBytes)
   })
 })

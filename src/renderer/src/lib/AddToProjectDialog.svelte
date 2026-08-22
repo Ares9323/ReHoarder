@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { isEngineCompatible } from '../../../shared/engine-version'
 
   interface ProjectLite {
     name: string
@@ -12,10 +13,16 @@
     assetTitle: string
     assetSource: 'vault' | 'fab' | 'legacy'
     assetSourceId: string
-    /** When set, the user came in by clicking a specific version chip — we prioritise compatible projects in the list. */
-    requestedVersion: string | undefined
-    /** Engine versions the asset declares it supports (`["4.27","5.4"]`). Drives the compatibility check on every project row. */
-    availableVersions: string[]
+    /** Minimum engine version the target project must be >= to. From the Local
+     *  Vault this is the downloaded `engineVersion`; from the Asset Library it's
+     *  the picked chip or the minimum available version. */
+    requiredVersion: string | null
+    /** When true, this is a `project` payload added via Content/-only merge —
+     *  show the "files outside Content/ are not copied" warning. */
+    projectMode?: boolean
+    /** Absolute path to an orphan vault asset folder (no matching downloads row) —
+     *  when set, forwarded so the backend can use it directly and skip the DB lookup. */
+    vaultAssetDir?: string
     knownProjects: ProjectLite[]
     onClose: () => void
     onAdded?: (info: { projectDir: string; filesCopied: number; filesSkipped: number }) => void
@@ -25,30 +32,29 @@
     assetTitle,
     assetSource,
     assetSourceId,
-    requestedVersion,
-    availableVersions,
+    requiredVersion,
+    projectMode = false,
+    vaultAssetDir,
     knownProjects,
     onClose,
     onAdded
   }: Props = $props()
+
+  /** No requiredVersion means we can't check compatibility at all — every
+   *  project is selectable and the UI warns instead of blocking. */
+  const versionUnknown = $derived(!requiredVersion)
 
   // Use `untrack` so $state's initialiser captures the prop snapshot once
   // (Svelte's reactivity rule otherwise warns; the prop is stable for the
   // lifetime of this modal anyway).
   let selectedProjectPath = $state<string>(
     untrack(() => {
-      // Default to the first compatible project that matches the requested version,
-      // falling back to the first compatible project overall, then the first project.
-      const compatible = knownProjects.filter(
-        (p) => p.engineAssociation && availableVersions.includes(p.engineAssociation)
+      const compatible = knownProjects.filter((p) =>
+        isEngineCompatible(requiredVersion, p.engineAssociation)
       )
-      const preferred = requestedVersion
-        ? compatible.find((p) => p.engineAssociation === requestedVersion)
-        : null
       return (
-        preferred?.uprojectPath ??
         compatible[0]?.uprojectPath ??
-        knownProjects[0]?.uprojectPath ??
+        (requiredVersion ? undefined : knownProjects[0]?.uprojectPath) ??
         ''
       )
     })
@@ -61,13 +67,42 @@
     filesCopied: number
     filesSkipped: number
   } | null>(null)
+  /** Projects picked via "Custom folder…" — outside the configured project
+   *  roots, inspected on the fly and appended to the selectable list. */
+  let customProjects = $state<ProjectLite[]>([])
+
+  /** Union of the known (scanned) projects and any custom ones picked this
+   *  session — everything else (compatibility checks, submit) reads from this. */
+  const allProjects = $derived<ProjectLite[]>([...knownProjects, ...customProjects])
 
   function isCompatible(p: ProjectLite): boolean {
-    return !!p.engineAssociation && availableVersions.includes(p.engineAssociation)
+    if (versionUnknown) return true
+    return isEngineCompatible(requiredVersion, p.engineAssociation)
   }
 
   function selectedProject(): ProjectLite | undefined {
-    return knownProjects.find((p) => p.uprojectPath === selectedProjectPath)
+    return allProjects.find((p) => p.uprojectPath === selectedProjectPath)
+  }
+
+  async function pickCustomProject(): Promise<void> {
+    if (busy) return
+    const r = await window.api.projects.pickDirectory()
+    if (!r.ok || !r.path) return
+    const insp = await window.api.projects.inspectProjectFolder(r.path)
+    if (!insp.ok) {
+      error = insp.error ?? 'Could not inspect the folder'
+      return
+    }
+    if (!insp.project) {
+      error = 'That folder is not an Unreal project (no .uproject found).'
+      return
+    }
+    const project = insp.project
+    error = null
+    if (!customProjects.some((p) => p.uprojectPath === project.uprojectPath)) {
+      customProjects = [...customProjects, project]
+    }
+    selectedProjectPath = project.uprojectPath
   }
 
   async function submit(): Promise<void> {
@@ -79,9 +114,11 @@
       const r = await window.api.projects.addToProject({
         source: assetSource,
         sourceId: assetSourceId,
-        engineVersion: requestedVersion ?? null,
+        engineVersion: requiredVersion,
+        targetEngineVersion: project.engineAssociation,
         projectDir: project.projectDir,
-        conflict
+        conflict,
+        vaultAssetDir
       })
       if (!r.ok) {
         error = r.error ?? 'Add failed'
@@ -147,22 +184,43 @@
     {/if}
 
     <section>
+      {#if versionUnknown}
+        <div class="banner-warn">
+          Engine version unknown for this asset. Check compatibility yourself before
+          opening the project.
+        </div>
+      {/if}
+      {#if projectMode}
+        <div class="banner-warn">
+          This copies only <code>Content/</code>. The project's own files (Config,
+          Blueprints outside Content/, the <code>.uproject</code>, and source) are
+          <strong>not</strong> copied, so gameplay or systems that live outside
+          <code>Content/</code> may not work. Use <em>Create project</em> for a full copy.
+        </div>
+      {/if}
       <label class="field">
         <span class="lbl">Target project</span>
-        {#if knownProjects.length === 0}
+        {#if allProjects.length === 0}
           <span class="hint">
-            No projects detected. Add Project paths under Settings → Project paths first.
+            No projects detected. Add Project paths under Settings → Project paths first, or pick
+            a custom folder below.
           </span>
         {:else}
           <select bind:value={selectedProjectPath} disabled={busy}>
-            {#each knownProjects as p (p.uprojectPath)}
+            {#each allProjects as p (p.uprojectPath)}
               {@const compatible = isCompatible(p)}
+              {@const isCustom = customProjects.some((c) => c.uprojectPath === p.uprojectPath)}
               <option value={p.uprojectPath} disabled={!compatible}>
-                {p.name} ({p.engineAssociation || '?'}){compatible ? '' : ' — incompatible'}
+                {p.name} ({p.engineAssociation || '?'}){isCustom ? ' (custom)' : ''}{compatible
+                  ? ''
+                  : ' — incompatible'}
               </option>
             {/each}
           </select>
         {/if}
+        <button type="button" class="secondary" disabled={busy} onclick={pickCustomProject}>
+          Custom folder…
+        </button>
       </label>
 
       <label class="field">
@@ -285,6 +343,25 @@
     color: #888;
     font-size: 0.75rem;
   }
+  .secondary {
+    align-self: flex-start;
+    background: transparent;
+    color: #c0c0c0;
+    border: 1px solid #444;
+    border-radius: 5px;
+    padding: 0.3rem 0.7rem;
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .secondary:hover:not(:disabled) {
+    color: #fff;
+    border-color: #666;
+  }
+  .secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
   .hint code {
     color: #c0c0c0;
     font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
@@ -347,5 +424,19 @@
     padding: 0.5rem 0.85rem;
     margin: 0.85rem 1.1rem 0;
     font-size: 0.8rem;
+  }
+  .banner-warn {
+    background: #3a2f1f;
+    border: 1px solid #5a4a27;
+    color: #fbbf24;
+    border-radius: 6px;
+    padding: 0.5rem 0.85rem;
+    margin: 0.85rem 1.1rem 0;
+    font-size: 0.8rem;
+  }
+  .banner-warn code {
+    color: #fde68a;
+    font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    font-size: 0.72rem;
   }
 </style>

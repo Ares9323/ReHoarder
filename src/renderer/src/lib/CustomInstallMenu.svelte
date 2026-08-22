@@ -530,8 +530,9 @@
     {assetTitle}
     {assetSource}
     {assetSourceId}
-    {requestedVersion}
-    {availableVersions}
+    requiredVersion={requestedVersion ??
+      [...availableVersions].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))[0] ??
+      null}
     {knownProjects}
     onClose={() => (addToProjectDialogOpen = false)}
     onAdded={() => onClose()}

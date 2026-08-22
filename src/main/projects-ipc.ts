@@ -1,4 +1,4 @@
-import { app, ipcMain, shell } from 'electron'
+import { app, ipcMain, shell, dialog } from 'electron'
 import { spawn } from 'node:child_process'
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
@@ -17,6 +17,7 @@ import {
   type AddToProjectConflict,
   type AddToProjectResult
 } from './projects-add-to'
+import { inspectProjectFolder, type InspectProjectFolderResult } from './projects-inspect'
 import { setAsTemplate, type SetAsTemplateResult } from './projects-set-as-template'
 import {
   cleanupRedirectors,
@@ -68,6 +69,13 @@ export interface EnginePluginsResult {
   ok: boolean
   error?: string
   plugins?: EnginePluginInfo[]
+}
+
+export interface PickDirectoryResult {
+  ok: boolean
+  /** Cancelled = ok:true + path:null. */
+  path?: string | null
+  error?: string
 }
 
 /** Parse the `.uproject` to read its `EngineAssociation` (`"5.7"` / `"4.27"` / `"{GUID}"` / `""`). */
@@ -131,6 +139,23 @@ export function registerProjectsIpc(
       return { ok: false, error: msg }
     }
   })
+
+  ipcMain.handle('projects:pick-directory', async (): Promise<PickDirectoryResult> => {
+    const r = await dialog.showOpenDialog({
+      title: 'Pick a folder',
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: settings.load().projectPaths[0]
+    })
+    if (r.canceled || r.filePaths.length === 0) return { ok: true, path: null }
+    return { ok: true, path: r.filePaths[0] }
+  })
+
+  ipcMain.handle(
+    'projects:inspect-project-folder',
+    async (_e, dir: string): Promise<InspectProjectFolderResult> => {
+      return await inspectProjectFolder(dir)
+    }
+  )
 
   ipcMain.handle(
     'projects:open-in-explorer',
@@ -306,17 +331,14 @@ export function registerProjectsIpc(
         engineVersion: string | null
         name: string
         parentDir: string
+        vaultAssetDir?: string
       }
     ): Promise<CreateProjectResult> => {
       const cfg = settings.load()
       const resolvedParent = path.resolve(req.parentDir)
-      const allowed = cfg.projectPaths.some((root) =>
-        resolvedParent === path.resolve(root) ||
-        resolvedParent.startsWith(path.resolve(root) + path.sep)
-      )
-      if (!allowed) {
-        return { ok: false, error: 'Parent path is outside the configured project roots' }
-      }
+      // No projectPaths containment check here: the user can pick an
+      // arbitrary parent folder via the "custom folder" picker. Safety comes
+      // from the checks below (safe name, no leading digit, no overwrite).
       // Defence: enforce a safe folder name so the user can't path-traverse out.
       const safeName = req.name.replace(/[/\\:*?"<>|]/g, '_').trim()
       if (!safeName) {
@@ -331,10 +353,24 @@ export function registerProjectsIpc(
           error: 'Project name cannot start with a digit (Unreal C++ identifier rules).'
         }
       }
+      let resolvedVaultAssetDir: string | undefined
+      if (req.vaultAssetDir) {
+        const resolved = path.resolve(req.vaultAssetDir)
+        const insideVault = cfg.vaultPaths.some(
+          (root) =>
+            resolved === path.resolve(root) ||
+            resolved.startsWith(path.resolve(root) + path.sep)
+        )
+        if (!insideVault) {
+          return { ok: false, error: 'Asset path is outside the configured vault roots' }
+        }
+        resolvedVaultAssetDir = resolved
+      }
       return await createProjectFromVault(downloadsRepo, {
         ...req,
         name: safeName,
-        parentDir: resolvedParent
+        parentDir: resolvedParent,
+        vaultAssetDir: resolvedVaultAssetDir
       })
     }
   )
@@ -347,24 +383,39 @@ export function registerProjectsIpc(
         source: string
         sourceId: string
         engineVersion: string | null
+        targetEngineVersion: string | null
         projectDir: string
         conflict: AddToProjectConflict
+        vaultAssetDir?: string
       }
     ): Promise<AddToProjectResult> => {
       const cfg = settings.load()
       const resolved = path.resolve(req.projectDir)
-      const allowed = cfg.projectPaths.some(
-        (root) =>
-          resolved === path.resolve(root) ||
-          resolved.startsWith(path.resolve(root) + path.sep)
-      )
-      if (!allowed) {
-        return { ok: false, error: 'Project directory is outside the configured project roots' }
-      }
+      // No projectPaths containment check here: the user can pick an
+      // arbitrary target folder via the "custom folder" picker. The real
+      // safety net is addToProject() itself, which refuses folders without
+      // a .uproject.
       if (req.conflict !== 'skip' && req.conflict !== 'overwrite') {
         return { ok: false, error: `Unknown conflict mode: ${req.conflict}` }
       }
-      return await addToProject(downloadsRepo, { ...req, projectDir: resolved })
+      let resolvedVaultAssetDir: string | undefined
+      if (req.vaultAssetDir) {
+        const resolvedAsset = path.resolve(req.vaultAssetDir)
+        const insideVault = cfg.vaultPaths.some(
+          (root) =>
+            resolvedAsset === path.resolve(root) ||
+            resolvedAsset.startsWith(path.resolve(root) + path.sep)
+        )
+        if (!insideVault) {
+          return { ok: false, error: 'Asset path is outside the configured vault roots' }
+        }
+        resolvedVaultAssetDir = resolvedAsset
+      }
+      return await addToProject(downloadsRepo, {
+        ...req,
+        projectDir: resolved,
+        vaultAssetDir: resolvedVaultAssetDir
+      })
     }
   )
 

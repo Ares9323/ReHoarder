@@ -9,12 +9,29 @@
     engineVersion: string | null
     /** Configured project roots (Settings → Project paths) — the user picks one as the parent for the new folder. */
     projectPaths: string[]
+    /** Absolute path to an orphan vault asset folder (no matching downloads row) —
+     *  when set, forwarded so the backend can use it directly and skip the DB lookup. */
+    vaultAssetDir?: string
+    /** Preferred default for the name field — e.g. the `.uproject` base name for a
+     *  downloaded project, which is a far better guess than the mangled vault folder
+     *  name. Falls back to `assetTitle` when unset. */
+    defaultName?: string
     onClose: () => void
     /** Called after a successful create — the caller can refresh the Projects tab listing. */
     onCreated?: (info: { projectDir: string; uprojectPath: string }) => void
   }
 
-  let { assetTitle, assetSource, assetSourceId, engineVersion, projectPaths, onClose, onCreated }: Props = $props()
+  let {
+    assetTitle,
+    assetSource,
+    assetSourceId,
+    engineVersion,
+    projectPaths,
+    vaultAssetDir,
+    defaultName,
+    onClose,
+    onCreated
+  }: Props = $props()
 
   /** Unreal Editor warns past 20 chars ("longer name may cause save/modify issues"). */
   const MAX_PROJECT_NAME = 20
@@ -39,8 +56,11 @@
   // the props at mount time — the dialog is a per-asset modal, the inputs
   // shouldn't snap back to the prop value if the parent re-renders. Wrap the
   // initial reads in `untrack` so Svelte stops warning about it.
-  let name = $state(untrack(() => suggestedName(assetTitle)))
+  let name = $state(untrack(() => suggestedName(defaultName ?? assetTitle)))
   let parentDir = $state<string>(untrack(() => projectPaths[0] ?? ''))
+  /** Set when the user picks a folder outside the configured project roots via
+   *  "Custom folder…" — rendered as an extra option so the select shows it. */
+  let customParent = $state<string | null>(null)
   let busy = $state(false)
   let error = $state<string | null>(null)
   let done = $state<{ projectDir: string; uprojectPath: string } | null>(null)
@@ -70,6 +90,14 @@
   )
   const nameValid = $derived(!nameEmpty && !startsWithDigit && !nameTooLong)
 
+  async function pickCustomParent(): Promise<void> {
+    if (busy) return
+    const r = await window.api.projects.pickDirectory()
+    if (!r.ok || !r.path) return
+    customParent = r.path
+    parentDir = r.path
+  }
+
   function joinPath(parent: string, child: string): string {
     if (!parent) return child
     const sep = parent.includes('\\') ? '\\' : '/'
@@ -87,7 +115,8 @@
         sourceId: assetSourceId,
         engineVersion,
         name: name.trim(),
-        parentDir
+        parentDir,
+        vaultAssetDir
       })
       if (!r.ok) {
         error = r.error ?? 'Create failed'
@@ -185,17 +214,24 @@
 
       <label class="field">
         <span class="lbl">Parent folder</span>
-        {#if projectPaths.length === 0}
+        {#if projectPaths.length === 0 && !customParent}
           <span class="hint">
-            Configure at least one project path under Settings → Project paths first.
+            Configure at least one project path under Settings → Project paths first, or pick a
+            custom folder below.
           </span>
         {:else}
           <select bind:value={parentDir} disabled={busy}>
+            {#if customParent}
+              <option value={customParent}>{customParent} (custom)</option>
+            {/if}
             {#each projectPaths as p (p)}
               <option value={p}>{p}</option>
             {/each}
           </select>
         {/if}
+        <button type="button" class="secondary" disabled={busy} onclick={pickCustomParent}>
+          Custom folder…
+        </button>
       </label>
 
       {#if previewPath}
@@ -314,6 +350,25 @@
   }
   input[type='text'].invalid {
     border-color: #fbbf24;
+  }
+  .secondary {
+    align-self: flex-start;
+    background: transparent;
+    color: #c0c0c0;
+    border: 1px solid #444;
+    border-radius: 5px;
+    padding: 0.3rem 0.7rem;
+    font-family: inherit;
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .secondary:hover:not(:disabled) {
+    color: #fff;
+    border-color: #666;
+  }
+  .secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
   .hint {
     margin: 0;

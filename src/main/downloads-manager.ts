@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import type { DownloadRow, DownloadsRepo } from './db/downloads-repo'
+import type { AssetSource } from './db/assets-repo'
 import type { FabRunnerDeps } from './download/fab-asset-runner'
 import { runFabAssetDownload } from './download/fab-asset-runner'
 import { composeSkipPatterns } from './download/cruft-filter'
 import { scanEngines } from './engines-local'
+import { writeSidecar } from './vault-sidecar'
+import { detectKind } from './vault-local'
 import type { AppSettings, SettingsStore } from './settings'
 import { DownloadCancelledError } from './download/download-types'
 import type { EngineInstallPlan } from './engine-downloads/engine-catalog-client'
@@ -62,6 +65,9 @@ export interface DownloadsManagerDeps {
     installDir: string
     postInstall: PostInstallResult
   }) => void
+  /** Fired once a Fab asset download finishes (sidecar written) so the Vault
+   *  tab can rescan without a manual Refresh. */
+  broadcastVaultChanged?: () => void
 }
 
 /**
@@ -412,6 +418,11 @@ export class DownloadsManager {
         }
       )
       this.deps.repo.setStatus(row.id, 'done', { finishedAt: Date.now(), currentFile: null })
+      // `row` is the closure captured when the slot was claimed and is never
+      // mutated in place — `destDir` only lands on it via the DB write in the
+      // `onStart` callback above. Re-fetch so the sidecar sees the real path.
+      const finished = this.deps.repo.findById(row.id, { crossAccount: true })
+      if (finished) await this.writeVaultSidecar(finished)
     } catch (err) {
       const cancelled = err instanceof DownloadCancelledError
       const msg = err instanceof Error ? err.message : String(err)
@@ -430,6 +441,38 @@ export class DownloadsManager {
       // Tail-call the next item, if any.
       void this.pump()
     }
+  }
+
+  /**
+   * Best-effort write of the `.rehoarder.json` sidecar into a finished Fab
+   * asset's `destDir`, from the row's known fields plus the resolved kind and
+   * (when available) the Fab distributionMethod. Never throws; failures are
+   * logged by `writeSidecar` and retried on the next vault scan's backfill.
+   * Skips engine rows and rows without a destDir (nothing to stamp).
+   */
+  private async writeVaultSidecar(row: DownloadRow): Promise<void> {
+    if (row.source === 'engine' || !row.destDir) return
+    const kind = await detectKind(path.join(row.destDir, 'data'))
+    let fabDistributionMethod: string | null = null
+    const asset = this.deps.runner.assetsRepo.findById(row.source as AssetSource, row.sourceId)
+    if (asset?.raw) {
+      try {
+        const raw = JSON.parse(asset.raw) as { distributionMethod?: string }
+        fabDistributionMethod = raw.distributionMethod ?? null
+      } catch {
+        // leave null
+      }
+    }
+    await writeSidecar(row.destDir, {
+      source: row.source as AssetSource,
+      sourceId: row.sourceId,
+      engineVersion: row.engineVersion,
+      title: row.title,
+      kind,
+      fabDistributionMethod,
+      downloadedAt: Date.now()
+    })
+    this.deps.broadcastVaultChanged?.()
   }
 
   /**

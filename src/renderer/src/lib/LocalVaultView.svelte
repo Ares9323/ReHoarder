@@ -4,8 +4,9 @@
   import { vaultStore } from '../stores/vault.svelte'
   import { projectsStore } from '../stores/projects.svelte'
   import AddToProjectDialog from './AddToProjectDialog.svelte'
+  import CreateProjectDialog from './CreateProjectDialog.svelte'
 
-  type LocalVaultKind = 'asset' | 'plugin' | 'unknown'
+  type LocalVaultKind = 'asset' | 'plugin' | 'project' | 'unknown'
 
   interface LocalVaultEntry {
     name: string
@@ -21,6 +22,7 @@
     source: 'vault' | 'fab' | 'legacy' | null
     sourceId: string | null
     engineVersion: string | null
+    uprojectName: string | null
   }
 
   // Filesystem-derived state lives in the singleton store — switching to
@@ -32,6 +34,7 @@
   const error = $derived(vaultStore.error)
   let separateByPath = $state(false)
   let showThumbnails = $state(true)
+  let projectPaths = $state<string[]>([])
 
   type SortKey = 'name' | 'size' | 'lastModified'
   type SortDir = 'asc' | 'desc'
@@ -123,6 +126,7 @@
       const s = await window.api.settings.get()
       separateByPath = s.separateVaultsByPath
       showThumbnails = s.showVaultThumbnails
+      projectPaths = s.projectPaths
     } catch {
       // best-effort; UI falls back to defaults
     }
@@ -130,6 +134,9 @@
 
   // First mount: pull settings (cheap) and ask the store to load only if it
   // hasn't already. Tab switches re-mount this component but hit the cache.
+  // `vault:changed` is handled at app lifetime in App.svelte (so background
+  // downloads finishing while this tab is unmounted aren't missed) — not
+  // subscribed here to avoid a double rescan.
   onMount(() => {
     void loadSettings()
     void vaultStore.ensureLoaded()
@@ -183,9 +190,18 @@
     addToProjectTarget = entry
   }
 
+  /** Create-project dialog state. Non-null = open against this vault entry. */
+  let createProjectTarget = $state<LocalVaultEntry | null>(null)
+
+  async function openCreateProject(entry: LocalVaultEntry): Promise<void> {
+    await projectsStore.ensureLoaded()
+    createProjectTarget = entry
+  }
+
   function kindLabel(k: LocalVaultKind): string {
     if (k === 'asset') return 'asset'
     if (k === 'plugin') return 'plugin'
+    if (k === 'project') return 'project'
     return '—'
   }
 
@@ -414,10 +430,11 @@
   {@const t = addToProjectTarget}
   <AddToProjectDialog
     assetTitle={t.friendlyName ?? t.name}
-    assetSource={t.source as 'vault' | 'fab' | 'legacy'}
-    assetSourceId={t.sourceId as string}
-    requestedVersion={t.engineVersion ?? undefined}
-    availableVersions={t.engineVersion ? [t.engineVersion] : []}
+    assetSource={(t.source ?? '') as 'vault' | 'fab' | 'legacy'}
+    assetSourceId={t.sourceId ?? ''}
+    requiredVersion={t.engineVersion ?? null}
+    projectMode={t.kind === 'project'}
+    vaultAssetDir={t.path}
     knownProjects={projectsStore.projects.map((p) => ({
       name: p.name,
       uprojectPath: p.uprojectPath,
@@ -425,6 +442,20 @@
       engineAssociation: p.engineAssociation
     }))}
     onClose={() => (addToProjectTarget = null)}
+  />
+{/if}
+
+{#if createProjectTarget}
+  {@const t = createProjectTarget}
+  <CreateProjectDialog
+    assetTitle={t.friendlyName ?? t.name}
+    assetSource={(t.source ?? '') as 'vault' | 'fab' | 'legacy'}
+    assetSourceId={t.sourceId ?? ''}
+    engineVersion={t.engineVersion ?? null}
+    vaultAssetDir={t.path}
+    defaultName={t.uprojectName ?? undefined}
+    {projectPaths}
+    onClose={() => (createProjectTarget = null)}
   />
 {/if}
 
@@ -504,6 +535,7 @@
                     class="kind-pill"
                     class:asset={e.kind === 'asset'}
                     class:plugin={e.kind === 'plugin'}
+                    class:project={e.kind === 'project'}
                     class:unknown={e.kind === 'unknown'}
                   >
                     {kindLabel(e.kind)}
@@ -520,14 +552,31 @@
           <td class="date">{formatDate(e.lastModified)}</td>
           <td class="actions">
             <button type="button" onclick={() => reveal(e)}>Open</button>
-            {#if e.kind === 'asset' && e.source && e.sourceId && e.engineVersion}
-              <button
-                type="button"
-                onclick={() => void openAddToProject(e)}
-                title={`Copy data/Content/ into an Unreal project's Content/ folder (engine ${e.engineVersion})`}
-              >
-                Add to project
-              </button>
+            {#if e.hasData && (e.kind === 'asset' || e.kind === 'project')}
+              {#if e.kind === 'project'}
+                <button
+                  type="button"
+                  onclick={() => void openCreateProject(e)}
+                  title="Materialise this downloaded project as a new Unreal project folder"
+                >
+                  Create project
+                </button>
+                <button
+                  type="button"
+                  onclick={() => void openAddToProject(e)}
+                  title="Copy only this project's data/Content/ into an existing project (files outside Content/ are not copied)"
+                >
+                  Add to project
+                </button>
+              {:else if e.kind === 'asset'}
+                <button
+                  type="button"
+                  onclick={() => void openAddToProject(e)}
+                  title={`Copy data/Content/ into an Unreal project's Content/ folder (engine ${e.engineVersion ?? 'unknown'})`}
+                >
+                  Add to project
+                </button>
+              {/if}
             {/if}
             <button
               type="button"
@@ -959,6 +1008,11 @@
     color: #93c5fd;
     background: #1e3a5f;
     border-color: #2b5d92;
+  }
+  .kind-pill.project {
+    color: #fbbf24;
+    background: #3a2f1f;
+    border-color: #5a4a27;
   }
   .kind-pill.unknown {
     color: #888;

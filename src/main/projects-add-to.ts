@@ -1,6 +1,7 @@
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 import type { DownloadsRepo } from './db/downloads-repo'
+import { isEngineCompatible, parseEngineVersion } from '../shared/engine-version'
 
 export type AddToProjectConflict = 'skip' | 'overwrite'
 
@@ -8,10 +9,18 @@ export interface AddToProjectRequest {
   source: string
   sourceId: string
   engineVersion: string | null
+  /** The target project's `EngineAssociation`, used for the `>= required`
+   *  compatibility guard (defence in depth against the dialog). */
+  targetEngineVersion: string | null
   /** Absolute path to the `.uproject`'s parent directory. */
   projectDir: string
   /** What to do when a file already exists at the destination. */
   conflict: AddToProjectConflict
+  /** When set, used directly as the asset folder (the folder containing
+   *  `data/`), skipping the `downloads`-row lookup entirely. For orphan
+   *  vault assets that have no matching download row (hand-copied, or
+   *  downloaded before ReHoarder tracked them). */
+  vaultAssetDir?: string
 }
 
 export interface AddToProjectResult {
@@ -42,28 +51,48 @@ export async function addToProject(
   repo: DownloadsRepo,
   req: AddToProjectRequest
 ): Promise<AddToProjectResult> {
-  const candidates = repo
-    .listAll()
-    .filter(
-      (r) =>
-        r.status === 'done' &&
-        r.source === req.source &&
-        r.sourceId === req.sourceId &&
-        (req.engineVersion === null || r.engineVersion === req.engineVersion) &&
-        r.destDir !== null
-    )
-    .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))
-
-  if (candidates.length === 0) {
+  // Only enforce the guard when the asset's required engine version is
+  // known. An unparsable/missing required version means we can't verify
+  // compatibility either way, so we allow the copy — matching the Local
+  // Vault UI, which shows an advisory warning instead of blocking.
+  if (
+    parseEngineVersion(req.engineVersion) !== null &&
+    !isEngineCompatible(req.engineVersion, req.targetEngineVersion)
+  ) {
     return {
       ok: false,
       error:
-        `No completed download in the local vault for ${req.source}/${req.sourceId}` +
-        (req.engineVersion ? ` (engine ${req.engineVersion})` : '')
+        `Target project engine ${req.targetEngineVersion || '(unknown)'} is older than ` +
+        `the asset's ${req.engineVersion || '(unknown)'} (or unparsable) — refusing to copy.`
     }
   }
-  const row = candidates[0]
-  const assetDir = row.destDir as string
+
+  let assetDir: string
+  if (req.vaultAssetDir) {
+    assetDir = req.vaultAssetDir
+  } else {
+    const candidates = repo
+      .listAll()
+      .filter(
+        (r) =>
+          r.status === 'done' &&
+          r.source === req.source &&
+          r.sourceId === req.sourceId &&
+          (req.engineVersion === null || r.engineVersion === req.engineVersion) &&
+          r.destDir !== null
+      )
+      .sort((a, b) => (b.finishedAt ?? 0) - (a.finishedAt ?? 0))
+
+    if (candidates.length === 0) {
+      return {
+        ok: false,
+        error:
+          `No completed download in the local vault for ${req.source}/${req.sourceId}` +
+          (req.engineVersion ? ` (engine ${req.engineVersion})` : '')
+      }
+    }
+    assetDir = candidates[0].destDir as string
+  }
 
   const wrappedDataDir = path.join(assetDir, 'data')
   let sourceRoot: string

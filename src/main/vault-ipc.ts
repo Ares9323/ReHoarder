@@ -2,6 +2,8 @@ import { ipcMain, shell } from 'electron'
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 import { listLocalVault, type LocalVaultEntry } from './vault-local'
+import { readSidecar, writeSidecar } from './vault-sidecar'
+import { resolveVaultEngineVersion } from './vault-engine-version'
 import { broadcastDownloads } from './downloads-ipc'
 import { compilePatterns, composeSkipPatterns, matchesAny } from './download/cruft-filter'
 import type { DownloadsRepo } from './db/downloads-repo'
@@ -160,15 +162,69 @@ export function registerVaultIpc(
         }
       }
       for (const e of entries) {
+        // Tier 1 — sidecar. When present and valid, metadata + kind come
+        // straight from it; no DB join needed for this entry.
+        const sidecar = await readSidecar(e.path)
+        if (sidecar) {
+          e.friendlyName = sidecar.title
+          e.source = (sidecar.source as AssetSource) ?? null
+          e.sourceId = sidecar.sourceId
+          e.engineVersion = sidecar.engineVersion
+          // Structural on-disk detection (already run by `listLocalVault`,
+          // sitting on `e.kind`) is the source of truth. Only fall back to
+          // the sidecar's `kind` when the disk read was inconclusive —
+          // otherwise a stale/wrong sidecar could permanently mask a payload
+          // that changed on disk (e.g. re-downloaded as a different kind).
+          if (e.kind === 'unknown') e.kind = sidecar.kind
+          if (e.source && e.sourceId) {
+            const asset = assetsRepo.findById(e.source, e.sourceId)
+            e.imageUrl = asset?.imageUrl ?? null
+          }
+          continue
+        }
+        // Tier 2 — DB join (current behaviour). On a hit, backfill the sidecar
+        // so the next scan reads tier 1. Backfill is best-effort.
         const key = path.resolve(e.path).toLowerCase()
         const info = downloadInfoByPath.get(key)
-        if (!info) continue
-        e.friendlyName = info.title
-        e.source = info.source
-        e.sourceId = info.sourceId
-        e.engineVersion = info.engineVersion
-        const asset = assetsRepo.findById(info.source, info.sourceId)
-        e.imageUrl = asset?.imageUrl ?? null
+        if (info) {
+          e.friendlyName = info.title
+          e.source = info.source
+          e.sourceId = info.sourceId
+          e.engineVersion = info.engineVersion
+          const asset = assetsRepo.findById(info.source, info.sourceId)
+          e.imageUrl = asset?.imageUrl ?? null
+          void writeSidecar(e.path, {
+            source: info.source,
+            sourceId: info.sourceId,
+            engineVersion: info.engineVersion,
+            title: info.title,
+            kind: e.kind,
+            fabDistributionMethod: null,
+            downloadedAt: Date.now()
+          })
+          continue
+        }
+        // Tier 3 — filesystem only. `kind` stays from detectKind, metadata
+        // (title/source/sourceId) stays null (only "Open" available, same as
+        // before). We can still infer `engineVersion` from the payload
+        // itself for `asset`/`project` kinds — cheap enough to run per scan,
+        // and once found it's backfilled into a sidecar so the next scan
+        // reads it straight from tier 1 instead of re-inferring.
+        if (e.engineVersion === null && e.hasData && (e.kind === 'asset' || e.kind === 'project')) {
+          const inferred = await resolveVaultEngineVersion(e.path, e.kind)
+          if (inferred) {
+            e.engineVersion = inferred
+            await writeSidecar(e.path, {
+              source: e.source,
+              sourceId: e.sourceId,
+              engineVersion: inferred,
+              title: e.friendlyName,
+              kind: e.kind,
+              fabDistributionMethod: null,
+              downloadedAt: Date.now()
+            })
+          }
+        }
       }
       return { ok: true, vaultDirs: cfg.vaultPaths, entries }
     } catch (err) {

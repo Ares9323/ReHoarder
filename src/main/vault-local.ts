@@ -1,5 +1,6 @@
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
+import { SIDECAR_FILENAME } from './vault-sidecar'
 
 /**
  * High-level kind of a vault payload, inferred from its `data/` layout.
@@ -9,10 +10,12 @@ import * as path from 'node:path'
  * - `plugin`: `data/Engine/Plugins/Marketplace/<name>/<name>.uplugin` —
  *   an engine plugin install, intended to land in an UE install's
  *   `Engine/Plugins/Marketplace/` directory.
+ * - `project`: a `.uproject` file at data/ depth 0; wins over plugin/asset
+ *   because a full project also ships Content/.
  * - `unknown`: neither shape recognised (in-flight download, hand-copied
  *   folder without `data/`, or a payload we don't have a rule for yet).
  */
-export type LocalVaultKind = 'asset' | 'plugin' | 'unknown'
+export type LocalVaultKind = 'asset' | 'plugin' | 'project' | 'unknown'
 
 export interface LocalVaultEntry {
   /** Sub-directory name (= sanitized artifactId from `downloadAsset()`). */
@@ -40,6 +43,8 @@ export interface LocalVaultEntry {
   sourceId: string | null
   /** Engine version recorded on the download row (`5.4`, `4.27`, …). Null when the download predates per-version tracking. */
   engineVersion: string | null
+  /** Base name (no extension) of the `.uproject` file found among the immediate children of `data/` (or the entry root if there's no `data/` — see {@link findUprojectBaseName}). Only populated when `kind === 'project'`; `null` otherwise, including when a project entry's `.uproject` couldn't be re-resolved. */
+  uprojectName: string | null
 }
 
 /**
@@ -95,6 +100,12 @@ export async function listLocalVault(vaultDirs: string[]): Promise<LocalVaultEnt
             .catch(() => false),
           detectKind(path.join(entryPath, 'data'))
         ])
+        const uprojectName =
+          kind === 'project'
+            ? await findUprojectBaseName(
+                hasData ? path.join(entryPath, 'data') : entryPath
+              )
+            : null
         const entry: LocalVaultEntry = {
           name,
           // `friendlyName`, `imageUrl`, `source`, `sourceId`, `engineVersion`
@@ -112,7 +123,8 @@ export async function listLocalVault(vaultDirs: string[]): Promise<LocalVaultEnt
           kind,
           source: null,
           sourceId: null,
-          engineVersion: null
+          engineVersion: null,
+          uprojectName
         }
         return { entry, key }
       })
@@ -136,10 +148,12 @@ interface WalkResult {
 }
 
 /**
- * Identify whether `<entry>/data/` looks like a plugin install or an asset
- * pack. We only inspect the *immediate* children of `data/` (cheap — one
- * `readdir`); going deeper would slow the scan unnecessarily since the two
- * shapes are well-defined at the top level:
+ * Identify whether `<entry>/data/` looks like a plugin install, an asset
+ * pack, or a full project. We only inspect the *immediate* children of `data/`
+ * (cheap — one `readdir`); going deeper would slow the scan unnecessarily
+ * since the three shapes are well-defined at the top level:
+ *   - project → a `.uproject` FILE at depth 0 (wins over plugin/asset because
+ *     a full project also ships a Content/ folder).
  *   - plugin → `data/Engine/...` (Marketplace plugins always live under
  *     `Engine/Plugins/Marketplace`, so the `Engine` folder at depth 0 is
  *     the giveaway).
@@ -148,27 +162,58 @@ interface WalkResult {
  *     `Config/` or `Platforms/` are common for asset packs that ship
  *     project-level configs or per-platform binaries — those don't change
  *     the kind).
- * A folder with both `Engine/` and `Content/` falls back to `'plugin'`
- * (engine-deployed plugins occasionally bundle a small Content/ for demo
- * maps, and the Add-to-project flow doesn't apply to plugins anyway).
+ * A folder with both `Engine/` and `Content/` (but no `.uproject`) falls
+ * back to `'plugin'` (engine-deployed plugins occasionally bundle a small
+ * Content/ for demo maps, and the Add-to-project flow doesn't apply to
+ * plugins anyway).
  */
-async function detectKind(dataDir: string): Promise<LocalVaultKind> {
+export async function detectKind(dataDir: string): Promise<LocalVaultKind> {
   let items
   try {
     items = await fsp.readdir(dataDir, { withFileTypes: true })
   } catch {
     return 'unknown'
   }
+  let hasUproject = false
   let hasEngine = false
   let hasContent = false
   for (const it of items) {
+    // A `.uproject` FILE among the immediate children is the distinguishing
+    // signal of a full project (which also ships a Content/ folder).
+    if (it.isFile() && it.name.toLowerCase().endsWith('.uproject')) {
+      hasUproject = true
+      continue
+    }
     if (!it.isDirectory()) continue
     if (it.name === 'Engine') hasEngine = true
     else if (it.name === 'Content') hasContent = true
   }
+  if (hasUproject) return 'project'
   if (hasEngine) return 'plugin'
   if (hasContent) return 'asset'
   return 'unknown'
+}
+
+/**
+ * Find the `.uproject` file among the immediate children of `dataDir` and
+ * return its base name (no extension) — this is the name Unreal itself
+ * would use for the project, unlike the vault folder name (a sanitized
+ * artifactId, e.g. `Modularl09408fa4d0abV2`) which is meaningless to the
+ * user. Used to pre-fill the Create-project dialog with a sane default.
+ * Never throws: any I/O error or missing match resolves to `null`.
+ */
+async function findUprojectBaseName(dataDir: string): Promise<string | null> {
+  try {
+    const items = await fsp.readdir(dataDir, { withFileTypes: true })
+    for (const it of items) {
+      if (it.isFile() && it.name.toLowerCase().endsWith('.uproject')) {
+        return it.name.slice(0, -'.uproject'.length)
+      }
+    }
+    return null
+  } catch {
+    return null
+  }
 }
 
 async function walkEntry(entryPath: string): Promise<WalkResult> {
@@ -195,6 +240,9 @@ async function walk(dir: string, out: WalkResult, depth: number): Promise<void> 
     // Skip the chunk cache directory — those are transient and shouldn't
     // contribute to the user-visible asset size.
     if (depth === 0 && item.isDirectory() && item.name === 'cache') continue
+    // Skip the metadata sidecar at the asset-folder top level — it isn't a
+    // payload file and shouldn't perturb the displayed size, same as cache/.
+    if (depth === 0 && item.isFile() && item.name === SIDECAR_FILENAME) continue
     const child = path.join(dir, item.name)
     if (item.isDirectory()) subdirs.push(child)
     else if (item.isFile()) files.push(child)

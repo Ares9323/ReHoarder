@@ -50,6 +50,26 @@
     }
   })
 
+  // `vault:changed` fires whenever a background download finishes writing
+  // into a vault root (see `writeVaultSidecar` in downloads-manager.ts).
+  // Subscribed for the app's lifetime (not just while the Vault tab is
+  // mounted) so a download completing while the user is on another tab
+  // isn't missed — `vaultStore.loaded` would otherwise stay stale-true and
+  // reopening the tab would short-circuit `ensureLoaded()`, requiring a
+  // manual Rescan. When the Vault tab is active we rescan immediately (the
+  // list is on screen); otherwise we just invalidate the cache so the next
+  // `ensureLoaded()` on tab-open refetches.
+  $effect(() => {
+    const off = window.api.vault.onChanged(() => {
+      if (activeTab === 'vault') {
+        void vaultStore.rescan()
+      } else {
+        vaultStore.invalidate()
+      }
+    })
+    return off
+  })
+
   /**
    * Restore the post-auth startup tab based on the user's preference:
    * - `last-opened` → the tab the user was on when they last closed the

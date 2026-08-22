@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
+import { promises as fsp } from 'node:fs'
+import * as os from 'node:os'
+import * as path from 'node:path'
 import { applySchema } from './db/schema'
 import { DownloadsRepo } from './db/downloads-repo'
 import { KvStore } from './db/kv'
 import { SettingsStore } from './settings'
+import { AssetsRepo } from './db/assets-repo'
+import { readSidecar } from './vault-sidecar'
 import type { FabRunnerDeps } from './download/fab-asset-runner'
 
 // `DownloadsManager` imports `runFabAssetDownload` at module scope. We replace
@@ -208,5 +213,83 @@ describe('DownloadsManager — parallel queue scheduler', () => {
     expect(stored.status).toBe('failed')
     expect(stored.error).toMatch(/No vault path/)
     expect(runFn).not.toHaveBeenCalled()
+  })
+})
+
+describe('DownloadsManager — vault sidecar on completion', () => {
+  let assetDir: string
+  let assetsRepo: AssetsRepo
+
+  beforeEach(async () => {
+    assetDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'rehoarder-dlmgr-'))
+    // The runner writes payload files under `data/`; kind detection reads
+    // `<destDir>/data`, same as `listLocalVault`'s scanner.
+    await fsp.mkdir(path.join(assetDir, 'data', 'Content'), { recursive: true })
+    await fsp.writeFile(path.join(assetDir, 'data', 'Content', 'a.uasset'), 'x')
+
+    assetsRepo = new AssetsRepo(db, () => 'test-account')
+    assetsRepo.upsert({
+      source: 'fab',
+      sourceId: 'a',
+      subSource: 'fab-ue',
+      listingType: '3d-model',
+      title: 'A',
+      description: null,
+      imageUrl: null,
+      productUrl: null,
+      ownedAt: null,
+      hidden: false,
+      bookmarked: false,
+      seller: null,
+      raw: JSON.stringify({ distributionMethod: 'ASSET_PACK' }),
+      syncedAt: Date.now(),
+      lastPreciseAt: null
+    })
+
+    // Rebuild the manager with a runner whose `assetsRepo` is real, and whose
+    // `runFabAssetDownload` mock invokes `onStart` so `destDir` lands on the
+    // row before the 'done' transition — mirroring the real runner's flow.
+    runFn.mockReset()
+    runFn.mockImplementation((_deps, _assetId, _opts, onStart) => {
+      onStart?.({ assetDir, bytesTotal: 1, filesTotal: 1, buildVersion: null })
+      return Promise.resolve()
+    })
+    manager = new DownloadsManager({
+      repo,
+      settings,
+      runner: { assetsRepo } as unknown as FabRunnerDeps,
+      broadcast: () => {
+        broadcastSnapshots++
+      }
+    })
+  })
+
+  afterEach(async () => {
+    await fsp.rm(assetDir, { recursive: true, force: true })
+  })
+
+  it('writes the sidecar into destDir with the resolved kind and distributionMethod', async () => {
+    manager.enqueue('fab', 'a', 'A')
+    await flush()
+
+    const row = repo.listAll().find((r) => r.sourceId === 'a')!
+    expect(row.status).toBe('done')
+
+    // The sidecar write is real filesystem I/O (readdir + writeFile), which
+    // resolves via the libuv thread pool rather than a plain microtask —
+    // `flush()`'s Promise.resolve() loop doesn't wait for it. Poll with real
+    // macrotask ticks until the write lands (or fail after a bounded number
+    // of attempts).
+    let sidecar = await readSidecar(assetDir)
+    for (let i = 0; i < 50 && sidecar === null; i++) {
+      await new Promise((r) => setTimeout(r, 5))
+      sidecar = await readSidecar(assetDir)
+    }
+    expect(sidecar).not.toBeNull()
+    expect(sidecar?.source).toBe('fab')
+    expect(sidecar?.sourceId).toBe('a')
+    expect(sidecar?.title).toBe('A')
+    expect(sidecar?.kind).toBe('asset')
+    expect(sidecar?.fabDistributionMethod).toBe('ASSET_PACK')
   })
 })

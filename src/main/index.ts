@@ -45,6 +45,7 @@ import {
   broadcastDownloadProgress,
   broadcastDownloads,
   broadcastEngineInstalled,
+  broadcastVaultChanged,
   registerDownloadsIpc
 } from './downloads-ipc'
 
@@ -248,7 +249,8 @@ app.whenReady().then(async () => {
     },
     broadcast: broadcastDownloads,
     broadcastProgress: broadcastDownloadProgress,
-    broadcastEngineInstalled
+    broadcastEngineInstalled,
+    broadcastVaultChanged
   })
   registerEngineDownloadsIpc(session, downloadsManager, settingsStore, db.kv)
   registerDownloadsIpc(downloadsManager, settingsStore)

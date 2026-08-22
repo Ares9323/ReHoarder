@@ -120,6 +120,8 @@ export interface AppSettings {
   gameLaunchParams: string[]
 }
 
+export type LocalVaultKind = 'asset' | 'plugin' | 'project' | 'unknown'
+
 export interface LocalVaultEntry {
   name: string
   friendlyName: string | null
@@ -131,6 +133,11 @@ export interface LocalVaultEntry {
   fileCount: number
   lastModified: number
   hasData: boolean
+  kind: LocalVaultKind
+  source: 'vault' | 'fab' | 'legacy' | null
+  sourceId: string | null
+  engineVersion: string | null
+  uprojectName: string | null
 }
 
 export interface VaultListResult {
@@ -497,6 +504,8 @@ export interface CreateProjectRequest {
   engineVersion: string | null
   name: string
   parentDir: string
+  /** Absolute path to an orphan vault asset folder (no matching downloads row) to use directly as the source payload. */
+  vaultAssetDir?: string
 }
 
 export interface CreateProjectResult {
@@ -514,8 +523,11 @@ export interface AddToProjectRequest {
   source: string
   sourceId: string
   engineVersion: string | null
+  targetEngineVersion: string | null
   projectDir: string
   conflict: AddToProjectConflict
+  /** Absolute path to an orphan vault asset folder (no matching downloads row) to use directly as the source payload. */
+  vaultAssetDir?: string
 }
 
 export interface AddToProjectResult {
@@ -526,6 +538,25 @@ export interface AddToProjectResult {
   filesCopied?: number
   filesSkipped?: number
   bytesCopied?: number
+}
+
+export interface PickDirectoryResult {
+  ok: boolean
+  path?: string | null
+  error?: string
+}
+
+export interface InspectedProject {
+  name: string
+  uprojectPath: string
+  projectDir: string
+  engineAssociation: string
+}
+
+export interface InspectProjectFolderResult {
+  ok: boolean
+  error?: string
+  project?: InspectedProject | null
 }
 
 export interface SetAsTemplateRequest {
@@ -869,7 +900,12 @@ const api = {
     scanCruft: (absolutePath: string): Promise<VaultCruftScanResult> =>
       ipcRenderer.invoke('vault:scan-cruft', absolutePath),
     cleanCruft: (absolutePath: string): Promise<VaultCruftCleanResult> =>
-      ipcRenderer.invoke('vault:clean-cruft', absolutePath)
+      ipcRenderer.invoke('vault:clean-cruft', absolutePath),
+    onChanged: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on('vault:changed', listener)
+      return () => ipcRenderer.removeListener('vault:changed', listener)
+    }
   },
   engines: {
     list: (): Promise<EnginesListResult> => ipcRenderer.invoke('engines:list'),
@@ -1019,6 +1055,10 @@ const api = {
       ipcRenderer.invoke('projects:create-from-vault', req),
     addToProject: (req: AddToProjectRequest): Promise<AddToProjectResult> =>
       ipcRenderer.invoke('projects:add-to-project', req),
+    pickDirectory: (): Promise<PickDirectoryResult> =>
+      ipcRenderer.invoke('projects:pick-directory'),
+    inspectProjectFolder: (dir: string): Promise<InspectProjectFolderResult> =>
+      ipcRenderer.invoke('projects:inspect-project-folder', dir),
     setAsTemplate: (req: SetAsTemplateRequest): Promise<SetAsTemplateResult> =>
       ipcRenderer.invoke('projects:set-as-template', req),
     cleanupRedirectors: (uprojectPath: string): Promise<ProjectCleanupRedirectorsResult> =>

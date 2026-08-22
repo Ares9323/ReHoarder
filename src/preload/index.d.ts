@@ -380,7 +380,7 @@ export interface SettingsApi {
   set(partial: Partial<AppSettings>): Promise<AppSettings>
 }
 
-export type LocalVaultKind = 'asset' | 'plugin' | 'unknown'
+export type LocalVaultKind = 'asset' | 'plugin' | 'project' | 'unknown'
 
 export interface LocalVaultEntry {
   name: string
@@ -396,6 +396,7 @@ export interface LocalVaultEntry {
   source: 'vault' | 'fab' | 'legacy' | null
   sourceId: string | null
   engineVersion: string | null
+  uprojectName: string | null
 }
 
 export interface VaultListResult {
@@ -441,6 +442,7 @@ export interface VaultApi {
   deleteEntry(absolutePath: string): Promise<VaultDeleteResult>
   scanCruft(absolutePath: string): Promise<VaultCruftScanResult>
   cleanCruft(absolutePath: string): Promise<VaultCruftCleanResult>
+  onChanged(handler: () => void): () => void
 }
 
 export interface EngineInfo {
@@ -825,6 +827,8 @@ export interface CreateProjectRequest {
   engineVersion: string | null
   name: string
   parentDir: string
+  /** Absolute path to an orphan vault asset folder (no matching downloads row) to use directly as the source payload. */
+  vaultAssetDir?: string
 }
 
 export interface CreateProjectResult {
@@ -842,8 +846,11 @@ export interface AddToProjectRequest {
   source: string
   sourceId: string
   engineVersion: string | null
+  targetEngineVersion: string | null
   projectDir: string
   conflict: AddToProjectConflict
+  /** Absolute path to an orphan vault asset folder (no matching downloads row) to use directly as the source payload. */
+  vaultAssetDir?: string
 }
 
 export interface AddToProjectResult {
@@ -854,6 +861,25 @@ export interface AddToProjectResult {
   filesCopied?: number
   filesSkipped?: number
   bytesCopied?: number
+}
+
+export interface PickDirectoryResult {
+  ok: boolean
+  path?: string | null
+  error?: string
+}
+
+export interface InspectedProject {
+  name: string
+  uprojectPath: string
+  projectDir: string
+  engineAssociation: string
+}
+
+export interface InspectProjectFolderResult {
+  ok: boolean
+  error?: string
+  project?: InspectedProject | null
 }
 
 export interface SetAsTemplateRequest {
@@ -914,6 +940,8 @@ export interface ProjectsApi {
   installFromVault(req: InstallFromVaultRequest): Promise<InstallFromVaultResult>
   createFromVault(req: CreateProjectRequest): Promise<CreateProjectResult>
   addToProject(req: AddToProjectRequest): Promise<AddToProjectResult>
+  pickDirectory(): Promise<PickDirectoryResult>
+  inspectProjectFolder(dir: string): Promise<InspectProjectFolderResult>
   setAsTemplate(req: SetAsTemplateRequest): Promise<SetAsTemplateResult>
   cleanupRedirectors(uprojectPath: string): Promise<ProjectCleanupRedirectorsResult>
   cleanBuildArtifacts(projectDir: string): Promise<ProjectCleanResult>

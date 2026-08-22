@@ -123,3 +123,14 @@ export function broadcastDownloadProgress(_id: string, row: DownloadRow): void {
     if (!win.isDestroyed()) win.webContents.send('downloads:progress', row)
   }
 }
+
+/**
+ * Broadcast helper for "a download finished and the vault changed". The Vault
+ * tab listens and rescans so new/updated entries appear with the right kind
+ * and actions without a manual Rescan.
+ */
+export function broadcastVaultChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('vault:changed')
+  }
+}

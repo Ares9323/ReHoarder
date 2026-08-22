@@ -8,5 +8,5 @@
     "strict": true,
     "lib": ["ES2023", "DOM", "DOM.Iterable"]
   },
-  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.svelte", "src/preload/index.d.ts"]
+  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.svelte", "src/preload/index.d.ts", "src/shared/**/*.ts"]
 }
