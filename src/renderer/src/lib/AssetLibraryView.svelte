@@ -328,18 +328,17 @@
   })
 
   /**
-   * Whether the source badge is worth showing on the cards. `countsBySource` is
-   * keyed by the DB `source` column (`vault` / `fab` / `legacy`), so a library
-   * that only ever synced Fab has a single key — every badge would read "FAB"
-   * and just eat pixels. With Vault / Legacy assets in the mix the label is the
-   * only per-card signal of where an asset comes from, so it stays.
+   * Whether the source badge is worth showing on the cards: only when the list
+   * on screen actually mixes sources. A Fab-only list would stamp the same
+   * "FAB" on every card for no information.
    *
-   * Computed off the whole-library counts rather than the filtered `assets`
-   * array so the badge doesn't blink in and out as the user changes filters.
+   * Deliberately computed off the rendered `assets` and NOT off
+   * `countsBySource`: those counts cover every indexed row, including the vault
+   * assets that `AssetsRepo.list()` excludes from the default view. Reading
+   * them made the badge show up for anyone who had ever synced their vault,
+   * i.e. almost always, even with nothing but Fab cards on screen.
    */
-  const mixedSources = $derived(
-    Object.entries(countsBySource).some(([src, n]) => src !== 'fab' && n > 0)
-  )
+  const mixedSources = $derived(assets.some((a) => a.source !== 'fab'))
 
   /** A Fab UE asset is treated as a plugin when `distributionMethod === 'CODE_PLUGIN'`. */
   function isPlugin(asset: AssetRow): boolean {
@@ -403,11 +402,12 @@
   }
 
   /**
-   * Display names of the asset formats a Fab Other listing ships in
-   * (`assetFormats[].assetFormatType.name`, e.g. "UEFN", "Blender"). Used to
-   * tell the user *why* a listing can't be downloaded here.
+   * The asset formats a Fab Other listing ships in, as
+   * `{ code, label }` pairs read from `assetFormats[].assetFormatType`
+   * (`{ code: 'uefn', name: 'UEFN' }`). `code` drives logic, `label` is what we
+   * show the user. Used to tell them *why* a listing can't be downloaded here.
    */
-  function fabFormatsFor(asset: AssetRow): string[] {
+  function fabFormatsFor(asset: AssetRow): Array<{ code: string; label: string }> {
     if (!asset.raw) return []
     let parsed: {
       assetFormats?: Array<{ assetFormatType?: { name?: unknown; code?: unknown } }>
@@ -417,23 +417,48 @@
     } catch {
       return []
     }
-    const names: string[] = []
+    const out: Array<{ code: string; label: string }> = []
     for (const f of parsed.assetFormats ?? []) {
       const t = f.assetFormatType
-      const label = typeof t?.name === 'string' ? t.name : typeof t?.code === 'string' ? t.code : null
-      if (label && !names.includes(label)) names.push(label)
+      const code = typeof t?.code === 'string' ? t.code.toLowerCase() : ''
+      const label = typeof t?.name === 'string' ? t.name : code
+      if (!label || out.some((e) => e.label === label)) continue
+      out.push({ code, label })
     }
-    return names
+    return out
+  }
+
+  /**
+   * UEFN content isn't a download at all: it's delivered inside Unreal Editor
+   * for Fortnite, so pointing the user at fab.com to "get" it would be wrong.
+   * Only true when *every* format is UEFN — a listing that also ships, say, a
+   * Blender version does have something to download from the browser.
+   */
+  function isUefnOnly(asset: AssetRow): boolean {
+    const formats = fabFormatsFor(asset)
+    return formats.length > 0 && formats.every((f) => f.code === 'uefn')
+  }
+
+  /** Chip label for a listing ReHoarder can't download. */
+  function externalOnlyLabel(asset: AssetRow): string {
+    return isUefnOnly(asset) ? 'UEFN only' : 'Get on Fab ↗'
   }
 
   /** Tooltip explaining why the Download button isn't there. */
   function notDownloadableReason(asset: AssetRow): string {
+    if (isUefnOnly(asset)) {
+      return (
+        'UEFN content: it ships inside Unreal Editor for Fortnite and is not downloadable ' +
+        'as files, here or from fab.com. Click to view the listing on Fab.'
+      )
+    }
     const formats = fabFormatsFor(asset)
-    const shipped = formats.length > 0 ? ` This listing ships as ${formats.join(', ')}.` : ''
+    const shipped =
+      formats.length > 0 ? ` This listing ships as ${formats.map((f) => f.label).join(', ')}.` : ''
     return (
       'ReHoarder can only download Unreal Engine builds, and this listing has none.' +
       shipped +
-      ' Click to open it on Fab.'
+      ' Click to open it on Fab and download it there.'
     )
   }
 
@@ -757,6 +782,7 @@
       externalOnlyReason={a.source === 'fab' && versions.length === 0 && !isDownloadable(a)
         ? notDownloadableReason(a)
         : null}
+      externalOnlyLabel={externalOnlyLabel(a)}
       onCustomInstall={a.source === 'fab' && (versions.length > 0 || isDownloadable(a))
         ? (v) => openCustomInstall(a, v)
         : undefined}

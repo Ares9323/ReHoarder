@@ -233,6 +233,19 @@ export class AssetsRepo {
     if (filters.subSource) {
       clauses.push('sub_source = ?')
       params.push(filters.subSource)
+    } else {
+      // Same reasoning as the vault exclusion above, one library over: Fab
+      // "Other" listings (UEFN, Blender, Maya, FBX, MetaHuman, Unity, …) carry
+      // no `assetNamespace` / `projectVersions[].artifactId`, so there is
+      // nothing for the downloader to fetch — UEFN content isn't even
+      // downloadable from fab.com, it's delivered inside Unreal Editor for
+      // Fortnite. Sync keeps indexing them, but they stay out of the default
+      // view; `subSource = 'fab-other'` ("Only Fab Other") surfaces them.
+      //
+      // The `IS NULL` arm matters: `sub_source != 'fab-other'` alone evaluates
+      // to NULL (and therefore filters out) vault and legacy rows, which have
+      // no sub_source at all.
+      clauses.push("(sub_source IS NULL OR sub_source != 'fab-other')")
     }
     if (filters.listingType) {
       clauses.push('listing_type = ?')

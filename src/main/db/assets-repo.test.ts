@@ -138,6 +138,35 @@ describe('AssetsRepo.list (filters)', () => {
     const vaultRows = repo.list({ source: 'vault' })
     expect(vaultRows.map((r) => r.sourceId)).toEqual(['v1'])
   })
+
+  it('hides fab-other assets by default but surfaces them when subSource is requested', () => {
+    repo.upsert(
+      sampleAsset({ sourceId: 'o1', title: 'Blender Pack', source: 'fab', subSource: 'fab-other' })
+    )
+    const defaultRows = repo.list({})
+    expect(defaultRows.map((r) => r.sourceId)).not.toContain('o1')
+    const otherRows = repo.list({ source: 'fab', subSource: 'fab-other' })
+    expect(otherRows.map((r) => r.sourceId)).toEqual(['o1'])
+  })
+
+  it('keeps fab-ue assets in the default listing', () => {
+    repo.upsert(
+      sampleAsset({ sourceId: 'u1', title: 'UE Pack', source: 'fab', subSource: 'fab-ue' })
+    )
+    expect(repo.list({}).map((r) => r.sourceId)).toContain('u1')
+  })
+
+  /**
+   * Regression guard for the NULL-comparison trap: `sub_source != 'fab-other'`
+   * on its own evaluates to NULL for rows that have no sub_source, which would
+   * silently drop every vault and legacy asset from the results.
+   */
+  it('does not drop rows whose sub_source is NULL', () => {
+    // 'a' (hidden) / 'c' are legacy with subSource null; 'b' is fab with null too.
+    expect(repo.list({}).map((r) => r.sourceId).sort()).toEqual(['b', 'c'])
+    repo.upsert(sampleAsset({ sourceId: 'v1', source: 'vault', subSource: null }))
+    expect(repo.list({ source: 'vault' }).map((r) => r.sourceId)).toEqual(['v1'])
+  })
 })
 
 describe('AssetsRepo.setHidden', () => {

@@ -54,9 +54,13 @@
     onDownload?: () => Promise<EnqueueResult>
     /** When set, the asset has no Unreal Engine build ReHoarder can fetch (UEFN,
      *  Blender, FBX, … listings from the Fab Other library). Replaces the
-     *  Download chip with a "Get on Fab" link carrying this text as its
+     *  Download chip with a link to the listing carrying this text as its
      *  tooltip, instead of a button that always fails. */
     externalOnlyReason?: string | null
+    /** Label for that chip. Varies with what the listing actually offers:
+     *  "Get on Fab" for formats you can download in a browser, "UEFN only" for
+     *  content that exists solely inside Unreal Editor for Fortnite. */
+    externalOnlyLabel?: string
   }
 
   let {
@@ -82,7 +86,8 @@
     onDownloadVersion,
     onCustomInstall,
     onDownload,
-    externalOnlyReason = null
+    externalOnlyReason = null,
+    externalOnlyLabel = 'Get on Fab ↗'
   }: Props = $props()
 
   let refreshingFromFab = $state(false)
@@ -443,7 +448,7 @@
           disabled={!productUrl}
           title={externalOnlyReason}
           onclick={handleThumbClick}
-        >Get on Fab ↗</button>
+        >{externalOnlyLabel}</button>
       {/if}
       {#if onCustomInstall}
         <button
