@@ -373,6 +373,71 @@
   }
 
   /**
+   * Can ReHoarder actually download this asset?
+   *
+   * `runFabAssetDownload` needs `raw.assetNamespace` plus a
+   * `projectVersions[].artifactId` to ask Fab for a manifest. Those fields only
+   * exist on the UE library payload (`/e/accounts/{id}/ue/library`). Listings
+   * that came from the Other library (`/i/library/search`) — UEFN, Blender,
+   * Maya, FBX, … — carry a completely different shape, so the download throws
+   * "raw JSON is missing assetNamespace" the moment it starts. Rather than
+   * offering a button that always fails, those cards get a "Get on Fab" link.
+   */
+  function isDownloadable(asset: AssetRow): boolean {
+    if (asset.source !== 'fab' || !asset.raw) return false
+    let parsed: {
+      assetNamespace?: unknown
+      projectVersions?: Array<{ artifactId?: unknown }>
+    }
+    try {
+      parsed = JSON.parse(asset.raw)
+    } catch {
+      return false
+    }
+    if (typeof parsed.assetNamespace !== 'string' || parsed.assetNamespace.length === 0) {
+      return false
+    }
+    return (parsed.projectVersions ?? []).some(
+      (pv) => typeof pv.artifactId === 'string' && pv.artifactId.length > 0
+    )
+  }
+
+  /**
+   * Display names of the asset formats a Fab Other listing ships in
+   * (`assetFormats[].assetFormatType.name`, e.g. "UEFN", "Blender"). Used to
+   * tell the user *why* a listing can't be downloaded here.
+   */
+  function fabFormatsFor(asset: AssetRow): string[] {
+    if (!asset.raw) return []
+    let parsed: {
+      assetFormats?: Array<{ assetFormatType?: { name?: unknown; code?: unknown } }>
+    }
+    try {
+      parsed = JSON.parse(asset.raw)
+    } catch {
+      return []
+    }
+    const names: string[] = []
+    for (const f of parsed.assetFormats ?? []) {
+      const t = f.assetFormatType
+      const label = typeof t?.name === 'string' ? t.name : typeof t?.code === 'string' ? t.code : null
+      if (label && !names.includes(label)) names.push(label)
+    }
+    return names
+  }
+
+  /** Tooltip explaining why the Download button isn't there. */
+  function notDownloadableReason(asset: AssetRow): string {
+    const formats = fabFormatsFor(asset)
+    const shipped = formats.length > 0 ? ` This listing ships as ${formats.join(', ')}.` : ''
+    return (
+      'ReHoarder can only download Unreal Engine builds, and this listing has none.' +
+      shipped +
+      ' Click to open it on Fab.'
+    )
+  }
+
+  /**
    * Map `<source>:<sourceId>` → set of engine versions already downloaded
    * (status='done' in the downloads table). For asset cards with no version
    * breakdown (Fab Other) we store the sentinel `'*'` so the standalone
@@ -686,10 +751,13 @@
               engineVersion: v
             })
         : undefined}
-      onDownload={a.source === 'fab' && versions.length === 0
+      onDownload={a.source === 'fab' && versions.length === 0 && isDownloadable(a)
         ? () => window.api.downloads.enqueue(a.source, a.sourceId, a.title)
         : undefined}
-      onCustomInstall={a.source === 'fab'
+      externalOnlyReason={a.source === 'fab' && versions.length === 0 && !isDownloadable(a)
+        ? notDownloadableReason(a)
+        : null}
+      onCustomInstall={a.source === 'fab' && (versions.length > 0 || isDownloadable(a))
         ? (v) => openCustomInstall(a, v)
         : undefined}
     />

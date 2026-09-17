@@ -52,6 +52,11 @@
     onCustomInstall?: (engineVersion?: string) => void
     /** Click on the standalone Download chip (used for assets with no per-version split, e.g. Fab Other). */
     onDownload?: () => Promise<EnqueueResult>
+    /** When set, the asset has no Unreal Engine build ReHoarder can fetch (UEFN,
+     *  Blender, FBX, … listings from the Fab Other library). Replaces the
+     *  Download chip with a "Get on Fab" link carrying this text as its
+     *  tooltip, instead of a button that always fails. */
+    externalOnlyReason?: string | null
   }
 
   let {
@@ -76,7 +81,8 @@
     onRefreshFromFab,
     onDownloadVersion,
     onCustomInstall,
-    onDownload
+    onDownload,
+    externalOnlyReason = null
   }: Props = $props()
 
   let refreshingFromFab = $state(false)
@@ -429,6 +435,15 @@
           {:else}Download
           {/if}
         </button>
+      {:else if externalOnlyReason}
+        <button
+          type="button"
+          class="ev-chip ext-chip"
+          class:clickable={!!productUrl}
+          disabled={!productUrl}
+          title={externalOnlyReason}
+          onclick={handleThumbClick}
+        >Get on Fab ↗</button>
       {/if}
       {#if onCustomInstall}
         <button
@@ -779,6 +794,18 @@
     color: #fca5a5;
     background: #3a1f1f;
     border-color: #5a2727;
+  }
+
+  /* Listing with no downloadable UE build. Deliberately muted: it's an exit to
+     the browser, not an action ReHoarder performs. */
+  .ext-chip {
+    color: #8a8a8a;
+    border-style: dashed;
+  }
+  .ext-chip.clickable:hover {
+    background: #2a1f3a;
+    color: #d8b4fe;
+    border-color: #4a3268;
   }
 
   .gear-chip {
