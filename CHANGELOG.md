@@ -4,6 +4,25 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-09-17
+
+Asset grid density is now adjustable on the fly with Ctrl+wheel, the whole card thumbnail opens the marketplace listing, and the Settings panel stops looking like it auto-saves: the Save button rides along in a sticky header and changing a path list refreshes the tab that scans it.
+
+### Added
+
+- **Grid zoom on the Assets tab** — `Ctrl` + wheel resizes the card grid, with `Ctrl` + `+` / `Ctrl` + `-` for anyone without a wheel and `Ctrl` + `0` to fall back to the Settings preset. One step is exactly one column more or less rather than an arbitrary pixel bump: the grid keeps its `auto-fill` / `minmax` layout and zoom solves for the minimum card width that yields the target column count, so a zoomed grid still reflows on window resize. The chosen width persists in `localStorage` and survives tab switches and restarts; changing **Image size** in Settings clears it. An ephemeral readout reports the resulting column count and the available shortcuts. Column math lives in `grid-zoom.ts` behind 13 unit tests, covering reversibility, the clamp boundaries and the flooring rule that keeps `auto-fill` from dropping a column.
+- **"Unsaved changes" indicator in Settings** — pending edits get an amber label plus a pulsing ring on the Save button (suppressed under `prefers-reduced-motion`), so a greyed-out button no longer reads as "already saved".
+
+### Changed
+
+- **Asset thumbnails are the link** — clicking a card's image opens its marketplace listing, with a pointer cursor, a hover zoom and an "Open on Fab" tooltip. This replaces the clickable source badge, which is now a plain label and is rendered only when the library actually mixes sources (a Fab-only library would otherwise stamp the same badge on every card). Cards with no product URL keep a non-interactive image.
+- **Settings' Save button moved into a sticky header** — it stays in the top-right corner while the panel scrolls, so long sections no longer mean scrolling back up to save. Sticky rather than floating, so it can never overlap a settings group on a narrow window. Save feedback and error text moved with it.
+- **Electron's default application menu is no longer installed on Windows and Linux** — its `zoomIn` / `zoomOut` / `resetZoom` roles swallowed `Ctrl` + `+` / `-` / `0` before the renderer could see them. The window already ran with `autoHideMenuBar`, DevTools and reload come from `optimizer.watchWindowShortcuts`, and text-editing shortcuts are handled natively by Chromium. macOS keeps its menu bar, which is the app's only route to Quit / Hide.
+
+### Fixed
+
+- **Changing a path list in Settings now refreshes the tab that scans it** — editing **Project paths**, **Unreal Engine paths** or **Vault paths** rescans Projects, Engines or Vault respectively. The tab views are destroyed while the user is in Settings, so their own settings-save listeners never fired and their singleton stores kept serving the pre-save cache until a manual Rescan. Only the lists that actually changed are rescanned, comparison is order-sensitive (vault roots follow a "first writable path wins" rule, so a reordering is a real change), and the work starts in the background while the user is still in Settings so the data is ready by the time they switch tabs.
+
 ## [0.3.0] — 2026-08-22
 
 Local Vault gains project-kind handling, persistent per-asset metadata, and engine-version inference, so downloaded projects and orphan asset packs get first-class Create / Add-to-project actions. Freebies moves to a manual per-account claim model with a change-only weekly notification.

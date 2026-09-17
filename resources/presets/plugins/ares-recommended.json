@@ -1,6 +1,6 @@
 {
   "label": "Ares Recommended",
-  "description": "Strips alternative Source Code Access providers (N10X, CLion, CodeLite, KDevelop, Null, VSCode, XCode), the Apple and SpeedTree modules engines ship enabled, and turns on BlueprintAssist plus five marketplace tools (OctaGraph, AdvancedEditorUtilities, AdvancedRestartEditor, LevelBookmarks, ComponentSorter) — entries for the marketplace plugins are no-op on engines that don't have them installed.",
+  "description": "Strips alternative Source Code Access providers (N10X, CLion, CodeLite, KDevelop, Null, VSCode, XCode), the Apple and SpeedTree modules engines ship enabled, and turns on BlueprintAssist plus five marketplace tools (AresGraphManager, AdvancedEditorUtilities, AdvancedRestartEditor, LevelBookmarks, ComponentSorter) — entries for the marketplace plugins are no-op on engines that don't have them installed.",
   "plugins": [
     {
       "name": "N10XSourceCodeAccess",
@@ -58,7 +58,7 @@
       "installed": false
     },
     {
-      "name": "OctaGraph",
+      "name": "AresGraphManager",
       "enabledByDefault": true,
       "installed": false
     },
