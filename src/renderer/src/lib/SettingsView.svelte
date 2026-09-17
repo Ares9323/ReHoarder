@@ -3,6 +3,8 @@
   import { bumpSettingsVersion } from '../stores/settings-events.svelte'
   import PresetChooserDialog from './PresetChooserDialog.svelte'
   import { enginesStore } from '../stores/engines.svelte'
+  import { projectsStore } from '../stores/projects.svelte'
+  import { vaultStore } from '../stores/vault.svelte'
 
   type ImageSize = 'small' | 'medium' | 'large'
   type StartupTabKey = 'assets' | 'engines' | 'projects' | 'vault' | 'freebies' | 'downloads'
@@ -50,6 +52,9 @@
   let saving = $state(false)
   let error = $state<string | null>(null)
   let savedFlash = $state(false)
+  /** Appended to the "Saved ✓" flash when a path change kicked off a rescan,
+   *  e.g. `Projects, Vault rescanned`. Empty when nothing needed refreshing. */
+  let savedFlashDetail = $state('')
   let dirty = $state(false)
 
   /** Bulk-apply state surfaced under the global preset field. */
@@ -381,10 +386,59 @@
     }
   }
 
+  /**
+   * Order-sensitive comparison. Reordering is a real change for these lists:
+   * the vault roots follow a "first writable path wins" rule, so a permutation
+   * changes where downloads land.
+   */
+  function samePaths(a: string[], b: string[]): boolean {
+    return a.length === b.length && a.every((v, i) => v === b[i])
+  }
+
+  /**
+   * The tab views (Projects / Engines / Vault) are destroyed when the user
+   * navigates to Settings, so their own `settingsVersion()` effects can't see
+   * this save — and their singleton stores would happily serve the pre-save
+   * cache on the next `ensureLoaded()`. Rescan the stores whose root paths
+   * actually changed, in the background, so the data is already fresh (or
+   * in-flight) by the time the user switches back to the tab.
+   *
+   * Returns the human labels of the sections that were refreshed, for the
+   * "Saved ✓" flash.
+   */
+  function rescanSectionsForChangedPaths(
+    before: { projectPaths: string[]; enginePaths: string[]; vaultPaths: string[] },
+    after: AppSettings
+  ): string[] {
+    const refreshed: string[] = []
+    if (!samePaths(before.projectPaths, after.projectPaths)) {
+      refreshed.push('Projects')
+      void projectsStore.rescan()
+    }
+    if (!samePaths(before.enginePaths, after.enginePaths)) {
+      refreshed.push('Engines')
+      void enginesStore.rescan()
+    }
+    if (!samePaths(before.vaultPaths, after.vaultPaths)) {
+      refreshed.push('Vault')
+      void vaultStore.rescan()
+    }
+    return refreshed
+  }
+
   async function save(): Promise<void> {
     if (!settings) return
     saving = true
     error = null
+    // Snapshot the currently-persisted path lists before `settings` is replaced
+    // by the server response, so we can diff them afterwards. Plain copies:
+    // `settings` is `$state`, and reassigning it would otherwise leave us
+    // comparing an array against itself.
+    const pathsBefore = {
+      projectPaths: [...settings.projectPaths],
+      enginePaths: [...settings.enginePaths],
+      vaultPaths: [...settings.vaultPaths]
+    }
     try {
       // `lastActiveTab` is owned by App.svelte (debounced on every tab
       // change). The Settings panel snapshots it at mount and would
@@ -413,8 +467,12 @@
       gameLaunchParamsText = fromArgs(saved.gameLaunchParams)
       cruftPatternsText = fromArray(saved.cruftPatterns)
       dirty = false
+      const refreshed = rescanSectionsForChangedPaths(pathsBefore, saved)
+      savedFlashDetail = refreshed.length > 0 ? `${refreshed.join(', ')} rescanned` : ''
       savedFlash = true
-      window.setTimeout(() => (savedFlash = false), 1500)
+      // Path changes add a line of text worth reading — keep the flash up a
+      // little longer in that case.
+      window.setTimeout(() => (savedFlash = false), refreshed.length > 0 ? 3000 : 1500)
       bumpSettingsVersion()
     } catch (err) {
       error = err instanceof Error ? err.message : String(err)
@@ -493,12 +551,26 @@
 </script>
 
 <section>
+  <!-- Sticky so the Save button stays reachable from anywhere in this long
+       panel. Sticky rather than fixed: it's still part of the flow, so it can
+       never end up floating on top of a settings group on a narrow window. -->
   <header class="bar">
     <h2>Settings</h2>
     <div class="status">
-      {#if savedFlash}<span class="ok">Saved ✓</span>{/if}
+      {#if savedFlash}
+        <span class="ok">Saved ✓{savedFlashDetail ? ` · ${savedFlashDetail}` : ''}</span>
+      {/if}
       {#if error}<span class="err">{error}</span>{/if}
-      <button type="button" class="primary" onclick={save} disabled={!dirty || saving || loading}>
+      {#if dirty && !saving}
+        <span class="unsaved">Unsaved changes</span>
+      {/if}
+      <button
+        type="button"
+        class="primary"
+        class:needs-save={dirty && !saving}
+        onclick={save}
+        disabled={!dirty || saving || loading}
+      >
         {saving ? 'Saving…' : 'Save'}
       </button>
     </div>
@@ -1097,17 +1169,27 @@
 
 <style>
   section {
-    padding: 1.5rem;
+    /* Top padding lives on the sticky bar instead, so nothing shows through
+       above it while scrolling. */
+    padding: 0 1.5rem 1.5rem;
     max-width: 1100px;
     margin: 0 auto;
   }
   .bar {
+    position: sticky;
+    /* The TabBar publishes its measured height on `<html>`; sit flush below it. */
+    top: var(--tab-bar-height, 48px);
+    z-index: 20;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
+    padding: 1.5rem 0 0.9rem;
+    margin-bottom: 0.6rem;
     gap: 1rem;
     flex-wrap: wrap;
+    /* Opaque: settings groups scroll underneath this. */
+    background: #1a1a1a;
+    border-bottom: 1px solid #2a2a2a;
   }
   h2 {
     margin: 0;
@@ -1126,6 +1208,35 @@
   .err {
     color: #fca5a5;
     max-width: 400px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Settings are never auto-saved. Without an explicit cue the greyed-out Save
+     button reads as "already saved", so pending edits get an amber label plus
+     a pulsing ring on the button. */
+  .unsaved {
+    color: #fbbf24;
+    font-size: 0.78rem;
+    white-space: nowrap;
+  }
+  .primary.needs-save {
+    animation: save-pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes save-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgba(251, 191, 36, 0);
+    }
+    50% {
+      box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.35);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .primary.needs-save {
+      animation: none;
+      box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.5);
+    }
   }
   .primary {
     background: linear-gradient(135deg, #c084fc, #f472b6);

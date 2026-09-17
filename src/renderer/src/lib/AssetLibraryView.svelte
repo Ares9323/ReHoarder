@@ -8,6 +8,7 @@
   import { projectsStore } from '../stores/projects.svelte'
   import { downloadsStore } from '../stores/downloads.svelte'
   import { vaultStore } from '../stores/vault.svelte'
+  import { clampCardWidth, zoomStep } from './grid-zoom'
 
   type AssetSource = 'vault' | 'fab' | 'legacy'
   type AssetSubSource = 'fab-ue' | 'fab-other' | null
@@ -128,11 +129,159 @@
 
   // Settings → Image size drives the asset grid density. Lazy-loaded once on
   // mount, refreshed when Settings save fires.
-  let imageSize = $state<'small' | 'medium' | 'large'>('small')
+  type ImageSize = 'small' | 'medium' | 'large'
+  let imageSize = $state<ImageSize>('small')
+
+  // ---------------------------------------------------------------------
+  // Grid zoom (Ctrl+wheel, Ctrl+± , Ctrl+0)
+  //
+  // Settings' Image size picks the *base* card width; zooming stores an exact
+  // pixel width that overrides it until the user changes the Settings preset
+  // again (or hits Ctrl+0). The grid keeps using `auto-fill` + `minmax`, so a
+  // zoomed layout still reflows when the window is resized — we're changing
+  // the minimum card width, not pinning a column count.
+  // ---------------------------------------------------------------------
+  const BASE_CARD_WIDTH: Record<ImageSize, number> = { small: 200, medium: 280, large: 380 }
+  const CARD_WIDTH_KEY = 'rehoarder.assets.cardWidth'
+
+  function loadCardWidth(): number | null {
+    try {
+      const raw = window.localStorage.getItem(CARD_WIDTH_KEY)
+      if (!raw) return null
+      const n = Number(raw)
+      if (!Number.isFinite(n)) return null
+      return clampCardWidth(n)
+    } catch {
+      return null
+    }
+  }
+
+  /** `null` = follow the Settings preset. */
+  let cardWidthOverride = $state<number | null>(loadCardWidth())
+  const cardWidth = $derived(cardWidthOverride ?? BASE_CARD_WIDTH[imageSize])
+
+  /** Bound to the grid element so zoom can measure the real content box. */
+  let gridEl = $state<globalThis.HTMLDivElement | null>(null)
+
+  /** Ephemeral "5 per row" readout shown for a moment after each zoom step. */
+  let zoomHint = $state<string | null>(null)
+  let zoomHintTimer: ReturnType<typeof window.setTimeout> | null = null
+  function flashZoomHint(text: string): void {
+    zoomHint = text
+    if (zoomHintTimer) window.clearTimeout(zoomHintTimer)
+    zoomHintTimer = window.setTimeout(() => {
+      zoomHint = null
+      zoomHintTimer = null
+    }, 1400)
+  }
+
+  function persistCardWidth(n: number | null): void {
+    try {
+      if (n === null) window.localStorage.removeItem(CARD_WIDTH_KEY)
+      else window.localStorage.setItem(CARD_WIDTH_KEY, String(n))
+    } catch {
+      // storage full / disabled — zoom just won't survive the session
+    }
+  }
+
+  /**
+   * One zoom step = exactly one column more or less, which is what the user
+   * actually perceives. We measure the grid's real content box (padding and
+   * gap read off the computed style rather than assumed) and hand it to
+   * `zoomStep`, which does the column math.
+   *
+   * `direction` is +1 to zoom in (bigger cards, fewer per row), -1 to zoom out.
+   */
+  function zoomBy(direction: 1 | -1): void {
+    const el = gridEl
+    if (!el) {
+      // No measurement available (shouldn't happen once mounted) — fall back
+      // to a fixed step so the shortcut still does something sensible.
+      const next = clampCardWidth(cardWidth + direction * 40)
+      if (next === cardWidth) return
+      cardWidthOverride = next
+      persistCardWidth(next)
+      return
+    }
+    const cs = window.getComputedStyle(el)
+    const inner =
+      el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0)
+    if (inner <= 0) return
+    const gap = parseFloat(cs.columnGap) || 0
+    const step = zoomStep(inner, gap, cardWidth, direction)
+    if (step.cardWidth === cardWidth) return
+    cardWidthOverride = step.cardWidth
+    persistCardWidth(step.cardWidth)
+    flashZoomHint(`${step.columns} per row`)
+  }
+
+  function resetZoom(): void {
+    if (cardWidthOverride === null) return
+    cardWidthOverride = null
+    persistCardWidth(null)
+    flashZoomHint('Default size')
+  }
+
+  /**
+   * Ctrl+wheel. The listener is non-passive so `preventDefault` can suppress
+   * Chromium's own page zoom. Throttled because a trackpad pinch fires a burst
+   * of `ctrlKey` wheel events and would otherwise collapse the grid to one
+   * column in a single gesture.
+   */
+  let lastZoomAt = 0
+  $effect(() => {
+    const onWheel = (e: globalThis.WheelEvent): void => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      // Don't zoom the grid underneath an open Custom Install menu.
+      if (customMenuAsset) return
+      if (e.deltaY === 0) return
+      const now = Date.now()
+      if (now - lastZoomAt < 80) return
+      lastZoomAt = now
+      zoomBy(e.deltaY < 0 ? 1 : -1)
+    }
+    window.addEventListener('wheel', onWheel, { passive: false })
+    return () => window.removeEventListener('wheel', onWheel)
+  })
+
+  /** Keyboard equivalents for people without a wheel. */
+  $effect(() => {
+    const onKey = (e: globalThis.KeyboardEvent): void => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      if (customMenuAsset) return
+      // `+` arrives as '+' (numpad / shifted) or '=' (unshifted US layout).
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault()
+        zoomBy(1)
+      } else if (e.key === '-' || e.key === '_') {
+        e.preventDefault()
+        zoomBy(-1)
+      } else if (e.key === '0') {
+        e.preventDefault()
+        resetZoom()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
+
+  /**
+   * Changing Image size in Settings is an explicit "I want this density"
+   * statement, so it clears any zoom override. The very first load is exempt:
+   * it's just us learning the stored preset, not the user changing it.
+   */
+  let assetSettingsLoaded = false
   async function loadAssetSettings(): Promise<void> {
     try {
       const s = await window.api.settings.get()
+      const changed = assetSettingsLoaded && s.imageSize !== imageSize
       imageSize = s.imageSize
+      assetSettingsLoaded = true
+      if (changed && cardWidthOverride !== null) {
+        cardWidthOverride = null
+        persistCardWidth(null)
+      }
     } catch {
       // best-effort: stay on the default
     }
@@ -177,6 +326,20 @@
     void enginesStore.rescan()
     void projectsStore.rescan()
   })
+
+  /**
+   * Whether the source badge is worth showing on the cards. `countsBySource` is
+   * keyed by the DB `source` column (`vault` / `fab` / `legacy`), so a library
+   * that only ever synced Fab has a single key — every badge would read "FAB"
+   * and just eat pixels. With Vault / Legacy assets in the mix the label is the
+   * only per-card signal of where an asset comes from, so it stays.
+   *
+   * Computed off the whole-library counts rather than the filtered `assets`
+   * array so the badge doesn't blink in and out as the user changes filters.
+   */
+  const mixedSources = $derived(
+    Object.entries(countsBySource).some(([src, n]) => src !== 'fab' && n > 0)
+  )
 
   /** A Fab UE asset is treated as a plugin when `distributionMethod === 'CODE_PLUGIN'`. */
   function isPlugin(asset: AssetRow): boolean {
@@ -493,7 +656,7 @@
   </div>
 </div>
 
-<div class="grid grid-{imageSize}">
+<div class="grid" bind:this={gridEl} style:--card-w="{cardWidth}px">
   {#each assets as a (a.source + ':' + a.sourceId)}
     {@const versions = engineVersionsFor(a)}
     {@const plugin = isPlugin(a)}
@@ -505,6 +668,7 @@
       source={a.source}
       hidden={a.hidden}
       bookmarked={a.bookmarked}
+      showSourceBadge={mixedSources}
       seller={a.seller}
       engineVersions={versions}
       installedEngineVersions={installedEngineVersions}
@@ -551,6 +715,13 @@
 
 {#if assets.length === 0 && !syncBusy}
   <p class="empty-note">No assets match your filters.</p>
+{/if}
+
+{#if zoomHint}
+  <div class="zoom-hint" role="status" aria-live="polite">
+    <span>{zoomHint}</span>
+    <span class="zh-tip">Ctrl+scroll · Ctrl+plus / Ctrl+minus · Ctrl+0 resets</span>
+  </div>
 {/if}
 
 {#if syncError || syncLog.length > 0}
@@ -647,24 +818,43 @@
 
   .grid {
     display: grid;
-    /* `minmax` is set by the size modifier below; the default falls back to
-       the medium preset so the layout doesn't collapse if imageSize hasn't
-       been read from Settings yet on first paint. */
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    /* `--card-w` is written inline by the component: it starts from the
+       Settings Image size preset and is overridden by Ctrl+wheel / Ctrl+±
+       zoom. The `min(…, 100%)` guard keeps a single card from overflowing a
+       very narrow window. The fallback covers the first paint, before Settings
+       has been read.
+
+       The gap is deliberately a constant: zoom solves for the card width that
+       yields one column more/less, and a gap that shifted with the card size
+       would invalidate that solution right after it was applied. */
+    grid-template-columns: repeat(auto-fill, minmax(min(var(--card-w, 260px), 100%), 1fr));
     gap: 1rem;
     padding: 1.25rem 1.25rem 6rem;
   }
-  .grid.grid-small {
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 0.75rem;
+
+  /* Ephemeral column-count readout after a zoom step. Pinned under the sticky
+     filter bar, centred, and click-through so it never blocks a card. */
+  .zoom-hint {
+    position: fixed;
+    top: calc(var(--tab-bar-height, 48px) + 4rem);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 30;
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    padding: 0.35rem 0.8rem;
+    background: rgba(31, 31, 31, 0.95);
+    border: 1px solid #3a3a3a;
+    border-radius: 999px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+    color: #e0e0e0;
+    font-size: 0.82rem;
+    pointer-events: none;
   }
-  .grid.grid-medium {
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 1rem;
-  }
-  .grid.grid-large {
-    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-    gap: 1.25rem;
+  .zoom-hint .zh-tip {
+    color: #777;
+    font-size: 0.72rem;
   }
 
   .empty-note {

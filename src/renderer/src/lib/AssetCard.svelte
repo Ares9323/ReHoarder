@@ -16,6 +16,11 @@
     source: AssetSource
     hidden: boolean
     bookmarked: boolean
+    /** Render the FAB / VAULT / LEGACY label on the thumbnail. Only worth the
+     *  pixels when the library actually mixes sources — with a Fab-only library
+     *  every card would carry the same badge. Purely informational: opening the
+     *  listing is the thumbnail's job. */
+    showSourceBadge?: boolean
     /** Display name of the asset's creator / seller / publisher. Rendered as a clickable link to a Fab search filtered by that name. `null` hides the row. */
     seller?: string | null
     /** Short labels of engine versions this asset is available for, e.g. `["5.4","5.6"]`. */
@@ -57,6 +62,7 @@
     source,
     hidden,
     bookmarked,
+    showSourceBadge = false,
     seller = null,
     engineVersions = [],
     installedEngineVersions = [],
@@ -253,10 +259,13 @@
   }
 
   /**
-   * Click on the FAB / VAULT / LEGACY source badge: open the marketplace listing
-   * in the user's default browser. No-op when there's no productUrl on the asset.
+   * Click on the thumbnail: open the marketplace listing in the user's default
+   * browser. This replaces the old FAB / VAULT / LEGACY badge button — the
+   * whole image is the affordance now (pointer cursor + hover zoom + tooltip).
+   * No-op when there's no productUrl on the asset, in which case the image is
+   * rendered as a plain non-interactive element.
    */
-  function handleSourceClick(e: globalThis.MouseEvent): void {
+  function handleThumbClick(e: globalThis.MouseEvent): void {
     if (!productUrl) return
     e.preventDefault()
     e.stopPropagation()
@@ -320,7 +329,21 @@
 
 <article class:hidden-card={hidden} oncontextmenu={openMenu}>
   <div class="thumb">
-    {#if imageUrl}
+    {#if productUrl}
+      <button
+        type="button"
+        class="thumb-link"
+        title="Open on {sourceLabel[source]}"
+        aria-label="Open {title} on {sourceLabel[source]}"
+        onclick={handleThumbClick}
+      >
+        {#if imageUrl}
+          <img src={imageUrl} alt="" loading="lazy" />
+        {:else}
+          <div class="thumb-placeholder">No image</div>
+        {/if}
+      </button>
+    {:else if imageUrl}
       <img src={imageUrl} alt="" loading="lazy" />
     {:else}
       <div class="thumb-placeholder">No image</div>
@@ -328,14 +351,7 @@
     {#if bookmarked}
       <span class="bookmark-badge" title="Bookmarked">★</span>
     {/if}
-    {#if productUrl}
-      <button
-        type="button"
-        class="source-badge source-{source} clickable"
-        title="Open on {sourceLabel[source]}"
-        onclick={handleSourceClick}
-      >{sourceLabel[source]}</button>
-    {:else}
+    {#if showSourceBadge}
       <span class="source-badge source-{source}">{sourceLabel[source]}</span>
     {/if}
   </div>
@@ -537,6 +553,53 @@
     display: block;
   }
 
+  /* The thumbnail is the "open the listing" affordance (it replaced the old
+     clickable source badge). Reset the button chrome so it reads as a plain
+     image, then lean on cursor + a subtle zoom to signal it's interactive.
+     `.thumb` already clips with `overflow: hidden`, so the scaled image stays
+     inside the card's rounded corner. */
+  .thumb-link {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: none;
+    background: transparent;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .thumb-link img,
+  .thumb-link .thumb-placeholder {
+    transition: transform 0.22s ease;
+  }
+
+  .thumb-link:hover img,
+  .thumb-link:focus-visible img,
+  .thumb-link:hover .thumb-placeholder,
+  .thumb-link:focus-visible .thumb-placeholder {
+    transform: scale(1.06);
+  }
+
+  .thumb-link:focus-visible {
+    outline: 2px solid #c084fc;
+    outline-offset: -2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .thumb-link img,
+    .thumb-link .thumb-placeholder {
+      transition: none;
+    }
+    .thumb-link:hover img,
+    .thumb-link:focus-visible img,
+    .thumb-link:hover .thumb-placeholder,
+    .thumb-link:focus-visible .thumb-placeholder {
+      transform: none;
+    }
+  }
+
   .thumb-placeholder {
     display: flex;
     align-items: center;
@@ -560,13 +623,10 @@
     color: white;
     border: none;
     font-family: inherit;
-  }
-
-  .source-badge.clickable {
-    cursor: pointer;
-  }
-  .source-badge.clickable:hover {
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.18);
+    /* Sits above the zooming thumbnail so the scale transform doesn't slide
+       under / over it oddly. */
+    z-index: 1;
+    pointer-events: none;
   }
 
   .bookmark-badge {
@@ -584,6 +644,7 @@
     background: rgba(0, 0, 0, 0.7);
     color: #facc15;
     text-shadow: 0 0 4px rgba(250, 204, 21, 0.4);
+    z-index: 1;
   }
 
   .source-vault {

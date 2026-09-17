@@ -1,4 +1,4 @@
-import { app, BrowserWindow, protocol, safeStorage } from 'electron'
+import { app, BrowserWindow, Menu, protocol, safeStorage } from 'electron'
 import * as path from 'node:path'
 import { promises as fsp } from 'node:fs'
 import { electronApp, optimizer } from '@electron-toolkit/utils'
@@ -276,6 +276,18 @@ app.whenReady().then(async () => {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
+
+  // Drop Electron's default application menu. The window already runs with
+  // `autoHideMenuBar`, so nothing visible is lost — but the menu's zoomIn /
+  // zoomOut / resetZoom roles swallow Ctrl+= / Ctrl+- / Ctrl+0 before the
+  // renderer sees them, and the Assets grid binds those to its own zoom.
+  // DevTools + reload shortcuts come from `optimizer.watchWindowShortcuts`
+  // above, not from the menu, and text-editing shortcuts are handled natively
+  // by Chromium. macOS is left alone: there the menu bar is the app's only
+  // route to Quit / Hide / the standard Cmd shortcuts.
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null)
+  }
 
   mainWindow = createMainWindow()
 
