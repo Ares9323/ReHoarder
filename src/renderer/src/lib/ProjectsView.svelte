@@ -64,6 +64,45 @@
       // storage full / disabled — silently ignore, filters just won't persist this session
     }
   })
+
+  // Per-project hide, keyed by `uprojectPath` (the only stable per-project id;
+  // names collide across roots). Same persistence approach as the version
+  // filter above. Paths for projects that no longer exist are harmless: they
+  // simply never match a row, and the counter below only counts live ones.
+  const HIDDEN_PROJECTS_KEY = 'rehoarder.projects.hiddenProjects'
+  function loadHiddenProjects(): Set<string> {
+    try {
+      const raw = window.localStorage.getItem(HIDDEN_PROJECTS_KEY)
+      if (!raw) return new Set()
+      const arr = JSON.parse(raw)
+      if (!Array.isArray(arr)) return new Set()
+      return new Set(arr.filter((v): v is string => typeof v === 'string'))
+    } catch {
+      return new Set()
+    }
+  }
+  let hiddenProjects = $state<Set<string>>(loadHiddenProjects())
+  $effect(() => {
+    try {
+      window.localStorage.setItem(HIDDEN_PROJECTS_KEY, JSON.stringify([...hiddenProjects]))
+    } catch {
+      // storage full / disabled — silently ignore
+    }
+  })
+  /** Reveals hidden projects in place (dimmed) instead of filtering them out. */
+  let showHiddenProjects = $state(false)
+
+  function isHiddenProject(p: ProjectInfo): boolean {
+    return hiddenProjects.has(p.uprojectPath)
+  }
+  function toggleHiddenProject(p: ProjectInfo): void {
+    const next = new Set(hiddenProjects)
+    if (next.has(p.uprojectPath)) next.delete(p.uprojectPath)
+    else next.add(p.uprojectPath)
+    hiddenProjects = next
+  }
+  /** Only counts projects that are actually on disk right now. */
+  const hiddenProjectCount = $derived(projects.filter((p) => hiddenProjects.has(p.uprojectPath)).length)
   let sortBy = $state<SortKey>('lastModified')
   let sortDir = $state<SortDir>('desc')
 
@@ -121,6 +160,7 @@
     const q = search.trim().toLowerCase()
     return projects.filter((p) => {
       if (hiddenVersions.has(engineBucket(p.engineAssociation))) return false
+      if (!showHiddenProjects && hiddenProjects.has(p.uprojectPath)) return false
       if (q.length > 0 && !p.name.toLowerCase().includes(q)) return false
       return true
     })
@@ -274,6 +314,12 @@
     const p = contextMenu.project
     closeContextMenu()
     startTemplating(p)
+  }
+  function ctxToggleHidden(): void {
+    if (!contextMenu) return
+    const p = contextMenu.project
+    closeContextMenu()
+    toggleHiddenProject(p)
   }
 
   /**
@@ -532,6 +578,19 @@
             <button type="button" class="chip-reset" onclick={showAllVersions}>Show all</button>
           {/if}
         {/if}
+        {#if hiddenProjectCount > 0}
+          <button
+            type="button"
+            class="chip-reset"
+            class:on={showHiddenProjects}
+            onclick={() => (showHiddenProjects = !showHiddenProjects)}
+            title={showHiddenProjects
+              ? 'Filter the hidden projects back out of the list'
+              : 'Reveal the projects you hid, dimmed and in place'}
+          >
+            {showHiddenProjects ? 'Hide hidden' : 'Show hidden'} ({hiddenProjectCount})
+          </button>
+        {/if}
       </div>
     </div>
   {/if}
@@ -610,6 +669,9 @@
     <div class="ctx-divider"></div>
     <button type="button" role="menuitem" onclick={() => void ctxCreateShortcut()}>
       Create desktop shortcut
+    </button>
+    <button type="button" role="menuitem" onclick={ctxToggleHidden}>
+      {isHiddenProject(cm.project) ? 'Show in list' : 'Hide from list'}
     </button>
   </div>
 {/if}
@@ -719,8 +781,11 @@
         {@const st = getState(p.uprojectPath)}
         <tr
           class="row"
+          class:hidden-row={isHiddenProject(p)}
           oncontextmenu={(e) => openContextMenu(e, p)}
-          title="Right-click for more actions"
+          title={isHiddenProject(p)
+            ? 'Hidden from the list — right-click to show it again'
+            : 'Right-click for more actions'}
         >
           <td class="kind">
             {#if p.hasCode}
@@ -943,6 +1008,19 @@
   .chip-reset:hover {
     color: #ddd;
     border-color: #666;
+  }
+  /* "Show hidden" while active: solid purple edge, so it's obvious the list is
+     currently padded with rows that are normally filtered out. */
+  .chip-reset.on {
+    color: #d8b4fe;
+    border-style: solid;
+    border-color: #4a3268;
+    background: #2a1f3a;
+  }
+  /* A hidden project revealed by "Show hidden". Dimmed rather than badged: the
+     row keeps every action, it just reads as "not part of my normal list". */
+  .row.hidden-row td {
+    opacity: 0.45;
   }
   .state {
     background: #232325;
