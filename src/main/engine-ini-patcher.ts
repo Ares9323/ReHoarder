@@ -269,6 +269,72 @@ export function applyMerge(engineDoc: IniDocument, masterDoc: IniDocument): Patc
   }
 }
 
+/**
+ * Narrow merge for platform-specific ini files (`Engine/Config/Windows/
+ * WindowsEditorPerProjectUserSettings.ini` and friends).
+ *
+ * Unreal loads the platform file *after* `BaseEditorPerProjectUserSettings.ini`,
+ * so anything it declares wins. Epic uses that: engines shipping this file put
+ * `[/Script/LiveCoding.LiveCodingSettings] bEnabled=True` in it, which silently
+ * defeats a `bEnabled=False` written into the Base file by our master. That
+ * setting could only ever be changed by editing the platform file directly.
+ *
+ * The fix can't be "apply the whole master here too": master sections carry
+ * array entries (`+MonitorScreenResolutions=`, `+Node=`) and Unreal
+ * *concatenates* those down the chain, so every entry would end up duplicated.
+ *
+ * So this pass only ever *rewrites what is already there*:
+ *   - sections absent from the platform file are skipped, never created;
+ *   - keys absent from a matching section are skipped, never added;
+ *   - array-style keys are left completely alone;
+ *   - a scalar present in both, with a different value, is rewritten to the
+ *     master's value.
+ *
+ * Net effect: the platform file can no longer contradict the master, and it
+ * gains nothing it didn't already have.
+ */
+export function applyOverrideOnlyMerge(
+  platformDoc: IniDocument,
+  masterDoc: IniDocument
+): PatchResult {
+  let scalarsOverridden = 0
+  const warnings: string[] = []
+
+  for (const mSection of masterDoc.sections) {
+    if (mSection.header === null) continue // Master preamble is documentation.
+    // `commentAll` means "neutralise Epic's whole section"; expressing that in
+    // a file we only ever override in place isn't meaningful, so skip it.
+    if (mSection.sectionDirective !== 'none') continue
+
+    const target = findSection(platformDoc, mSection.header)
+    if (!target) continue
+
+    const multiKeys = findMultiValueKeys(mSection)
+    for (const mLine of mSection.lines) {
+      if (mLine.kind !== 'scalar' || !mLine.key) continue
+      if (multiKeys.has(mLine.key.toLowerCase())) continue
+
+      const idx = findScalarIndex(target, mLine.key)
+      if (idx < 0) continue
+      // Also skip when the platform file treats this key as an array.
+      if (findMultiValueKeys(target).has(mLine.key.toLowerCase())) continue
+      if (target.lines[idx].value === mLine.value) continue
+
+      target.lines[idx] = { ...mLine, kind: 'scalar' }
+      scalarsOverridden++
+    }
+  }
+
+  return {
+    scalarsOverridden,
+    scalarsAdded: 0,
+    arraysReplaced: 0,
+    sectionsCommented: 0,
+    sectionsAdded: 0,
+    warnings
+  }
+}
+
 export function summarisePatchResult(r: PatchResult): string {
   const parts: string[] = []
   if (r.scalarsOverridden > 0)

@@ -2,6 +2,7 @@ import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 import {
   applyMerge,
+  applyOverrideOnlyMerge,
   buildSentinelLine,
   computeMasterHash,
   hasSentinel,
@@ -20,8 +21,35 @@ import {
 const ENGINE_INI_REL = path.join('Engine', 'Config', 'BaseEditorPerProjectUserSettings.ini')
 const BACKUP_SUFFIX = '.bak'
 
+/**
+ * Platform-specific sibling of the file above. Unreal loads it *after* the
+ * Base file, so whatever it declares overrides the master we just merged.
+ *
+ * Epic ships real values here, and they win: every engine that has this file
+ * sets `[/Script/LiveCoding.LiveCodingSettings] bEnabled=True`, which quietly
+ * defeats the `bEnabled=False` our master writes into the Base file. Disabling
+ * Live Coding through the master has therefore never actually worked on those
+ * engines — the only fix was to edit this file by hand. Hence the narrow
+ * override-only pass we run over it after every apply.
+ *
+ * Only the Windows file is handled: the editor targets we patch
+ * (`UnrealEditor.exe`, keybindings under `%LOCALAPPDATA%`) are Windows-only
+ * anyway, and on a Mac/Linux engine this file simply doesn't exist, so the
+ * pass no-ops.
+ */
+const PLATFORM_INI_REL = path.join(
+  'Engine',
+  'Config',
+  'Windows',
+  'WindowsEditorPerProjectUserSettings.ini'
+)
+
 export function getEngineIniPath(engineRoot: string): string {
   return path.join(engineRoot, ENGINE_INI_REL)
+}
+
+export function getPlatformIniPath(engineRoot: string): string {
+  return path.join(engineRoot, PLATFORM_INI_REL)
 }
 
 export function getBackupPath(engineRoot: string): string {
@@ -84,6 +112,10 @@ export interface ApplyEditorSettingsResult {
   /** Short summary of what changed (overrides, additions, comments). */
   summary?: string
   patch?: PatchResult
+  /** Absolute path of the platform ini, when one was found and rewritten. */
+  platformIniPath?: string
+  /** Scalars realigned in the platform ini because it contradicted the master. */
+  platformScalarsOverridden?: number
   /** When `dryRun: true` was requested, the proposed merged content (with
    *  the new sentinel) — not written to disk. */
   proposedContent?: string
@@ -157,14 +189,23 @@ export async function applyEditorSettings(
     // Return the proposed content for the caller to diff; nothing touches
     // disk so this is a pure preview. `backupWritten` reflects what a real
     // apply *would* do, not what happened, so the dialog can warn the user
-    // that a fresh baseline would be captured.
+    // that a fresh baseline would be captured. The platform pass is previewed
+    // too — its edits land in a different file than the diff shows, so the
+    // count is the only way the user learns it's going to happen.
+    const platformPreview = await applyPlatformOverrides(engineRoot, masterDoc, true)
     return {
       ok: true,
       engineIniPath,
       backupPath,
       backupWritten: !hadSentinel && !backupExists && engineContent.length > 0,
-      summary: summarisePatchResult(patch),
+      summary:
+        summarisePatchResult(patch) +
+        (platformPreview.scalarsOverridden > 0
+          ? `; ${platformPreview.scalarsOverridden} to realign in WindowsEditorPerProjectUserSettings.ini`
+          : ''),
       patch,
+      platformIniPath: platformPreview.path,
+      platformScalarsOverridden: platformPreview.scalarsOverridden,
       proposedContent: finalContent,
       currentContent: cleanEngineContent
     }
@@ -187,13 +228,71 @@ export async function applyEditorSettings(
   await fsp.writeFile(tmp, finalContent, 'utf-8')
   await fsp.rename(tmp, engineIniPath)
 
+  // Second pass: stop the platform ini from overriding what we just wrote.
+  const platform = await applyPlatformOverrides(engineRoot, masterDoc)
+
   return {
     ok: true,
     engineIniPath,
     backupPath,
     backupWritten,
-    summary: summarisePatchResult(patch),
-    patch
+    summary:
+      summarisePatchResult(patch) +
+      (platform.scalarsOverridden > 0
+        ? `; ${platform.scalarsOverridden} realigned in WindowsEditorPerProjectUserSettings.ini`
+        : ''),
+    patch,
+    platformIniPath: platform.path,
+    platformScalarsOverridden: platform.scalarsOverridden
+  }
+}
+
+/**
+ * Override-only pass over `Engine/Config/Windows/
+ * WindowsEditorPerProjectUserSettings.ini`, run right after the Base file is
+ * written. See `applyOverrideOnlyMerge` for why this can't just be a second
+ * full merge (array keys would be duplicated down the config chain).
+ *
+ * Best-effort by design: a missing file is the normal case on older engines
+ * (UE 4.27 and 5.4 don't ship one) and on non-Windows installs, and a failure
+ * here must not invalidate the Base patch that already landed. The original is
+ * captured as `.bak` on first touch, like every other file we rewrite.
+ *
+ * `masterDoc` is consumed read-only, but `applyOverrideOnlyMerge` mutates the
+ * *platform* document it is given, so the freshly parsed one is safe to pass.
+ */
+async function applyPlatformOverrides(
+  engineRoot: string,
+  masterDoc: ReturnType<typeof parseIni>,
+  dryRun = false
+): Promise<{ path?: string; scalarsOverridden: number }> {
+  const platformIniPath = getPlatformIniPath(engineRoot)
+  let content: string
+  try {
+    content = await fsp.readFile(platformIniPath, 'utf-8')
+  } catch {
+    return { scalarsOverridden: 0 } // No platform file on this engine — nothing to do.
+  }
+  try {
+    const doc = parseIni(content)
+    const result = applyOverrideOnlyMerge(doc, masterDoc)
+    // Under dry-run the mutated `doc` is simply discarded.
+    if (dryRun || result.scalarsOverridden === 0) {
+      return { path: platformIniPath, scalarsOverridden: result.scalarsOverridden }
+    }
+    const backupPath = platformIniPath + BACKUP_SUFFIX
+    try {
+      await fsp.access(backupPath)
+    } catch {
+      await fsp.writeFile(backupPath, content, 'utf-8')
+    }
+    const tmp = platformIniPath + '.tmp'
+    await fsp.writeFile(tmp, serializeIni(doc), 'utf-8')
+    await fsp.rename(tmp, platformIniPath)
+    return { path: platformIniPath, scalarsOverridden: result.scalarsOverridden }
+  } catch {
+    // Never fail the whole apply over the secondary file.
+    return { path: platformIniPath, scalarsOverridden: 0 }
   }
 }
 
@@ -228,5 +327,20 @@ export async function restoreEditorSettings(
   const tmp = engineIniPath + '.tmp'
   await fsp.copyFile(backupPath, tmp)
   await fsp.rename(tmp, engineIniPath)
+
+  // Roll back the platform ini too, when Apply had to touch it. Without this a
+  // Restore would leave Epic's own file still carrying our values, and the
+  // engine would keep behaving as if patched.
+  const platformIniPath = getPlatformIniPath(engineRoot)
+  const platformBackup = platformIniPath + BACKUP_SUFFIX
+  try {
+    await fsp.access(platformBackup)
+    const ptmp = platformIniPath + '.tmp'
+    await fsp.copyFile(platformBackup, ptmp)
+    await fsp.rename(ptmp, platformIniPath)
+  } catch {
+    /* never touched (or nothing to restore) — the Base rollback still stands */
+  }
+
   return { ok: true, engineIniPath }
 }
