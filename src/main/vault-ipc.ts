@@ -147,6 +147,7 @@ export function registerVaultIpc(
           source: AssetSource
           sourceId: string
           engineVersion: string | null
+          buildVersion: string | null
         }
       >()
       for (const row of downloadsRepo.listAll()) {
@@ -157,11 +158,13 @@ export function registerVaultIpc(
             title: row.title,
             source: row.source as AssetSource,
             sourceId: row.sourceId,
-            engineVersion: row.engineVersion
+            engineVersion: row.engineVersion,
+            buildVersion: row.buildVersion
           })
         }
       }
       for (const e of entries) {
+        const key = path.resolve(e.path).toLowerCase()
         // Tier 1 — sidecar. When present and valid, metadata + kind come
         // straight from it; no DB join needed for this entry.
         const sidecar = await readSidecar(e.path)
@@ -170,6 +173,8 @@ export function registerVaultIpc(
           e.source = (sidecar.source as AssetSource) ?? null
           e.sourceId = sidecar.sourceId
           e.engineVersion = sidecar.engineVersion
+          // Sidecars written before buildVersion existed: borrow it from the DB row.
+          e.buildVersion = sidecar.buildVersion ?? downloadInfoByPath.get(key)?.buildVersion ?? null
           // Structural on-disk detection (already run by `listLocalVault`,
           // sitting on `e.kind`) is the source of truth. Only fall back to
           // the sidecar's `kind` when the disk read was inconclusive —
@@ -184,19 +189,20 @@ export function registerVaultIpc(
         }
         // Tier 2 — DB join (current behaviour). On a hit, backfill the sidecar
         // so the next scan reads tier 1. Backfill is best-effort.
-        const key = path.resolve(e.path).toLowerCase()
         const info = downloadInfoByPath.get(key)
         if (info) {
           e.friendlyName = info.title
           e.source = info.source
           e.sourceId = info.sourceId
           e.engineVersion = info.engineVersion
+          e.buildVersion = info.buildVersion
           const asset = assetsRepo.findById(info.source, info.sourceId)
           e.imageUrl = asset?.imageUrl ?? null
           void writeSidecar(e.path, {
             source: info.source,
             sourceId: info.sourceId,
             engineVersion: info.engineVersion,
+            buildVersion: info.buildVersion,
             title: info.title,
             kind: e.kind,
             fabDistributionMethod: null,
@@ -218,6 +224,7 @@ export function registerVaultIpc(
               source: e.source,
               sourceId: e.sourceId,
               engineVersion: inferred,
+              buildVersion: null,
               title: e.friendlyName,
               kind: e.kind,
               fabDistributionMethod: null,

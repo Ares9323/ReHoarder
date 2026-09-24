@@ -252,4 +252,80 @@ describe('vault:list metadata resolution order', () => {
     expect(sidecar!.source).toBeNull()
     expect(sidecar!.sourceId).toBeNull()
   })
+
+  it('exposes buildVersion from the DB join and writes it into the backfilled sidecar', async () => {
+    const assetDir = await makeAssetDir('WithBuild')
+    downloadsRepo.insert({
+      id: 'dl-b',
+      source: 'fab',
+      sourceId: 'build-id',
+      title: 'Build Title',
+      status: 'done',
+      bytesDone: 1,
+      bytesTotal: 1,
+      filesDone: 1,
+      filesTotal: 1,
+      engineVersion: '5.7',
+      installTargetPath: null,
+      createdAt: Date.now()
+    })
+    downloadsRepo.setStatus('dl-b', 'done', {
+      destDir: assetDir,
+      buildVersion: '5.7.0-48201490+++UE5+Dev-Marketplace-Windows'
+    })
+
+    const result = await listVault()
+    const entry = result.entries!.find((e) => e.name === 'WithBuild')!
+    expect(entry.buildVersion).toBe('5.7.0-48201490+++UE5+Dev-Marketplace-Windows')
+    // The tier-2 sidecar backfill is fire-and-forget: poll briefly for it.
+    let sidecar = await readSidecar(assetDir)
+    for (let i = 0; i < 50 && !sidecar; i++) {
+      await new Promise((r) => setTimeout(r, 10))
+      sidecar = await readSidecar(assetDir)
+    }
+    expect(sidecar?.buildVersion).toBe('5.7.0-48201490+++UE5+Dev-Marketplace-Windows')
+  })
+
+  it('falls back to the DB buildVersion when an existing sidecar predates the field', async () => {
+    const assetDir = await makeAssetDir('OldSidecar')
+    await fsp.writeFile(
+      path.join(assetDir, '.rehoarder.json'),
+      JSON.stringify({
+        version: 1,
+        type: 'vault-asset',
+        source: 'fab',
+        sourceId: 'old-id',
+        engineVersion: '5.5',
+        title: 'Old Sidecar',
+        kind: 'asset',
+        fabDistributionMethod: null,
+        downloadedAt: 1
+      })
+    )
+    downloadsRepo.insert({
+      id: 'dl-o',
+      source: 'fab',
+      sourceId: 'old-id',
+      title: 'Old Sidecar',
+      status: 'done',
+      bytesDone: 1,
+      bytesTotal: 1,
+      filesDone: 1,
+      filesTotal: 1,
+      engineVersion: '5.5',
+      installTargetPath: null,
+      createdAt: Date.now()
+    })
+    downloadsRepo.setStatus('dl-o', 'done', { destDir: assetDir, buildVersion: '5.5.0-38995378+++x' })
+
+    const result = await listVault()
+    const entry = result.entries!.find((e) => e.name === 'OldSidecar')!
+    expect(entry.buildVersion).toBe('5.5.0-38995378+++x')
+  })
+
+  it('leaves buildVersion null for an orphan folder', async () => {
+    await makeAssetDir('Orphan')
+    const result = await listVault()
+    expect(result.entries!.find((e) => e.name === 'Orphan')!.buildVersion).toBeNull()
+  })
 })

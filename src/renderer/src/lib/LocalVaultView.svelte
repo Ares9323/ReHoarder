@@ -5,6 +5,7 @@
   import { projectsStore } from '../stores/projects.svelte'
   import AddToProjectDialog from './AddToProjectDialog.svelte'
   import CreateProjectDialog from './CreateProjectDialog.svelte'
+  import { vaultVersionLabel } from './vault-version'
 
   type LocalVaultKind = 'asset' | 'plugin' | 'project' | 'unknown'
 
@@ -22,6 +23,7 @@
     source: 'vault' | 'fab' | 'legacy' | null
     sourceId: string | null
     engineVersion: string | null
+    buildVersion: string | null
     uprojectName: string | null
   }
 
@@ -540,6 +542,14 @@
                   >
                     {kindLabel(e.kind)}
                   </span>
+                  {#if vaultVersionLabel(e.engineVersion, e.buildVersion)}
+                    <span
+                      class="version-pill"
+                      title={e.buildVersion ? `Fab build ${e.buildVersion}` : 'Engine version'}
+                    >
+                      {vaultVersionLabel(e.engineVersion, e.buildVersion)}
+                    </span>
+                  {/if}
                 {/if}
                 {#if !e.hasData}<span class="badge">no data/</span>{/if}
                 {#if e.friendlyName}<span class="folder-hint">{e.name}</span>{/if}
@@ -1018,5 +1028,15 @@
     color: #888;
     background: #2a2a2a;
     border-color: #333;
+  }
+  .version-pill {
+    margin-left: 0.4rem;
+    font-size: 0.65rem;
+    border-radius: 3px;
+    padding: 0.05rem 0.4rem;
+    border: 1px solid #3a3a3a;
+    background: #222;
+    color: #c9c9c9;
+    font-variant-numeric: tabular-nums;
   }
 </style>

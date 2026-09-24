@@ -35,6 +35,8 @@ export interface VaultSidecar {
   source: AssetSource | null
   sourceId: string | null
   engineVersion: string | null
+  /** Fab `Manifest.meta.buildVersion` of the downloaded payload. Null for orphans and pre-field sidecars. */
+  buildVersion: string | null
   title: string | null
   kind: LocalVaultKind
   fabDistributionMethod: string | null
@@ -72,6 +74,7 @@ export async function readSidecar(assetDir: string): Promise<VaultSidecar | null
     source: (p.source as AssetSource | null) ?? null,
     sourceId: (p.sourceId as string | null) ?? null,
     engineVersion: (p.engineVersion as string | null) ?? null,
+    buildVersion: typeof p.buildVersion === 'string' ? p.buildVersion : null,
     title: (p.title as string | null) ?? null,
     kind: (p.kind as LocalVaultKind) ?? 'unknown',
     fabDistributionMethod: (p.fabDistributionMethod as string | null) ?? null,

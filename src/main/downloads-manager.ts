@@ -467,6 +467,7 @@ export class DownloadsManager {
       source: row.source as AssetSource,
       sourceId: row.sourceId,
       engineVersion: row.engineVersion,
+      buildVersion: row.buildVersion,
       title: row.title,
       kind,
       fabDistributionMethod,

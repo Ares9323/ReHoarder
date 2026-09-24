@@ -43,6 +43,8 @@ export interface LocalVaultEntry {
   sourceId: string | null
   /** Engine version recorded on the download row (`5.4`, `4.27`, …). Null when the download predates per-version tracking. */
   engineVersion: string | null
+  /** Fab build of the downloaded payload (`Manifest.meta.buildVersion`). Filled by the IPC layer; null for orphans. */
+  buildVersion: string | null
   /** Base name (no extension) of the `.uproject` file found among the immediate children of `data/` (or the entry root if there's no `data/` — see {@link findUprojectBaseName}). Only populated when `kind === 'project'`; `null` otherwise, including when a project entry's `.uproject` couldn't be re-resolved. */
   uprojectName: string | null
 }
@@ -124,6 +126,7 @@ export async function listLocalVault(vaultDirs: string[]): Promise<LocalVaultEnt
           source: null,
           sourceId: null,
           engineVersion: null,
+          buildVersion: null,
           uprojectName
         }
         return { entry, key }

@@ -137,6 +137,7 @@ export interface LocalVaultEntry {
   source: 'vault' | 'fab' | 'legacy' | null
   sourceId: string | null
   engineVersion: string | null
+  buildVersion: string | null
   uprojectName: string | null
 }
 

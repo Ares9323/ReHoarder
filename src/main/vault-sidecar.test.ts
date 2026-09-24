@@ -18,6 +18,7 @@ describe('writeSidecar / readSidecar', () => {
       source: 'fab',
       sourceId: 'abc123',
       engineVersion: '5.7',
+      buildVersion: '5.7.0-1+++x',
       title: 'Beach Life',
       kind: 'asset',
       fabDistributionMethod: 'ASSET_PACK',
@@ -31,6 +32,7 @@ describe('writeSidecar / readSidecar', () => {
       source: 'fab',
       sourceId: 'abc123',
       engineVersion: '5.7',
+      buildVersion: '5.7.0-1+++x',
       title: 'Beach Life',
       kind: 'asset',
       fabDistributionMethod: 'ASSET_PACK',
@@ -43,6 +45,7 @@ describe('writeSidecar / readSidecar', () => {
       source: null,
       sourceId: null,
       engineVersion: '5.4',
+      buildVersion: null,
       title: null,
       kind: 'asset',
       fabDistributionMethod: null,
@@ -56,6 +59,7 @@ describe('writeSidecar / readSidecar', () => {
       source: null,
       sourceId: null,
       engineVersion: '5.4',
+      buildVersion: null,
       title: null,
       kind: 'asset',
       fabDistributionMethod: null,
@@ -65,7 +69,7 @@ describe('writeSidecar / readSidecar', () => {
 
   it('writes to <assetDir>/.rehoarder.json', async () => {
     await writeSidecar(dir, {
-      source: 'fab', sourceId: 'x', engineVersion: null, title: null,
+      source: 'fab', sourceId: 'x', engineVersion: null, buildVersion: null, title: null,
       kind: 'project', fabDistributionMethod: null, downloadedAt: 1
     })
     const raw = await fsp.readFile(path.join(dir, SIDECAR_FILENAME), 'utf-8')
@@ -92,11 +96,30 @@ describe('writeSidecar / readSidecar', () => {
 
   it('stamps type: vault-asset on write', async () => {
     await writeSidecar(dir, {
-      source: 'fab', sourceId: 'x', engineVersion: null, title: null,
+      source: 'fab', sourceId: 'x', engineVersion: null, buildVersion: null, title: null,
       kind: 'project', fabDistributionMethod: null, downloadedAt: 1
     })
     const raw = await fsp.readFile(path.join(dir, SIDECAR_FILENAME), 'utf-8')
     expect(JSON.parse(raw).type).toBe('vault-asset')
+  })
+
+  it('reads a pre-buildVersion sidecar as buildVersion null', async () => {
+    await fsp.writeFile(
+      path.join(dir, SIDECAR_FILENAME),
+      JSON.stringify({
+        version: 1,
+        type: 'vault-asset',
+        source: 'fab',
+        sourceId: 'old',
+        engineVersion: '5.3',
+        title: 'Old',
+        kind: 'asset',
+        fabDistributionMethod: null,
+        downloadedAt: 1
+      }),
+      'utf-8'
+    )
+    expect((await readSidecar(dir))?.buildVersion).toBeNull()
   })
 
   it('rejects a project marker (no type field) shaped payload', async () => {
