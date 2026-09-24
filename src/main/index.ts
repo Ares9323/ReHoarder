@@ -29,8 +29,12 @@ import { VaultClient } from './vault/vault-client'
 import { EpicWebSessionFactory } from './auth/epic-web-session'
 import { ElectronCloudflareWarmer } from './cloudflare/cf-warmup'
 import { createElectronFetch } from './http/electron-fetch'
-import { FabSessionClient, FetchFabLoginDriver, type FabSessionLoader } from './fab/fab-session'
+import { FabSessionClient } from './fab/fab-session'
 import { FabClient } from './fab/fab-client'
+import { FabWebSession } from './fab/fab-web-session'
+import { createElectronFabPageFactory, createPartitionCookies } from './fab/fab-web-page'
+import { registerFabWebIpc } from './fab/fab-web-ipc'
+import { LAUNCHER_UA } from './http/user-agents'
 import { Sync } from './sync/sync'
 import { registerLibraryIpc } from './sync/ipc'
 import { registerDebugIpc } from './download/debug-ipc'
@@ -51,6 +55,7 @@ import {
 
 let db: AppDb | null = null
 let mainWindow: BrowserWindow | null = null
+let fabWebSession: FabWebSession | null = null
 
 /**
  * Register a custom `rh-file://` protocol so the renderer can show local image
@@ -134,23 +139,32 @@ app.whenReady().then(async () => {
   )
   // Fab API calls go through net.fetch on the CF-warmup partition so the
   // Chromium TLS fingerprint and the cf_clearance cookie persisted there
-  // are reused — Cloudflare validates both before letting traffic through.
-  //
-  // useSessionCookies: true so the handshake (F1-F5) behaves like a real
-  // browser navigation — Chromium reads/writes the partition cookie store
-  // along the redirect chain, including the intermediate Set-Cookie
-  // headers `net.request` would otherwise swallow. The driver pre-seeds
-  // the partition from our in-memory jar (which carries the freshly-
-  // bootstrapped Epic web session cookies).
+  // are reused: Cloudflare validates both before letting traffic through.
+  // `useSessionCookies: true` so requests carry the partition cookies.
   const fabFetch = await createElectronFetch(CF_PARTITION, { useSessionCookies: true })
-  const fabSessionLoader: FabSessionLoader = async () => {
-    const { session } = await import('electron')
-    return session.fromPartition(CF_PARTITION)
-  }
-  const fabLoginDriver = new FetchFabLoginDriver(fabFetch, fabSessionLoader)
-  const fabSessionClient = new FabSessionClient(fabLoginDriver)
+  // Signed-in fab.com browser session: login in a real window, `/i/*` calls
+  // from inside a hidden fab.com page (see fab-web-session.ts).
+  fabWebSession = new FabWebSession({
+    createPage: createElectronFabPageFactory({
+      partition: CF_PARTITION,
+      userAgent: LAUNCHER_UA,
+      getParent: () => mainWindow
+    })
+  })
+  const fabSessionClient = new FabSessionClient(
+    fabWebSession,
+    createPartitionCookies(CF_PARTITION)
+  )
   const fabClient = new FabClient(fabFetch)
-  const sync = new Sync(assetsRepo, vaultClient, epicWebSessionFactory, fabSessionClient, fabClient)
+  registerFabWebIpc(fabWebSession)
+  const sync = new Sync(
+    assetsRepo,
+    vaultClient,
+    epicWebSessionFactory,
+    fabSessionClient,
+    fabClient,
+    fabWebSession
+  )
   registerLibraryIpc(assetsRepo, sync, session, () => mainWindow, {
     epicWebSessionFactory,
     fabSessionClient,
@@ -290,6 +304,7 @@ app.whenReady().then(async () => {
   }
 
   mainWindow = createMainWindow()
+  disposeFabWebOnClose(mainWindow)
 
   // Fire-and-forget startup update check. Wrapped in a short delay so the
   // renderer has a chance to attach the `updates:available` listener before
@@ -312,9 +327,20 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createMainWindow()
+      disposeFabWebOnClose(mainWindow)
     }
   })
 })
+
+/**
+ * The Fab web session keeps a hidden BrowserWindow alive for up to 5 minutes
+ * of idle time. A hidden window counts for `window-all-closed`, so release it
+ * together with the main window or the app would not quit on close. The
+ * session recreates its pages lazily if it is used again.
+ */
+function disposeFabWebOnClose(win: BrowserWindow): void {
+  win.on('closed', () => fabWebSession?.dispose())
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -323,6 +349,8 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  fabWebSession?.dispose()
+  fabWebSession = null
   if (db) {
     db.raw.close()
     db = null

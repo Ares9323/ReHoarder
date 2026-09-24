@@ -27,6 +27,16 @@ export interface AssetRow {
   lastPreciseAt: number | null
 }
 
+/** Per-listing data from the Fab entitlements pass (`/i/library/search`). */
+export interface FabEntitlementInfo {
+  /** Acquisition time (epoch ms). */
+  ownedAt: number | null
+  /** Last listing update on Fab (epoch ms). */
+  lastUpdatedAt: number | null
+  /** Owned license slugs, sorted (`personal`, `professional`, `legacy-uem`, ...). */
+  licenses: string[]
+}
+
 export interface ListFilters {
   source?: AssetSource
   /** When set, narrows `fab` to either `fab-ue` or `fab-other`. Ignored for other sources. */

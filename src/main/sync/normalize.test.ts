@@ -3,7 +3,8 @@ import {
   normalizeVaultAsset,
   normalizeFabAsset,
   normalizeFabOtherAsset,
-  isUnrealEngineListing
+  isUnrealEngineListing,
+  normalizeFabEntitlement
 } from './normalize'
 import type { CatalogItem, VaultAssetSummary } from '../vault/vault-client'
 import type { FabLibraryItem, FabOtherListing } from '../fab/fab-client'
@@ -216,5 +217,34 @@ describe('isUnrealEngineListing', () => {
 
   it('returns false when assetFormats is absent', () => {
     expect(isUnrealEngineListing({ uid: 'x', title: 'X' })).toBe(false)
+  })
+})
+
+describe('normalizeFabEntitlement', () => {
+  it('maps createdAt, lastUpdatedAt and license slugs keyed by listing uid', () => {
+    const n = normalizeFabEntitlement({
+      uid: 'entitlement-id',
+      createdAt: '2026-06-02T14:57:08.745696+00:00',
+      entitlement: {
+        licenses: [{ slug: 'professional' }, { slug: 'personal' }, { slug: 'personal' }, {}]
+      },
+      listing: { uid: 'listing-1', lastUpdatedAt: '2025-09-27T22:45:43.097204+00:00' }
+    })
+    expect(n).toEqual({
+      listingUid: 'listing-1',
+      info: {
+        ownedAt: Date.UTC(2026, 5, 2, 14, 57, 8, 745),
+        lastUpdatedAt: Date.UTC(2025, 8, 27, 22, 45, 43, 97),
+        licenses: ['personal', 'professional']
+      }
+    })
+  })
+
+  it('returns null without a listing uid and tolerates missing fields', () => {
+    expect(normalizeFabEntitlement({ uid: 'x' })).toBeNull()
+    expect(normalizeFabEntitlement({ listing: { uid: 'l' } })).toEqual({
+      listingUid: 'l',
+      info: { ownedAt: null, lastUpdatedAt: null, licenses: [] }
+    })
   })
 })

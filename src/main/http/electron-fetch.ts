@@ -169,10 +169,12 @@ export async function syncSessionCookiesIntoJar(
  */
 export async function syncJarIntoSession(
   jar: CookieJar,
-  sess: Electron.Session
+  sess: Electron.Session,
+  includeDomain: (suffix: string) => boolean = () => true
 ): Promise<number> {
   let count = 0
   for (const { suffix, name, value } of jar.entries()) {
+    if (!includeDomain(suffix)) continue
     const isHostBound = !suffix.startsWith('.')
     const host = isHostBound ? suffix : suffix.slice(1)
     const url = `https://${host}/`

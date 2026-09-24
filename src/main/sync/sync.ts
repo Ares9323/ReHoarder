@@ -1,8 +1,9 @@
-import type { AssetRow, AssetsRepo } from '../db/assets-repo'
+import type { AssetRow, AssetsRepo, FabEntitlementInfo } from '../db/assets-repo'
 import type { VaultClient } from '../vault/vault-client'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
 import type { FabSessionClient } from '../fab/fab-session'
-import { FabClient } from '../fab/fab-client'
+import { FabClient, type FabEntitlementPage } from '../fab/fab-client'
+import { fabNextToPath, statusFromHttp, type FabWebSession } from '../fab/fab-web-session'
 
 /**
  * TEMPORARY (0.2.0): `fab.com/i/library/search` (the Fab "Other library" — non-UE
@@ -18,13 +19,18 @@ import { FabClient } from '../fab/fab-client'
  */
 const SKIP_FAB_OTHER_LIBRARY = true
 
+/** Acquired UE entitlements, newest first. Page size is fixed at 24 by Fab. */
+const FAB_ENTITLEMENTS_PATH =
+  '/i/library/search?source=acquired&asset_formats=unreal-engine&sort_by=-createdAt'
+
 import {
   normalizeVaultAsset,
   normalizeFabAsset,
   normalizeFabOtherAsset,
   isUnrealEngineListing,
   extractFabUeCategories,
-  extractFabOtherCategories
+  extractFabOtherCategories,
+  normalizeFabEntitlement
 } from './normalize'
 
 export interface SyncSourceResult {
@@ -57,7 +63,8 @@ export class Sync {
     private readonly vaultClient: VaultClient,
     private readonly epicWebSessionFactory: EpicWebSessionFactory,
     private readonly fabSessionClient: FabSessionClient,
-    private readonly fabClient: FabClient
+    private readonly fabClient: FabClient,
+    private readonly fabWebSession: Pick<FabWebSession, 'getJson'>
   ) {}
 
   async syncAll(
@@ -157,6 +164,57 @@ export class Sync {
     }
   }
 
+  /**
+   * Walk the UE entitlements on `/i/library/search` and collect acquisition
+   * date, last-updated date and licenses per Fab listing uid. The calls run
+   * inside the fab.com web session (a signed-in browser page). Never throws:
+   * a failure is logged as a warning and resolves to null, so the UE library
+   * result and `result.fab.error` are unaffected.
+   */
+  private async collectFabEntitlements(
+    onLog: LogCallback
+  ): Promise<Map<string, FabEntitlementInfo> | null> {
+    const map = new Map<string, FabEntitlementInfo>()
+    const unavailable = (why: string): null => {
+      onLog(`Fab: WARNING entitlements unavailable (${why}). Dates and licenses not refreshed.`)
+      return null
+    }
+    try {
+      const seen = new Set<string>()
+      let path: string | null = FAB_ENTITLEMENTS_PATH
+      let pageNum = 0
+      while (path !== null && !seen.has(path)) {
+        seen.add(path)
+        const { status, body } = await this.fabWebSession.getJson<FabEntitlementPage>(path)
+        if (statusFromHttp(status) === 'logged-out') {
+          if (pageNum === 0) {
+            onLog(
+              'Fab: not signed in to fab.com, dates and licenses skipped. ' +
+                'Use "Sign in to Fab" to enable them.'
+            )
+            return null
+          }
+          return unavailable(`HTTP ${status} on page ${pageNum + 1}`)
+        }
+        if (status < 200 || status >= 300 || body === null) {
+          return unavailable(`HTTP ${status}`)
+        }
+        pageNum += 1
+        const results = body.results ?? []
+        for (const r of results) {
+          const n = normalizeFabEntitlement(r)
+          if (n) map.set(n.listingUid, n.info)
+        }
+        onLog(`Fab: entitlements page ${pageNum} received (+${results.length})`)
+        path = fabNextToPath(body.next)
+      }
+      onLog(`Fab: entitlements collected for ${map.size} listings`)
+      return map
+    } catch (err) {
+      return unavailable(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   private async syncFab(
     accessToken: string,
     accountId: string,
@@ -173,6 +231,10 @@ export class Sync {
       }
       onLog('Fab: establishing session…')
       const session = await this.fabSessionClient.establishSession(accessToken, epicSession, onLog)
+
+      // Runs concurrently with the UE library walk. Never rejects: failures
+      // are logged and resolve to null.
+      const entitlementsPromise = this.collectFabEntitlements(onLog)
 
       // Track which IDs were already in DB just for the `pageNew` diagnostic
       // counter — it informs the user how much of each page they were missing.
@@ -220,6 +282,8 @@ export class Sync {
       if (skipped > 0) {
         onLog(`Fab: skipped ${skipped} UE items with missing assetId`)
       }
+
+      await entitlementsPromise
 
       if (SKIP_FAB_OTHER_LIBRARY) {
         onLog('Fab: Other library sync skipped (temporarily disabled — endpoint returns 401)')

@@ -1,6 +1,7 @@
-import type { AssetRow } from '../db/assets-repo'
+import type { AssetRow, FabEntitlementInfo } from '../db/assets-repo'
 import type { CatalogItem, VaultAssetSummary } from '../vault/vault-client'
-import type { FabLibraryItem, FabOtherListing } from '../fab/fab-client'
+import type { FabEntitlementResult, FabLibraryItem, FabOtherListing } from '../fab/fab-client'
+import { parseFabTimestamp } from '../fab/fab-listing-fields'
 import {
   FAB_DISTRIBUTION_TO_LISTING_TYPE,
   FAB_LISTING_TYPE_IDS,
@@ -235,4 +236,28 @@ function pickFabOtherDescription(listing: FabOtherListing): string | undefined {
     }
   }
   return undefined
+}
+
+/**
+ * Map one entitlements result to the columns the Assets filters use, keyed
+ * by the Fab listing uid (the join key with the UE library rows). Null when
+ * the result carries no listing uid.
+ */
+export function normalizeFabEntitlement(
+  r: FabEntitlementResult
+): { listingUid: string; info: FabEntitlementInfo } | null {
+  const listingUid = r.listing?.uid
+  if (typeof listingUid !== 'string' || listingUid.length === 0) return null
+  const licenses = new Set<string>()
+  for (const l of r.entitlement?.licenses ?? []) {
+    if (typeof l?.slug === 'string' && l.slug.length > 0) licenses.add(l.slug)
+  }
+  return {
+    listingUid,
+    info: {
+      ownedAt: parseFabTimestamp(r.createdAt),
+      lastUpdatedAt: parseFabTimestamp(r.listing?.lastUpdatedAt),
+      licenses: [...licenses].sort()
+    }
+  }
 }

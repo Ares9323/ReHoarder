@@ -88,6 +88,9 @@ export interface LibraryListResult {
 
 export type SyncPhase = 'starting' | 'vault' | 'fab' | 'done' | 'error'
 
+/** fab.com web session status (the signed-in browser session behind `/i/*` calls). */
+export type FabWebStatus = 'logged-in' | 'logged-out' | 'unknown'
+
 export interface SyncProgress {
   phase: SyncPhase
   vaultCount: number
@@ -135,6 +138,10 @@ export interface LibraryApi {
     source: 'vault' | 'fab' | 'legacy',
     sourceId: string
   ): Promise<{ ok: boolean; imageUrl?: string | null; error?: string }>
+  /** Probe the fab.com web session (in-page `/i/users/me/wallet`). */
+  fabWebStatus(): Promise<FabWebStatus>
+  /** Sign in to fab.com: silent first, then the visible "Sign in to Fab" window. */
+  fabWebLogin(): Promise<FabWebStatus>
 }
 
 export interface DebugFetchSampleManifestResult {

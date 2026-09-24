@@ -4,6 +4,7 @@
   import { createLibraryStore } from './stores/library.svelte'
   import { freebiesStore } from './stores/freebies.svelte'
   import { vaultStore } from './stores/vault.svelte'
+  import { fabWebStore } from './stores/fab-web.svelte'
   import LoginView from './lib/LoginView.svelte'
   import EmptyLibraryView from './lib/EmptyLibraryView.svelte'
   import AssetLibraryView from './lib/AssetLibraryView.svelte'
@@ -40,6 +41,7 @@
       await restoreStartupTab()
       await library.refresh()
       void maybeNotifyAboutFreebies()
+      void fabWebStore.refresh()
       // Warm the Vault scan in the background so opening the Vault tab is
       // instant. `vault:list` walks every file under each configured root
       // (size + mtime + count) — on a populated vault it can take 10+ s
@@ -175,6 +177,12 @@
     await auth.refresh()
     await library.refresh()
     void maybeNotifyAboutFreebies()
+    fabWebStore.reset()
+  }
+
+  async function syncNow(): Promise<void> {
+    await library.startSync()
+    fabWebStore.afterSync(library.syncLog)
   }
 
   $effect(() => {
@@ -247,7 +255,7 @@
           busy={library.syncBusy}
           progressText={progressText()}
           syncLog={library.syncLog}
-          onSyncNow={() => library.startSync()}
+          onSyncNow={syncNow}
         />
       {:else}
         <AssetLibraryView
@@ -264,11 +272,15 @@
           progressText={progressText()}
           syncError={library.syncError}
           syncLog={library.syncLog}
+          fabWebStatus={fabWebStore.status}
+          fabWebBusy={fabWebStore.busy}
+          fabWebAttention={fabWebStore.attention}
+          onFabSignIn={() => fabWebStore.signIn()}
           onSearch={(s) => library.setSearch(s)}
           onSourceFilter={(f) => library.setSourceFilter(f)}
           onListingTypeFilter={(t) => library.setListingTypeFilter(t)}
           onCategoryFilter={(c) => library.setCategoryFilter(c)}
-          onSyncNow={() => library.startSync()}
+          onSyncNow={syncNow}
           onToggleHidden={(a) => library.setHidden(a, !a.hidden)}
           onToggleBookmark={(a) => library.setBookmarked(a, !a.bookmarked)}
           onRefreshFromFab={async (a) => {

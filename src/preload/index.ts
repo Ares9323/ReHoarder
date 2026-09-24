@@ -88,6 +88,9 @@ export interface FreebiesResult {
 
 export type SyncPhase = 'starting' | 'vault' | 'fab' | 'done' | 'error'
 
+/** fab.com web session status (the signed-in browser session behind `/i/*` calls). */
+export type FabWebStatus = 'logged-in' | 'logged-out' | 'unknown'
+
 export interface SyncProgress {
   phase: SyncPhase
   vaultCount: number
@@ -863,7 +866,11 @@ const api = {
       source: 'vault' | 'fab' | 'legacy',
       sourceId: string
     ): Promise<{ ok: boolean; imageUrl?: string | null; error?: string }> =>
-      ipcRenderer.invoke('library:refresh-asset-from-fab', source, sourceId)
+      ipcRenderer.invoke('library:refresh-asset-from-fab', source, sourceId),
+    /** Probe the fab.com web session (in-page `/i/users/me/wallet`). */
+    fabWebStatus: (): Promise<FabWebStatus> => ipcRenderer.invoke('fab:web-status'),
+    /** Sign in to fab.com: silent first, then the visible "Sign in to Fab" window. */
+    fabWebLogin: (): Promise<FabWebStatus> => ipcRenderer.invoke('fab:web-login')
   },
   debug: {
     fetchSampleManifest: (assetId: string): Promise<DebugFetchSampleManifestResult> =>

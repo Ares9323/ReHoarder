@@ -39,6 +39,25 @@ export interface FabLibraryPage {
 }
 
 /**
+ * One `/i/library/search?source=acquired` result: the acquisition envelope
+ * around a listing. Note the envelope `uid` is the entitlement id; the Fab
+ * listing uid (join key with the UE library) is `listing.uid`.
+ */
+export interface FabEntitlementResult {
+  /** Acquisition timestamp (ISO, microsecond precision). */
+  createdAt?: string
+  entitlement?: { licenses?: Array<{ slug?: string; name?: string }> }
+  listing?: { uid?: string; lastUpdatedAt?: string | null; [k: string]: unknown }
+  [k: string]: unknown
+}
+
+/** `/i/library/search` paginates via an absolute `next` URL (null on the last page). */
+export interface FabEntitlementPage {
+  results: FabEntitlementResult[]
+  next: string | null
+}
+
+/**
  * Shape of a single `result.listing` returned by `/i/library/search`.
  * This is the "Other" Fab library (non-UE assets — Blender, Maya, FBX,
  * MetaHuman, Unity, texture sets, etc.).

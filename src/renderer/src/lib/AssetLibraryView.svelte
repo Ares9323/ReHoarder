@@ -9,6 +9,7 @@
   import { downloadsStore } from '../stores/downloads.svelte'
   import { vaultStore } from '../stores/vault.svelte'
   import { clampCardWidth, zoomStep } from './grid-zoom'
+  import { fabWebChip, type FabWebStatus } from './fab-web-chip'
 
   type AssetSource = 'vault' | 'fab' | 'legacy'
   type AssetSubSource = 'fab-ue' | 'fab-other' | null
@@ -52,6 +53,12 @@
     progressText: string | null
     syncError: string | null
     syncLog: string[]
+    /** fab.com web session status for the header chip; null before the first check. */
+    fabWebStatus: FabWebStatus | null
+    fabWebBusy: boolean
+    /** Last sync skipped dates and licenses because fab.com was logged out. */
+    fabWebAttention: boolean
+    onFabSignIn: () => void
     onSearch: (s: string) => void
     onSourceFilter: (f: SourceFilter) => void
     onListingTypeFilter: (t: string) => void
@@ -83,6 +90,10 @@
     progressText,
     syncError,
     syncLog,
+    fabWebStatus,
+    fabWebBusy,
+    fabWebAttention,
+    onFabSignIn,
     onSearch,
     onSourceFilter,
     onListingTypeFilter,
@@ -92,6 +103,8 @@
     onToggleBookmark,
     onRefreshFromFab
   }: Props = $props()
+
+  const fabChip = $derived(fabWebChip(fabWebStatus, fabWebBusy, fabWebAttention))
 
   // Short engine version slugs (`5.4`, `4.27`) for engines the user has installed.
   // Used by AssetCard to decide whether a version chip click goes through the
@@ -735,6 +748,26 @@
     <span class="sync-time" title="{countsBySource.fab ?? 0} Fab assets">
       Last synced {formatLastSync()}
     </span>
+    {#if fabChip.clickable}
+      <button
+        type="button"
+        class="fab-chip clickable"
+        class:highlight={fabChip.highlight}
+        title="Sign in to fab.com to sync acquisition dates and licenses"
+        onclick={() => onFabSignIn()}
+      >
+        {fabChip.label}
+      </button>
+    {:else}
+      <span
+        class="fab-chip"
+        title={fabWebStatus === 'logged-in'
+          ? 'Signed in to fab.com: acquisition dates and licenses are synced'
+          : undefined}
+      >
+        {fabChip.label}
+      </span>
+    {/if}
     <button
       type="button"
       class="sync-btn"
@@ -850,6 +883,32 @@
 
   .filters-spacer {
     flex: 1;
+  }
+
+  .fab-chip {
+    color: #888;
+    font-size: 0.75rem;
+    white-space: nowrap;
+    border: 1px solid #333;
+    border-radius: 999px;
+    padding: 0.2rem 0.6rem;
+    background: transparent;
+    font-family: inherit;
+  }
+
+  .fab-chip.clickable {
+    color: #ccc;
+    cursor: pointer;
+  }
+
+  .fab-chip.clickable:hover {
+    border-color: #555;
+    color: #fff;
+  }
+
+  .fab-chip.highlight {
+    color: #f472b6;
+    border-color: #f472b6;
   }
 
   .sync-btn {

@@ -16,6 +16,7 @@ let fabClient: {
   listLibrary: ReturnType<typeof vi.fn>
   listOtherLibrary: ReturnType<typeof vi.fn>
 }
+let fabWebSession: { getJson: ReturnType<typeof vi.fn> }
 
 function makeEpicSessionFactory(ueReady = true) {
   return {
@@ -45,13 +46,17 @@ beforeEach(() => {
     listLibrary: vi.fn(),
     listOtherLibrary: vi.fn().mockImplementation(() => yieldPages([]))
   }
+  fabWebSession = {
+    getJson: vi.fn().mockResolvedValue({ status: 200, body: { results: [], next: null } })
+  }
 
   sync = new Sync(
     repo,
     vaultClient as never,
     makeEpicSessionFactory() as never,
     fabSessionClient as never,
-    fabClient as never
+    fabClient as never,
+    fabWebSession as never
   )
 })
 
@@ -250,5 +255,80 @@ describe('Sync.syncAll', () => {
     }>
     const map = Object.fromEntries(rows.map((r) => [r.source, r.last_sync_status]))
     expect(map).toEqual({ vault: 'ok', fab: 'ok' })
+  })
+
+  it('pages UE entitlements through the Fab web session and logs the count', async () => {
+    vaultClient.listOwnedAssets.mockResolvedValue([])
+    vaultClient.fetchCatalogMetadata.mockResolvedValue({})
+    fabSessionClient.establishSession.mockResolvedValue({ cookieHeader: 'fab_csrftoken=t' })
+    fabClient.listLibrary.mockReturnValue(yieldPages([{ results: [], cursors: { next: null } }]))
+    fabWebSession.getJson
+      .mockResolvedValueOnce({
+        status: 200,
+        body: {
+          results: [
+            { listing: { uid: 'L-1' }, createdAt: '2026-01-01T00:00:00+00:00' },
+            { listing: {} }
+          ],
+          next: 'https://www.fab.com/i/library/search?cursor=p2&source=acquired'
+        }
+      })
+      .mockResolvedValueOnce({
+        status: 200,
+        body: { results: [{ listing: { uid: 'L-2' } }], next: null }
+      })
+
+    const log: string[] = []
+    const result = await sync.syncAll('bearer', 'acct-1', () => {}, (l) => log.push(l))
+
+    const paths = fabWebSession.getJson.mock.calls.map((c) => c[0] as string)
+    expect(paths).toHaveLength(2)
+    const first = new URL(paths[0], 'https://www.fab.com')
+    expect(first.pathname).toBe('/i/library/search')
+    expect(first.searchParams.get('source')).toBe('acquired')
+    expect(first.searchParams.getAll('asset_formats')).toEqual(['unreal-engine'])
+    expect(first.searchParams.get('sort_by')).toBe('-createdAt')
+    expect(paths[1]).toBe('/i/library/search?cursor=p2&source=acquired')
+    expect(result.fab.error).toBeNull()
+    expect(log).toContain('Fab: entitlements page 1 received (+2)')
+    expect(log).toContain('Fab: entitlements collected for 2 listings')
+  })
+
+  it('skips entitlements with a sign-in hint when fab.com is logged out', async () => {
+    vaultClient.listOwnedAssets.mockResolvedValue([])
+    vaultClient.fetchCatalogMetadata.mockResolvedValue({})
+    fabSessionClient.establishSession.mockResolvedValue({ cookieHeader: 'c' })
+    fabClient.listLibrary.mockReturnValue(
+      yieldPages([{ results: [{ assetId: 'f-1', title: 'Fab One' }], cursors: { next: null } }])
+    )
+    fabWebSession.getJson.mockResolvedValue({ status: 401, body: null })
+
+    const log: string[] = []
+    const result = await sync.syncAll('bearer', 'acct-1', () => {}, (l) => log.push(l))
+
+    expect(result.fab.error).toBeNull()
+    expect(result.fab.persisted).toBe(1)
+    expect(log).toContain(
+      'Fab: not signed in to fab.com, dates and licenses skipped. Use "Sign in to Fab" to enable them.'
+    )
+  })
+
+  it('treats an unreachable web session as a warning, not a Fab sync error', async () => {
+    vaultClient.listOwnedAssets.mockResolvedValue([])
+    vaultClient.fetchCatalogMetadata.mockResolvedValue({})
+    fabSessionClient.establishSession.mockResolvedValue({ cookieHeader: 'c' })
+    fabClient.listLibrary.mockReturnValue(
+      yieldPages([{ results: [{ assetId: 'f-1', title: 'Fab One' }], cursors: { next: null } }])
+    )
+    fabWebSession.getJson.mockResolvedValue({ status: -1, body: null })
+
+    const log: string[] = []
+    const result = await sync.syncAll('bearer', 'acct-1', () => {}, (l) => log.push(l))
+
+    expect(result.fab.error).toBeNull()
+    expect(result.fab.persisted).toBe(1)
+    expect(log.some((l) => l.includes('WARNING entitlements unavailable') && l.includes('-1'))).toBe(
+      true
+    )
   })
 })

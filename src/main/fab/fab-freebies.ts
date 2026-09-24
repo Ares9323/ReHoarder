@@ -26,11 +26,10 @@ export interface FabFreebie {
   [key: string]: unknown
 }
 
-// Use the same `LAUNCHER_UA` that the Fab F1-F5 dance + CF warmup use.
-// Cloudflare's `cf_clearance` cookie AND (suspected) Fab's own session
-// middleware bind the issued session to the UA that earned them. Mixing
-// `EpicGamesLauncher/...` UA on `/me/...` calls leads to a 401 even when
-// `fab_sessionid` is present in the request.
+// Use the same `LAUNCHER_UA` as the CF warmup and the Fab web session:
+// Cloudflare binds `cf_clearance` to the UA that earned it. The blade is
+// public, so this net.fetch call does not need the signed-in web session
+// (authenticated `/i/*` calls go through `FabWebSession.getJson`).
 const FREEBIE_HEADERS = (cookieHeader: string): Record<string, string> => ({
   Cookie: cookieHeader,
   Referer: 'https://www.fab.com/library',
