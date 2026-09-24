@@ -52,16 +52,51 @@ function buildChunkUrl(opts: ChunkSourceOptions, chunk: ChunkInfo): string {
  *   2. An in-memory dedup of in-flight URL fetches. If two callers request
  *      the same chunk concurrently, the second awaits the first's result.
  *
+ * Writing to the cache is opt-out per call (`persist: false`): chunks the
+ * plan needs only once never touch the disk.
+ *
  * The cache directory typically lives at `<vault>/<assetId>/cache/`. It's
  * the caller's responsibility to clean it up after a successful download
  * (the orchestrator does this in v0c).
  */
+export interface ChunkGetOptions {
+  /**
+   * Write the decoded payload to the disk cache after a network fetch.
+   * Default `true`. The orchestrator passes `false` for chunks used by a
+   * single stretch of the plan: they are consumed straight from memory, so a
+   * disk round trip would only cost I/O.
+   */
+  persist?: boolean
+}
+
+/** Cumulative counters for the network path, read by the orchestrator's stats log. */
+export interface ChunkSourceStats {
+  /** Chunks pulled from the CDN (cache hits excluded). */
+  chunksFetched: number
+  /** Raw (compressed, on the wire) bytes received for those chunks. */
+  bytesFetched: number
+  /** Sum of per-chunk wall time from request start to full body received. */
+  fetchMs: number
+  /** Sum of per-chunk `decodeChunk` wall time (includes threadpool queueing). */
+  decodeMs: number
+  /** Chunks served from a valid disk cache entry. */
+  cacheHits: number
+}
+
 export class ChunkSource {
   private readonly inFlight = new Map<string, Promise<Buffer>>()
+  readonly stats: ChunkSourceStats = {
+    chunksFetched: 0,
+    bytesFetched: 0,
+    fetchMs: 0,
+    decodeMs: 0,
+    cacheHits: 0
+  }
 
   constructor(private readonly opts: ChunkSourceOptions) {}
 
-  get(chunk: ChunkInfo): Promise<Buffer> {
+  get(chunk: ChunkInfo, getOpts: ChunkGetOptions = {}): Promise<Buffer> {
+    const persist = getOpts.persist ?? true
     const url = buildChunkUrl(this.opts, chunk)
     let pending = this.inFlight.get(url)
     if (!pending) {
@@ -71,13 +106,16 @@ export class ChunkSource {
       // validation entirely so the fetch starts before the next event-loop tick.
       if (existsSync(cachePath)) {
         pending = this.tryReadCache(cachePath, chunk).then((cached) => {
-          if (cached) return cached
-          return this.fetchDecodeAndCache(url, chunk, cachePath)
+          if (cached) {
+            this.stats.cacheHits += 1
+            return cached
+          }
+          return this.fetchDecodeAndCache(url, chunk, persist ? cachePath : null)
         }).finally(() => {
           this.inFlight.delete(url)
         })
       } else {
-        pending = this.fetchDecodeAndCache(url, chunk, cachePath).finally(() => {
+        pending = this.fetchDecodeAndCache(url, chunk, persist ? cachePath : null).finally(() => {
           this.inFlight.delete(url)
         })
       }
@@ -106,8 +144,9 @@ export class ChunkSource {
   private async fetchDecodeAndCache(
     url: string,
     chunk: ChunkInfo,
-    cachePath: string
+    cachePath: string | null
   ): Promise<Buffer> {
+    const fetchStart = performance.now()
     const response = await this.opts.fetchImpl(url, {
       method: 'GET',
       headers: this.opts.defaultHeaders
@@ -116,13 +155,20 @@ export class ChunkSource {
       throw new Error(`Chunk ${chunk.guid} fetch returned ${response.status} (${url})`)
     }
     const raw = Buffer.from(await response.arrayBuffer())
-    const payload = decodeChunk(raw, {
+    const decodeStart = performance.now()
+    this.stats.fetchMs += decodeStart - fetchStart
+    this.stats.bytesFetched += raw.length
+    this.stats.chunksFetched += 1
+    const payload = await decodeChunk(raw, {
       guid: chunk.guid,
       rollingHash: chunk.rollingHash,
       sha1: chunk.sha1
     })
-    await fsp.mkdir(path.dirname(cachePath), { recursive: true })
-    await fsp.writeFile(cachePath, payload)
+    this.stats.decodeMs += performance.now() - decodeStart
+    if (cachePath) {
+      await fsp.mkdir(path.dirname(cachePath), { recursive: true })
+      await fsp.writeFile(cachePath, payload)
+    }
     return payload
   }
 }

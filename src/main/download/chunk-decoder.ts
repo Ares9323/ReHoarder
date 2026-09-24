@@ -1,9 +1,12 @@
-import { inflateSync } from 'node:zlib'
+import { inflate } from 'node:zlib'
+import { promisify } from 'node:util'
 import { createHash } from 'node:crypto'
 import { BinaryReader } from './binary-reader'
 import { poly64Hash } from './rolling-hash'
 
 export const CHUNK_MAGIC = 0xb1fe3aa2
+
+const inflateAsync = promisify(inflate)
 
 const VERSION_STORES_SHA_AND_HASH_TYPE = 2
 const VERSION_STORES_DATA_SIZE_UNCOMPRESSED = 3
@@ -29,7 +32,11 @@ export interface ChunkExpectation {
  * decompressed payload — the slice(s) into this payload are then assembled
  * by `file-assembler.ts`.
  *
- * Throws an `Error` with a descriptive message on any of:
+ * Inflation runs on the libuv threadpool (async `zlib.inflate`), so several
+ * chunks can decompress in parallel without blocking the main process event
+ * loop. Hashing stays on the calling thread.
+ *
+ * Rejects with an `Error` with a descriptive message on any of:
  *   - magic mismatch
  *   - encrypted storage (unsupported)
  *   - declared GUID disagrees with the expected one
@@ -38,7 +45,7 @@ export interface ChunkExpectation {
  *   - Poly64 mismatch (when hashType bit 1 is set)
  *   - SHA1 mismatch  (when hashType bit 2 is set)
  */
-export function decodeChunk(buf: Buffer, expected: ChunkExpectation): Buffer {
+export async function decodeChunk(buf: Buffer, expected: ChunkExpectation): Promise<Buffer> {
   const r = new BinaryReader(buf)
   const start = r.position
   const magic = r.readUInt32LE()
@@ -85,7 +92,7 @@ export function decodeChunk(buf: Buffer, expected: ChunkExpectation): Buffer {
   }
   const stored = r.readBytes(dataSizeCompressed)
   const payload =
-    (storedAs & STORED_AS_COMPRESSED) !== 0 ? inflateSync(stored) : stored
+    (storedAs & STORED_AS_COMPRESSED) !== 0 ? await inflateAsync(stored) : stored
 
   if (hasUncompressedSize && payload.length !== dataSizeUncompressed) {
     throw new Error(

@@ -45,33 +45,33 @@ function buildChunk(payload: Buffer, opts: { compress: boolean; hashType: number
 }
 
 describe('decodeChunk', () => {
-  it('decodes a compressed v3 chunk with poly64+sha1 hash type', () => {
+  it('decodes a compressed v3 chunk with poly64+sha1 hash type', async () => {
     const payload = Buffer.from('chunk-payload-bytes '.repeat(50))
     const { raw, expected } = buildChunk(payload, { compress: true, hashType: 0x03 })
-    const decoded = decodeChunk(raw, expected)
+    const decoded = await decodeChunk(raw, expected)
     expect(decoded.equals(payload)).toBe(true)
   })
 
-  it('decodes an uncompressed v3 chunk', () => {
+  it('decodes an uncompressed v3 chunk', async () => {
     const payload = Buffer.from('uncompressed bytes')
     const { raw, expected } = buildChunk(payload, { compress: false, hashType: 0x03 })
-    expect(decodeChunk(raw, expected).equals(payload)).toBe(true)
+    expect((await decodeChunk(raw, expected)).equals(payload)).toBe(true)
   })
 
-  it('accepts chunks with only the rolling hash (hashType = 0x01)', () => {
+  it('accepts chunks with only the rolling hash (hashType = 0x01)', async () => {
     const payload = Buffer.from('poly-only')
     const { raw, expected } = buildChunk(payload, { compress: false, hashType: 0x01 })
-    expect(decodeChunk(raw, expected).equals(payload)).toBe(true)
+    expect((await decodeChunk(raw, expected)).equals(payload)).toBe(true)
   })
 
-  it('throws on magic mismatch', () => {
+  it('throws on magic mismatch', async () => {
     const buf = bytes(uint32le(0xdeadbeef), uint32le(3))
-    expect(() =>
+    await expect(
       decodeChunk(buf, { guid: GUID, rollingHash: '0'.repeat(16), sha1: '0'.repeat(40) })
-    ).toThrow(/magic mismatch/i)
+    ).rejects.toThrow(/magic mismatch/i)
   })
 
-  it('throws when storedAs declares encryption', () => {
+  it('throws when storedAs declares encryption', async () => {
     const payload = Buffer.from('x')
     const { expected } = buildChunk(payload, { compress: false, hashType: 0x03 })
     const HEADER_SIZE = 66
@@ -88,34 +88,57 @@ describe('decodeChunk', () => {
       uint32le(payload.length),
       payload
     )
-    expect(() => decodeChunk(buf, expected)).toThrow(/encrypted/i)
+    await expect(decodeChunk(buf, expected)).rejects.toThrow(/encrypted/i)
   })
 
-  it('throws when the rolling hash does not match', () => {
+  it('throws when the rolling hash does not match', async () => {
     const payload = Buffer.from('hello')
     const { raw } = buildChunk(payload, { compress: false, hashType: 0x01 })
-    expect(() =>
+    await expect(
       decodeChunk(raw, {
         guid: GUID,
         rollingHash: 'FFFFFFFFFFFFFFFF',
         sha1: '0'.repeat(40)
       })
-    ).toThrow(/rolling hash mismatch/i)
+    ).rejects.toThrow(/rolling hash mismatch/i)
   })
 
-  it('throws when the SHA1 does not match', () => {
+  it('throws when the SHA1 does not match', async () => {
     const payload = Buffer.from('world')
     const { raw, expected } = buildChunk(payload, { compress: false, hashType: 0x03 })
-    expect(() =>
+    await expect(
       decodeChunk(raw, { ...expected, sha1: 'F'.repeat(40) })
-    ).toThrow(/sha1 mismatch/i)
+    ).rejects.toThrow(/sha1 mismatch/i)
   })
 
-  it('throws when the GUID in the header does not match the expected GUID', () => {
+  it('throws when the GUID in the header does not match the expected GUID', async () => {
     const payload = Buffer.from('wrong-guid')
     const { raw, expected } = buildChunk(payload, { compress: false, hashType: 0x03 })
-    expect(() =>
+    await expect(
       decodeChunk(raw, { ...expected, guid: 'FF'.repeat(16) })
-    ).toThrow(/guid mismatch/i)
+    ).rejects.toThrow(/guid mismatch/i)
+  })
+
+  it('returns a Promise (inflate runs off the main thread)', async () => {
+    const payload = Buffer.from('async '.repeat(100))
+    const { raw, expected } = buildChunk(payload, { compress: true, hashType: 0x03 })
+    const pending = decodeChunk(raw, expected)
+    expect(pending).toBeInstanceOf(Promise)
+    expect((await pending).equals(payload)).toBe(true)
+  })
+
+  it('throws when the inflated size disagrees with dataSizeUncompressed', async () => {
+    const payload = Buffer.from('size check '.repeat(10))
+    const { raw, expected } = buildChunk(payload, { compress: true, hashType: 0x03 })
+    // dataSizeUncompressed sits in the last 4 header bytes (offset 62).
+    raw.writeUInt32LE(payload.length + 1, 62)
+    await expect(decodeChunk(raw, expected)).rejects.toThrow(/payload size mismatch/i)
+  })
+
+  it('rejects (instead of throwing synchronously) on corrupt zlib data', async () => {
+    const payload = Buffer.from('zlib '.repeat(40))
+    const { raw, expected } = buildChunk(payload, { compress: true, hashType: 0x03 })
+    raw.fill(0xff, 66 + 2)
+    await expect(decodeChunk(raw, expected)).rejects.toThrow()
   })
 })

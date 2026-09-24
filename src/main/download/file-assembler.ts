@@ -18,12 +18,15 @@ export interface AssembleFileResult {
 
 /**
  * Write a single file under `destPath` by concatenating the byte slices
- * declared in `entry.chunkParts`. Chunks are fetched serially from the
- * `ChunkProvider`. The file is written to `destPath + '.temp'` first and
+ * declared in `entry.chunkParts`. Parts are requested in order, one at a
+ * time, from the `ChunkProvider` (the orchestrator's provider prefetches
+ * ahead in parallel, so most requests resolve immediately). The file is written to `destPath + '.temp'` first and
  * atomically renamed only after SHA1 verification passes.
  *
  * If a file already exists at `destPath` with a matching SHA1, it is left
- * untouched and the result reports `skipped: true`.
+ * untouched and the result reports `skipped: true`. Pass
+ * `skipExistingCheck: true` when the caller already ran `isFileAlreadyValid`
+ * for this path, so a stale file isn't hashed twice.
  *
  * Throws when the assembled file's SHA1 disagrees with `entry.sha1`; in
  * that case the temp file is removed and `destPath` is left as it was.
@@ -31,9 +34,10 @@ export interface AssembleFileResult {
 export async function assembleFile(
   entry: FileManifestEntry,
   source: ChunkProvider,
-  destPath: string
+  destPath: string,
+  opts: { skipExistingCheck?: boolean; onBytes?: (n: number) => void } = {}
 ): Promise<AssembleFileResult> {
-  if (await alreadyValid(destPath, entry.sha1)) {
+  if (!opts.skipExistingCheck && (await isFileAlreadyValid(destPath, entry.sha1))) {
     return { skipped: true }
   }
 
@@ -54,6 +58,7 @@ export async function assembleFile(
       const slice = payload.subarray(part.offset, part.offset + part.size)
       await handle.write(slice)
       hasher.update(slice)
+      opts.onBytes?.(slice.length)
     }
   } finally {
     await handle.close()
@@ -71,7 +76,8 @@ export async function assembleFile(
   return { skipped: false }
 }
 
-async function alreadyValid(destPath: string, expectedSha1: string): Promise<boolean> {
+/** True when `destPath` exists and its SHA1 matches `expectedSha1` (a zero / empty hash never matches). */
+export async function isFileAlreadyValid(destPath: string, expectedSha1: string): Promise<boolean> {
   if (!expectedSha1 || expectedSha1 === '0'.repeat(40)) return false
   let buf: Buffer
   try {

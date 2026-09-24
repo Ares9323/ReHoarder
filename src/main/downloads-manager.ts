@@ -385,6 +385,7 @@ export class DownloadsManager {
           pathStripPrefix,
           noWrapDataDir,
           skipPatterns: buildSkipPatterns(cfg),
+          chunkConcurrency: cfg.downloadThreads,
           signal: abort.signal,
           onLog: (m) => console.warn(`[downloads:${row.id.slice(0, 8)}]`, m),
           onProgress: (p) => {
@@ -512,6 +513,7 @@ export class DownloadsManager {
       await runEngineDownload(pending.plan, {
         installDir: row.installTargetPath,
         selectedTags: pending.selectedTags,
+        chunkConcurrency: this.deps.settings.load().downloadThreads,
         signal: abort.signal,
         onLog: (m) => console.warn(`[engines:${row.id.slice(0, 8)}]`, m),
         onProgress: (p) => {

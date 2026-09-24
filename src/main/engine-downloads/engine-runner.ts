@@ -27,6 +27,8 @@ export interface EngineRunnerOptions {
    *  filters in automatically because files with no `installTags` are always
    *  kept. */
   selectedTags: Set<string>
+  /** See `DownloadOptions.chunkConcurrency`. */
+  chunkConcurrency?: number
   signal?: AbortSignal
   onLog?: (line: string) => void
   onProgress?: (p: DownloadProgress) => void
@@ -97,6 +99,7 @@ export async function runEngineDownload(
     // look like the Epic Games Launcher. Same UA gate we hit on the
     // launcher download-info endpoint.
     chunkHeaders: { 'User-Agent': EPIC_USER_AGENT },
+    chunkConcurrency: opts.chunkConcurrency,
     signal: opts.signal,
     onLog: opts.onLog,
     onProgress: opts.onProgress

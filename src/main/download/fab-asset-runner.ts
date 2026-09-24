@@ -32,6 +32,8 @@ export interface FabRunnerOptions {
   noWrapDataDir?: boolean
   /** See `DownloadOptions.skipPatterns`. */
   skipPatterns?: string[]
+  /** See `DownloadOptions.chunkConcurrency`. */
+  chunkConcurrency?: number
   /** Forwarded to the orchestrator: cumulative progress callback. */
   onProgress?: (p: DownloadProgress) => void
   /** Forwarded to the orchestrator: per-step log line. */
@@ -173,6 +175,7 @@ export async function runFabAssetDownload(
       pathStripPrefix: opts.pathStripPrefix,
       noWrapDataDir: opts.noWrapDataDir,
       skipPatterns: opts.skipPatterns,
+      chunkConcurrency: opts.chunkConcurrency,
       onLog: opts.onLog,
       onProgress: opts.onProgress,
       signal: opts.signal

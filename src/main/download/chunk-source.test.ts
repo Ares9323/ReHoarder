@@ -164,4 +164,38 @@ describe('ChunkSource', () => {
     await source.get(expectedChunk)
     expect(fetchMock.mock.calls[0][0]).toContain('/ChunksV3/')
   })
+
+  it('keeps the payload in memory only when called with persist: false', async () => {
+    const blob = buildChunkBlob(PAYLOAD)
+    const fetchMock = vi.fn().mockResolvedValue(new Response(blob, { status: 200 }))
+    const source = new ChunkSource({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      baseUri: 'https://cdn.example/CloudDir/',
+      cacheDir: tmpDir,
+      manifestFeatureLevel: 18
+    })
+    const payload = await source.get(expectedChunk, { persist: false })
+    expect(payload.equals(PAYLOAD)).toBe(true)
+    const cachePath = path.join(tmpDir, `${expectedChunk.rollingHash}_${GUID}.chunk`)
+    expect(existsSync(cachePath)).toBe(false)
+  })
+
+  it('accumulates fetch / decode stats for network fetches only', async () => {
+    const blob = buildChunkBlob(PAYLOAD)
+    const fetchMock = vi.fn().mockResolvedValue(new Response(blob, { status: 200 }))
+    const source = new ChunkSource({
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      baseUri: 'https://cdn.example/CloudDir/',
+      cacheDir: tmpDir,
+      manifestFeatureLevel: 18
+    })
+    await source.get(expectedChunk)
+    // Second call is a disk cache hit: it must not count as a fetch.
+    await source.get(expectedChunk)
+    expect(source.stats.chunksFetched).toBe(1)
+    expect(source.stats.bytesFetched).toBe(blob.length)
+    expect(source.stats.cacheHits).toBe(1)
+    expect(source.stats.fetchMs).toBeGreaterThanOrEqual(0)
+    expect(source.stats.decodeMs).toBeGreaterThanOrEqual(0)
+  })
 })

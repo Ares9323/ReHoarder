@@ -1,14 +1,16 @@
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
-import { ChunkSource } from './chunk-source'
-import { assembleFile, type ChunkProvider } from './file-assembler'
+import { ChunkSource, type ChunkSourceStats } from './chunk-source'
+import { assembleFile, isFileAlreadyValid } from './file-assembler'
+import { ChunkPrefetcher, normalizeChunkConcurrency } from './chunk-prefetcher'
 import { compilePatterns, matchesAny } from './cruft-filter'
 import type { ManifestBundle } from './manifest-client-types'
-import type { ChunkInfo, FileManifestEntry, Manifest } from './manifest-types'
-import type {
-  DownloadOptions,
-  DownloadResult,
-  DownloadFileSummary
+import type { FileManifestEntry, Manifest } from './manifest-types'
+import {
+  DownloadCancelledError,
+  type DownloadOptions,
+  type DownloadResult,
+  type DownloadFileSummary
 } from './download-types'
 
 /** Default subdir-namer: replaces unsafe path characters in the artifactId. */
@@ -106,39 +108,37 @@ export function planAssetDownload(
 }
 
 /**
- * Bridges the assembler (which has only `chunkGuid` on each `ChunkPart`) and
- * the `ChunkSource` (which needs the full `ChunkInfo` with rollingHash + sha1
- * to validate cache hits). The orchestrator owns this map; the assembler
- * sees a uniform `ChunkProvider` interface.
+ * One-line summary of the network side of a finished download, e.g.
+ * `download stats: 812.4 MB in 41.2 s (19.7 MB/s), 790 chunks, avg fetch 310.2 ms, avg decode 6.1 ms`.
+ * MB is decimal (10^6 bytes) and counts compressed bytes received from the
+ * CDN; cache hits are excluded from the chunk count and the averages.
  */
-function buildChunkResolver(
-  source: ChunkSource,
-  chunks: ChunkInfo[]
-): ChunkProvider & { resolveByGuid(guid: string): ChunkInfo } {
-  const byGuid = new Map<string, ChunkInfo>()
-  for (const c of chunks) byGuid.set(c.guid.toUpperCase(), c)
-  return {
-    resolveByGuid(guid: string): ChunkInfo {
-      const info = byGuid.get(guid.toUpperCase())
-      if (!info) throw new Error(`ChunkInfo missing for guid=${guid}`)
-      return info
-    },
-    async get(part: { guid: string }): Promise<Buffer> {
-      const info = byGuid.get(part.guid.toUpperCase())
-      if (!info) throw new Error(`ChunkInfo missing for guid=${part.guid}`)
-      return await source.get(info)
-    }
-  }
+export function formatDownloadStats(stats: ChunkSourceStats, durationMs: number): string {
+  const mb = stats.bytesFetched / 1_000_000
+  const seconds = durationMs / 1000
+  const rate = seconds > 0 ? mb / seconds : 0
+  const n = stats.chunksFetched
+  const avgFetch = n > 0 ? stats.fetchMs / n : 0
+  const avgDecode = n > 0 ? stats.decodeMs / n : 0
+  return (
+    `download stats: ${mb.toFixed(1)} MB in ${seconds.toFixed(1)} s (${rate.toFixed(1)} MB/s), ` +
+    `${n} chunks, avg fetch ${avgFetch.toFixed(1)} ms, avg decode ${avgDecode.toFixed(1)} ms`
+  )
 }
 
 /**
  * Download an entire Fab asset described by `bundle.manifest` into
- * `<vaultDir>/<assetSubdir>/data/`. Chunks are fetched once each and cached
- * on disk under `<vaultDir>/<assetSubdir>/cache/` while the download runs;
- * the cache directory is removed when every file is verified.
+ * `<vaultDir>/<assetSubdir>/data/`. Each chunk is fetched once.
  *
- * In v0c this is **sequential**: one file at a time, chunks within a file
- * are pulled in order. v0c+ will introduce parallelism.
+ * Files are assembled one at a time, in manifest order, while a
+ * `ChunkPrefetcher` keeps up to `chunkConcurrency` chunk fetches (default
+ * 16) running ahead of the assembler. Chunks needed by more than one stretch
+ * of the plan are cached on disk under `<vaultDir>/<assetSubdir>/cache/`;
+ * the rest stay in memory only until consumed. The cache directory is
+ * removed when every file is verified.
+ *
+ * Files already on disk with the expected SHA1 are detected before any fetch
+ * starts, so a resumed download doesn't pull their chunks again.
  */
 export async function downloadAsset(
   bundle: ManifestBundle,
@@ -167,7 +167,6 @@ export async function downloadAsset(
     defaultHeaders: opts.chunkHeaders,
     queryString: bundle.chunkQueryStrings?.[0] ?? ''
   })
-  const provider = buildChunkResolver(source, bundle.manifest.chunks)
 
   // Plan first: bytesTotal / filesTotal must reflect only the files that will
   // actually be assembled, so the progress bar is honest about cruft skips.
@@ -182,35 +181,93 @@ export async function downloadAsset(
   let filesDone = 0
   const summaries: DownloadFileSummary[] = [...plan.skippedSummaries]
   const onProgress = opts.onProgress
+  const signal = opts.signal
+  const throwIfCancelled = (): void => {
+    if (signal?.aborted) throw new DownloadCancelledError()
+  }
 
+  // Resume support: find files that are already complete BEFORE scheduling
+  // any fetch, so the prefetcher only pulls chunks that will be written.
+  const destPathOf = (entry: FileManifestEntry): string =>
+    path.join(dataDir, stripPrefix(entry.filename, opts.pathStripPrefix))
+  const alreadyComplete = new Set<FileManifestEntry>()
   for (const entry of filesToDownload) {
-    opts.signal?.throwIfAborted()
-    const relPath = stripPrefix(entry.filename, opts.pathStripPrefix)
-    onLog(`assembling ${relPath} (${entry.fileSize} bytes)`)
-    onProgress?.({
-      bytesDone,
-      bytesTotal,
-      filesDone,
-      filesTotal,
-      currentFile: relPath
-    })
-    const destPath = path.join(dataDir, relPath)
-    const result = await assembleFile(entry, provider, destPath)
-    summaries.push({ filename: entry.filename, fileSize: entry.fileSize, skipped: result.skipped })
-    if (!result.skipped) bytesWritten += entry.fileSize
-    bytesDone += entry.fileSize
-    filesDone += 1
-    onProgress?.({
-      bytesDone,
-      bytesTotal,
-      filesDone,
-      filesTotal,
-      currentFile: null
-    })
+    throwIfCancelled()
+    if (await isFileAlreadyValid(destPathOf(entry), entry.sha1)) alreadyComplete.add(entry)
+  }
+  if (alreadyComplete.size > 0) {
+    onLog(`resume: ${alreadyComplete.size}/${filesTotal} files already complete on disk`)
+  }
+
+  const progressStep = Math.max(1, opts.progressStepBytes ?? 4 * 1024 * 1024)
+  const prefetcher = new ChunkPrefetcher(
+    source,
+    bundle.manifest.chunks,
+    filesToDownload.filter((f) => !alreadyComplete.has(f)),
+    { concurrency: normalizeChunkConcurrency(opts.chunkConcurrency), signal }
+  )
+  prefetcher.start()
+
+  try {
+    for (const entry of filesToDownload) {
+      throwIfCancelled()
+      const relPath = stripPrefix(entry.filename, opts.pathStripPrefix)
+      const complete = alreadyComplete.has(entry)
+      if (!complete) onLog(`assembling ${relPath} (${entry.fileSize} bytes)`)
+      onProgress?.({
+        bytesDone,
+        bytesTotal,
+        filesDone,
+        filesTotal,
+        currentFile: relPath
+      })
+      // In-file progress: large files would otherwise hold the bar still
+      // until they complete, then jump.
+      let inFile = 0
+      let sinceEmit = 0
+      const onBytes = (n: number): void => {
+        inFile += n
+        sinceEmit += n
+        if (sinceEmit < progressStep) return
+        sinceEmit = 0
+        onProgress?.({
+          bytesDone: bytesDone + inFile,
+          bytesTotal,
+          filesDone,
+          filesTotal,
+          currentFile: relPath
+        })
+      }
+      const result = complete
+        ? { skipped: true }
+        : await assembleFile(entry, prefetcher, destPathOf(entry), {
+            skipExistingCheck: true,
+            onBytes
+          })
+      summaries.push({ filename: entry.filename, fileSize: entry.fileSize, skipped: result.skipped })
+      if (!result.skipped) bytesWritten += entry.fileSize
+      bytesDone += entry.fileSize
+      filesDone += 1
+      onProgress?.({
+        bytesDone,
+        bytesTotal,
+        filesDone,
+        filesTotal,
+        currentFile: null
+      })
+    }
+  } catch (err) {
+    // Any failure observed after the user cancelled (a write interrupted,
+    // a fetch torn down) is reported as the cancellation itself.
+    if (signal?.aborted) throw new DownloadCancelledError()
+    throw err
+  } finally {
+    prefetcher.stop()
   }
 
   await fsp.rm(cacheDir, { recursive: true, force: true })
   onLog(`download complete: ${filesDone}/${filesTotal} files, ${bytesWritten} bytes written`)
+  onLog(formatDownloadStats(source.stats, Date.now() - startedAt))
 
   return {
     vaultDir: opts.vaultDir,

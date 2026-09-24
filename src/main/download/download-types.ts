@@ -11,7 +11,7 @@ export interface DownloadOptions {
   onProgress?: (p: DownloadProgress) => void
   /** When provided, called with one human-readable line per significant step. */
   onLog?: (line: string) => void
-  /** AbortSignal — when fired, in-progress chunk downloads finish their HTTP call but no new chunks are started; throws `DownloadCancelledError` from `downloadAsset`. */
+  /** AbortSignal. When fired, in-progress chunk downloads finish their HTTP call in the background but no new chunks are started, and `downloadAsset` rejects right away with `DownloadCancelledError`. */
   signal?: AbortSignal
   /** Headers sent on every chunk GET. Use this to pass `Authorization: bearer …` and a Launcher-style `User-Agent` (the Epic CDN requires both for chunk fetches). */
   chunkHeaders?: Record<string, string>
@@ -39,6 +39,18 @@ export interface DownloadOptions {
    * progress reflects only files that will actually be assembled.
    */
   skipPatterns?: string[]
+  /**
+   * How many chunk fetches run in parallel ahead of the (sequential) file
+   * assembler. Clamped to 1..64; default 16. Bound to the `downloadThreads`
+   * setting by the callers.
+   */
+  chunkConcurrency?: number
+  /**
+   * Emit an in-file progress update every time this many bytes have been
+   * written since the last one, so large files don't freeze the progress bar
+   * until they complete. Default 4 MiB.
+   */
+  progressStepBytes?: number
 }
 
 export interface DownloadProgress {

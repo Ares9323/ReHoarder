@@ -107,6 +107,16 @@ beforeEach(() => {
 })
 
 describe('DownloadsManager — parallel queue scheduler', () => {
+  it('forwards the downloadThreads setting as chunkConcurrency to the runner', async () => {
+    settings.saveAll({ downloadThreads: 24 })
+    manager.enqueue('fab', 'a', 'A')
+    await flush()
+
+    expect(runFn).toHaveBeenCalledTimes(1)
+    const runnerOpts = runFn.mock.calls[0][2] as { chunkConcurrency?: number }
+    expect(runnerOpts.chunkConcurrency).toBe(24)
+  })
+
   it('runs up to maxConcurrentDownloads assets at the same time', async () => {
     manager.enqueue('fab', 'a', 'A')
     manager.enqueue('fab', 'b', 'B')
