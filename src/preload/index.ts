@@ -545,6 +545,17 @@ export interface AddToProjectRequest {
   conflict: AddToProjectConflict
   /** Absolute path to an orphan vault asset folder (no matching downloads row) to use directly as the source payload. */
   vaultAssetDir?: string
+  /** Omitted or default (Content, no subfolder, no rename) keeps the plain fast copy. */
+  destination?: AddToProjectDestination
+  /** Caller-chosen id for cancel (`cancelAddTo`) and progress events. */
+  jobId?: string
+}
+
+/** `'game'` = `/Game` (`<project>/Content`); `{ plugin }` = that content plugin's `/<Name>` mount. */
+export interface AddToProjectDestination {
+  mount: 'game' | { plugin: string }
+  subfolder?: string
+  rename?: string
 }
 
 export interface AddToProjectResult {
@@ -555,6 +566,45 @@ export interface AddToProjectResult {
   filesCopied?: number
   filesSkipped?: number
   bytesCopied?: number
+  cancelled?: boolean
+  warning?: string
+  destinationPath?: string
+  output?: string
+  script?: string
+}
+
+export type AddToProgressStage = 'prepare' | 'copy-in' | 'editor' | 'copy-out' | 'cleanup'
+
+export interface AddToProgressEvent {
+  jobId: string
+  stage: AddToProgressStage
+}
+
+export interface ContentPluginsResult {
+  ok: boolean
+  error?: string
+  plugins?: Array<{ name: string; dir: string }>
+}
+
+export interface ContentSubfoldersResult {
+  ok: boolean
+  error?: string
+  /** Existing folders under the mount's content dir, `/`-joined (e.g. `ThirdParty/Env`). */
+  folders?: string[]
+}
+
+export interface PackTopFoldersRequest {
+  source: string
+  sourceId: string
+  engineVersion: string | null
+  vaultAssetDir?: string
+}
+
+export interface PackTopFoldersResult {
+  ok: boolean
+  error?: string
+  folders?: string[]
+  looseAssets?: string[]
 }
 
 export interface PickDirectoryResult {
@@ -1076,6 +1126,19 @@ const api = {
       ipcRenderer.invoke('projects:create-from-vault', req),
     addToProject: (req: AddToProjectRequest): Promise<AddToProjectResult> =>
       ipcRenderer.invoke('projects:add-to-project', req),
+    cancelAddTo: (jobId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('projects:add-to-cancel', jobId),
+    onAddToProgress: (handler: (ev: AddToProgressEvent) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, ev: AddToProgressEvent): void => handler(ev)
+      ipcRenderer.on('projects:add-to-progress', listener)
+      return () => ipcRenderer.removeListener('projects:add-to-progress', listener)
+    },
+    contentPlugins: (projectDir: string): Promise<ContentPluginsResult> =>
+      ipcRenderer.invoke('projects:content-plugins', projectDir),
+    contentSubfolders: (projectDir: string, plugin: string | null): Promise<ContentSubfoldersResult> =>
+      ipcRenderer.invoke('projects:content-subfolders', projectDir, plugin),
+    packTopFolders: (req: PackTopFoldersRequest): Promise<PackTopFoldersResult> =>
+      ipcRenderer.invoke('projects:pack-top-folders', req),
     pickDirectory: (): Promise<PickDirectoryResult> =>
       ipcRenderer.invoke('projects:pick-directory'),
     inspectProjectFolder: (dir: string): Promise<InspectProjectFolderResult> =>

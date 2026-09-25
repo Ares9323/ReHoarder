@@ -1,5 +1,6 @@
 import { app, ipcMain, shell, dialog } from 'electron'
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 import { scanProjects, type ProjectInfo } from './projects-local'
@@ -14,15 +15,27 @@ import { installFromVault, type InstallFromVaultResult } from './projects-instal
 import { createProjectFromVault, type CreateProjectResult } from './projects-create'
 import {
   addToProject,
+  resolvePackContentDir,
   type AddToProjectConflict,
   type AddToProjectResult
 } from './projects-add-to'
+import { relocatePackIntoProject, type RelocateStage } from './projects-relocate'
+import {
+  listContentPlugins,
+  listContentSubfolders,
+  listLoosePackages,
+  listTopLevelFolders,
+  type AddToProjectDestination,
+  type ContentPlugin
+} from './projects-relocate-plan'
 import { inspectProjectFolder, type InspectProjectFolderResult } from './projects-inspect'
 import { setAsTemplate, type SetAsTemplateResult } from './projects-set-as-template'
 import {
   cleanupRedirectors,
   cleanBuildArtifacts,
   deepCleanProject,
+  resolveEditorCmd,
+  resolveEngineForProject,
   type CleanResult,
   type CleanupRedirectorsResult,
   type DeepCleanPreserve
@@ -69,6 +82,72 @@ export interface EnginePluginsResult {
   ok: boolean
   error?: string
   plugins?: EnginePluginInfo[]
+}
+
+export interface ContentPluginsResult {
+  ok: boolean
+  error?: string
+  plugins?: ContentPlugin[]
+}
+
+export interface ContentSubfoldersResult {
+  ok: boolean
+  error?: string
+  /** Existing folders under the mount's content dir, `/`-joined (e.g. `ThirdParty/Env`). */
+  folders?: string[]
+}
+
+export interface PackTopFoldersResult {
+  ok: boolean
+  error?: string
+  /** Top-level folders of the pack's `Content/` (World Partition side folders excluded). */
+  folders?: string[]
+  /** `.uasset` / `.umap` package names sitting directly in `Content/`. */
+  looseAssets?: string[]
+}
+
+/** Pushed on `projects:add-to-progress` while a relocation job runs. */
+export interface AddToProgressEvent {
+  jobId: string
+  stage: RelocateStage
+}
+
+/**
+ * Shape-check the renderer's destination. `null` = omitted (fast path),
+ * `undefined` = malformed. Name rules are enforced later by buildDestination.
+ */
+function parseDestination(raw: unknown): AddToProjectDestination | null | undefined {
+  if (raw === undefined || raw === null) return null
+  if (typeof raw !== 'object') return undefined
+  const d = raw as { mount?: unknown; subfolder?: unknown; rename?: unknown }
+  let mount: AddToProjectDestination['mount']
+  if (d.mount === 'game') mount = 'game'
+  else if (
+    d.mount &&
+    typeof d.mount === 'object' &&
+    typeof (d.mount as { plugin?: unknown }).plugin === 'string'
+  ) {
+    mount = { plugin: (d.mount as { plugin: string }).plugin }
+  } else return undefined
+  if (d.subfolder !== undefined && typeof d.subfolder !== 'string') return undefined
+  if (d.rename !== undefined && typeof d.rename !== 'string') return undefined
+  return { mount, subfolder: d.subfolder, rename: d.rename }
+}
+
+/** Resolve the vault-asset folder against the vault roots; `dir: undefined` when not given. */
+function resolveVaultAssetDir(
+  vaultAssetDir: string | undefined,
+  vaultPaths: string[]
+): { dir: string | undefined } | { error: string } {
+  if (!vaultAssetDir) return { dir: undefined }
+  const resolvedAsset = path.resolve(vaultAssetDir)
+  const insideVault = vaultPaths.some(
+    (root) =>
+      resolvedAsset === path.resolve(root) ||
+      resolvedAsset.startsWith(path.resolve(root) + path.sep)
+  )
+  if (!insideVault) return { error: 'Asset path is outside the configured vault roots' }
+  return { dir: resolvedAsset }
 }
 
 export interface PickDirectoryResult {
@@ -375,10 +454,13 @@ export function registerProjectsIpc(
     }
   )
 
+  /** Running relocation jobs, keyed by job id, so `projects:add-to-cancel` can abort them. */
+  const addToJobs = new Map<string, AbortController>()
+
   ipcMain.handle(
     'projects:add-to-project',
     async (
-      _e,
+      e,
       req: {
         source: string
         sourceId: string
@@ -387,6 +469,9 @@ export function registerProjectsIpc(
         projectDir: string
         conflict: AddToProjectConflict
         vaultAssetDir?: string
+        destination?: AddToProjectDestination
+        /** Renderer-chosen id so it can cancel and match progress events. */
+        jobId?: string
       }
     ): Promise<AddToProjectResult> => {
       const cfg = settings.load()
@@ -398,24 +483,173 @@ export function registerProjectsIpc(
       if (req.conflict !== 'skip' && req.conflict !== 'overwrite') {
         return { ok: false, error: `Unknown conflict mode: ${req.conflict}` }
       }
-      let resolvedVaultAssetDir: string | undefined
-      if (req.vaultAssetDir) {
-        const resolvedAsset = path.resolve(req.vaultAssetDir)
-        const insideVault = cfg.vaultPaths.some(
-          (root) =>
-            resolvedAsset === path.resolve(root) ||
-            resolvedAsset.startsWith(path.resolve(root) + path.sep)
-        )
-        if (!insideVault) {
-          return { ok: false, error: 'Asset path is outside the configured vault roots' }
+      const vault = resolveVaultAssetDir(req.vaultAssetDir, cfg.vaultPaths)
+      if ('error' in vault) return { ok: false, error: vault.error }
+      const destination = parseDestination(req.destination)
+      if (destination === undefined) return { ok: false, error: 'Malformed destination' }
+
+      const jobId =
+        typeof req.jobId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(req.jobId)
+          ? req.jobId
+          : randomUUID()
+      if (addToJobs.has(jobId)) return { ok: false, error: 'A job with this id is already running' }
+      const controller = new AbortController()
+      addToJobs.set(jobId, controller)
+      const stagesSeen: string[] = []
+      const startedAt = Date.now()
+      // Every relocation leaves a JSON report under <userData>/relocate/logs,
+      // since the scratch project (and Unreal's own log) is deleted afterwards.
+      const writeReport = async (result: AddToProjectResult): Promise<void> => {
+        if (!destination) return
+        try {
+          const dir = path.join(app.getPath('userData'), 'relocate', 'logs')
+          await fsp.mkdir(dir, { recursive: true })
+          const stamp = new Date(startedAt).toISOString().replace(/[:.]/g, '-')
+          const file = path.join(dir, `${stamp}-${jobId}.json`)
+          const report = {
+            startedAt: new Date(startedAt).toISOString(),
+            durationMs: Date.now() - startedAt,
+            projectDir: resolved,
+            destination,
+            conflict: req.conflict,
+            stages: stagesSeen,
+            result
+          }
+          await fsp.writeFile(file, JSON.stringify(report, null, 2), 'utf-8')
+          console.warn(
+            `[add-to-project] ${result.ok ? 'ok' : result.cancelled ? 'cancelled' : 'failed'}` +
+              ` (${stagesSeen.join(' > ') || 'no stage'}), report: ${file}`
+          )
+        } catch (err) {
+          console.warn('[add-to-project] could not write the relocation report:', err)
         }
-        resolvedVaultAssetDir = resolvedAsset
       }
-      return await addToProject(downloadsRepo, {
-        ...req,
-        projectDir: resolved,
-        vaultAssetDir: resolvedVaultAssetDir
+      try {
+        const result = await addToProject(
+          downloadsRepo,
+          {
+            source: req.source,
+            sourceId: req.sourceId,
+            engineVersion: req.engineVersion,
+            targetEngineVersion: req.targetEngineVersion,
+            conflict: req.conflict,
+            projectDir: resolved,
+            vaultAssetDir: vault.dir,
+            destination: destination ?? undefined
+          },
+          ({ sourceContentDir, uprojectPath }) =>
+            relocatePackIntoProject(
+              {
+                jobId,
+                sourceContentDir,
+                projectDir: resolved,
+                uprojectPath,
+                conflict: req.conflict,
+                destination: destination as AddToProjectDestination
+              },
+              {
+                scratchRoot: path.join(app.getPath('userData'), 'relocate'),
+                resolveEditor: async (uproject) => {
+                  const r = await resolveEngineForProject(uproject, cfg.enginePaths)
+                  if ('error' in r) return r
+                  const cmdExe = await resolveEditorCmd(r.engine)
+                  if (!cmdExe) {
+                    return { error: `Engine ${r.engine.name} has no editor executable on disk` }
+                  }
+                  return { cmdExe, engineName: r.engine.name, engineRoot: r.engine.path }
+                }
+              },
+              (stage) => {
+                stagesSeen.push(stage)
+                if (e.sender.isDestroyed()) return
+                const ev: AddToProgressEvent = { jobId, stage }
+                e.sender.send('projects:add-to-progress', ev)
+              },
+              controller.signal
+            )
+        )
+        await writeReport(result)
+        return result
+      } finally {
+        addToJobs.delete(jobId)
+      }
+    }
+  )
+
+  ipcMain.handle('projects:add-to-cancel', (_e, jobId: string): { ok: boolean } => {
+    const job = addToJobs.get(jobId)
+    if (!job) return { ok: false }
+    job.abort()
+    return { ok: true }
+  })
+
+  ipcMain.handle(
+    'projects:content-plugins',
+    async (_e, projectDir: string): Promise<ContentPluginsResult> => {
+      // Read-only listing of `.uplugin` descriptors. Like add-to-project it
+      // accepts custom folders, but only real project folders.
+      const resolved = path.resolve(projectDir)
+      try {
+        const entries = await fsp.readdir(resolved)
+        if (!entries.some((n) => n.toLowerCase().endsWith('.uproject'))) {
+          return { ok: false, error: 'Not an Unreal project folder (no .uproject)' }
+        }
+        return { ok: true, plugins: await listContentPlugins(resolved) }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'projects:content-subfolders',
+    async (_e, projectDir: string, plugin: string | null): Promise<ContentSubfoldersResult> => {
+      // Existing folders under the chosen mount, for the Subfolder suggestions.
+      const resolved = path.resolve(projectDir)
+      try {
+        const entries = await fsp.readdir(resolved)
+        if (!entries.some((n) => n.toLowerCase().endsWith('.uproject'))) {
+          return { ok: false, error: 'Not an Unreal project folder (no .uproject)' }
+        }
+        let contentDir = path.join(resolved, 'Content')
+        if (plugin) {
+          const match = (await listContentPlugins(resolved)).find((p) => p.name === plugin)
+          if (!match) return { ok: false, error: `No content plugin named ${plugin}` }
+          contentDir = path.join(match.dir, 'Content')
+        }
+        return { ok: true, folders: await listContentSubfolders(contentDir, 3) }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'projects:pack-top-folders',
+    async (
+      _e,
+      req: {
+        source: string
+        sourceId: string
+        engineVersion: string | null
+        vaultAssetDir?: string
+      }
+    ): Promise<PackTopFoldersResult> => {
+      const cfg = settings.load()
+      const vault = resolveVaultAssetDir(req.vaultAssetDir, cfg.vaultPaths)
+      if ('error' in vault) return { ok: false, error: vault.error }
+      const pack = await resolvePackContentDir(downloadsRepo, {
+        source: req.source,
+        sourceId: req.sourceId,
+        engineVersion: req.engineVersion,
+        vaultAssetDir: vault.dir
       })
+      if ('error' in pack) return { ok: false, error: pack.error }
+      const [folders, looseAssets] = await Promise.all([
+        listTopLevelFolders(pack.contentDir),
+        listLoosePackages(pack.contentDir)
+      ])
+      return { ok: true, folders, looseAssets }
     }
   )
 

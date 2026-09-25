@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { promises as fsp } from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -107,5 +107,84 @@ describe('addToProject vaultAssetDir mode (orphan vault assets)', () => {
     await expect(
       fsp.access(path.join(projectDir, 'Content', 'Bar.uasset'))
     ).resolves.toBeUndefined()
+  })
+})
+
+describe('addToProject destination dispatch', () => {
+  async function setup(): Promise<{ assetDir: string; projectDir: string }> {
+    const assetDir = path.join(tmp, 'asset')
+    await fsp.mkdir(path.join(assetDir, 'data', 'Content', 'Rocks'), { recursive: true })
+    await fsp.writeFile(path.join(assetDir, 'data', 'Content', 'Rocks', 'a.uasset'), 'x')
+    const projectDir = path.join(tmp, 'proj')
+    await fsp.mkdir(projectDir, { recursive: true })
+    await fsp.writeFile(path.join(projectDir, 'Proj.uproject'), '{}')
+    return { assetDir, projectDir }
+  }
+
+  it('keeps the fast copy for the default destination and never relocates', async () => {
+    const { assetDir, projectDir } = await setup()
+    const relocate = vi.fn()
+    const r = await addToProject(
+      repoWith([]),
+      {
+        source: 'fab', sourceId: 'x', engineVersion: '5.4', targetEngineVersion: '5.4',
+        projectDir, conflict: 'skip', vaultAssetDir: assetDir,
+        destination: { mount: 'game', subfolder: '', rename: 'Rocks' }
+      },
+      relocate
+    )
+    expect(r.ok).toBe(true)
+    expect(relocate).not.toHaveBeenCalled()
+    await expect(
+      fsp.access(path.join(projectDir, 'Content', 'Rocks', 'a.uasset'))
+    ).resolves.toBeUndefined()
+  })
+
+  it('delegates a non-default destination with the resolved content dir and .uproject', async () => {
+    const { assetDir, projectDir } = await setup()
+    const relocate = vi.fn().mockResolvedValue({ ok: true, filesCopied: 7 })
+    const r = await addToProject(
+      repoWith([]),
+      {
+        source: 'fab', sourceId: 'x', engineVersion: '5.4', targetEngineVersion: '5.4',
+        projectDir, conflict: 'overwrite', vaultAssetDir: assetDir,
+        destination: { mount: 'game', subfolder: 'ThirdParty' }
+      },
+      relocate
+    )
+    expect(r).toEqual({ ok: true, filesCopied: 7 })
+    expect(relocate).toHaveBeenCalledWith({
+      sourceContentDir: path.join(assetDir, 'data', 'Content'),
+      uprojectPath: path.join(projectDir, 'Proj.uproject')
+    })
+    // Nothing was merged by the fast path.
+    await expect(fsp.access(path.join(projectDir, 'Content'))).rejects.toThrow()
+  })
+
+  it('runs the engine guard before relocating', async () => {
+    const { assetDir, projectDir } = await setup()
+    const relocate = vi.fn()
+    const r = await addToProject(
+      repoWith([]),
+      {
+        source: 'fab', sourceId: 'x', engineVersion: '5.6', targetEngineVersion: '5.4',
+        projectDir, conflict: 'skip', vaultAssetDir: assetDir,
+        destination: { mount: 'game', subfolder: 'ThirdParty' }
+      },
+      relocate
+    )
+    expect(r.ok).toBe(false)
+    expect(relocate).not.toHaveBeenCalled()
+  })
+
+  it('fails cleanly when relocation is requested but unavailable', async () => {
+    const { assetDir, projectDir } = await setup()
+    const r = await addToProject(repoWith([]), {
+      source: 'fab', sourceId: 'x', engineVersion: '5.4', targetEngineVersion: '5.4',
+      projectDir, conflict: 'skip', vaultAssetDir: assetDir,
+      destination: { mount: 'game', subfolder: 'ThirdParty' }
+    })
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/relocat/i)
   })
 })

@@ -95,7 +95,7 @@ const SAVED_MANAGED_BY_TOGGLE = [
  * matched against `engines.version`'s major.minor. GUID-based source-build
  * associations are not yet supported.
  */
-async function resolveEngineForProject(
+export async function resolveEngineForProject(
   uprojectPath: string,
   enginePaths: string[]
 ): Promise<{ engine: EngineInfo } | { error: string }> {
@@ -122,6 +122,24 @@ async function resolveEngineForProject(
 }
 
 /**
+ * Commandlet runner for an engine. `editorExePath` points at
+ * `UnrealEditor.exe`; the commandlet runner is `UnrealEditor-Cmd.exe` next to
+ * it. Falling back to the editor exe still works on most UE versions but
+ * produces a flickering splash on Windows. `null` when the engine has no
+ * editor binary at all.
+ */
+export async function resolveEditorCmd(engine: EngineInfo): Promise<string | null> {
+  if (!engine.editorExePath) return null
+  const cmd = path.join(path.dirname(engine.editorExePath), 'UnrealEditor-Cmd.exe')
+  try {
+    await fsp.access(cmd)
+    return cmd
+  } catch {
+    return engine.editorExePath
+  }
+}
+
+/**
  * Spawn `UnrealEditor-Cmd.exe <uproject> -run=ResavePackages -fixupredirects …`
  * and wait for completion. The commandlet walks every `.uasset` in the
  * project's `Content/`, follows ObjectRedirectors and rewrites the soft
@@ -137,20 +155,7 @@ export async function cleanupRedirectors(
     return { ok: false, error: resolved.error, exitCode: null, output: '' }
   }
   const { engine } = resolved
-  // `editorExePath` points at `UnrealEditor.exe`; the commandlet runner is
-  // `UnrealEditor-Cmd.exe` next to it. Falling back to the editor exe still
-  // works on most UE versions but produces a flickering splash on Windows.
-  let cmdExe: string | null = null
-  if (engine.editorExePath) {
-    const parent = path.dirname(engine.editorExePath)
-    const cmd = path.join(parent, 'UnrealEditor-Cmd.exe')
-    try {
-      await fsp.access(cmd)
-      cmdExe = cmd
-    } catch {
-      cmdExe = engine.editorExePath
-    }
-  }
+  const cmdExe = await resolveEditorCmd(engine)
   if (!cmdExe) {
     return {
       ok: false,
@@ -170,7 +175,7 @@ export async function cleanupRedirectors(
   ]
   return new Promise<CleanupRedirectorsResult>((resolve) => {
     const buffer: string[] = []
-    const proc = spawn(cmdExe!, args, { windowsHide: true })
+    const proc = spawn(cmdExe, args, { windowsHide: true })
     const onLine = (chunk: Buffer): void => {
       const text = chunk.toString('utf-8')
       buffer.push(text)

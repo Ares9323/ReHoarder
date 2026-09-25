@@ -872,6 +872,17 @@ export interface AddToProjectRequest {
   conflict: AddToProjectConflict
   /** Absolute path to an orphan vault asset folder (no matching downloads row) to use directly as the source payload. */
   vaultAssetDir?: string
+  /** Omitted or default (Content, no subfolder, no rename) keeps the plain fast copy. */
+  destination?: AddToProjectDestination
+  /** Caller-chosen id for cancel (`cancelAddTo`) and progress events. */
+  jobId?: string
+}
+
+/** `'game'` = `/Game` (`<project>/Content`); `{ plugin }` = that content plugin's `/<Name>` mount. */
+export interface AddToProjectDestination {
+  mount: 'game' | { plugin: string }
+  subfolder?: string
+  rename?: string
 }
 
 export interface AddToProjectResult {
@@ -882,6 +893,50 @@ export interface AddToProjectResult {
   filesCopied?: number
   filesSkipped?: number
   bytesCopied?: number
+  /** Relocation only: the user cancelled; nothing was copied. */
+  cancelled?: boolean
+  /** Relocation only: succeeded, with something worth telling the user. */
+  warning?: string
+  /** Relocation only: Unreal package path the pack now lives under. */
+  destinationPath?: string
+  /** Relocation only, on failure: tail of the editor output. */
+  output?: string
+  /** Relocation only, on failure: the generated Python script. */
+  script?: string
+}
+
+export type AddToProgressStage = 'prepare' | 'copy-in' | 'editor' | 'copy-out' | 'cleanup'
+
+export interface AddToProgressEvent {
+  jobId: string
+  stage: AddToProgressStage
+}
+
+export interface ContentPluginsResult {
+  ok: boolean
+  error?: string
+  plugins?: Array<{ name: string; dir: string }>
+}
+
+export interface ContentSubfoldersResult {
+  ok: boolean
+  error?: string
+  /** Existing folders under the mount's content dir, `/`-joined (e.g. `ThirdParty/Env`). */
+  folders?: string[]
+}
+
+export interface PackTopFoldersRequest {
+  source: string
+  sourceId: string
+  engineVersion: string | null
+  vaultAssetDir?: string
+}
+
+export interface PackTopFoldersResult {
+  ok: boolean
+  error?: string
+  folders?: string[]
+  looseAssets?: string[]
 }
 
 export interface PickDirectoryResult {
@@ -961,6 +1016,16 @@ export interface ProjectsApi {
   installFromVault(req: InstallFromVaultRequest): Promise<InstallFromVaultResult>
   createFromVault(req: CreateProjectRequest): Promise<CreateProjectResult>
   addToProject(req: AddToProjectRequest): Promise<AddToProjectResult>
+  /** Abort a running relocation job; `ok: false` when no such job is running. */
+  cancelAddTo(jobId: string): Promise<{ ok: boolean }>
+  /** Stage updates of relocation jobs. Returns the unsubscribe function. */
+  onAddToProgress(handler: (ev: AddToProgressEvent) => void): () => void
+  /** Plugins of the project folder that can hold content (`CanContainContent: true`). */
+  contentPlugins(projectDir: string): Promise<ContentPluginsResult>
+  /** Existing folders under the project's Content (plugin `null`) or a content plugin's Content. */
+  contentSubfolders(projectDir: string, plugin: string | null): Promise<ContentSubfoldersResult>
+  /** Top-level folders and loose packages of the pack's `Content/`. */
+  packTopFolders(req: PackTopFoldersRequest): Promise<PackTopFoldersResult>
   pickDirectory(): Promise<PickDirectoryResult>
   inspectProjectFolder(dir: string): Promise<InspectProjectFolderResult>
   setAsTemplate(req: SetAsTemplateRequest): Promise<SetAsTemplateResult>

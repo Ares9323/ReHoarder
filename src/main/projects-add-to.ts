@@ -2,6 +2,11 @@ import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 import type { DownloadsRepo } from './db/downloads-repo'
 import { isEngineCompatible, parseEngineVersion } from '../shared/engine-version'
+import {
+  isDefaultDestination,
+  type AddToProjectDestination
+} from '../shared/relocate-destination'
+import { listTopLevelFolders } from './projects-relocate-plan'
 
 export type AddToProjectConflict = 'skip' | 'overwrite'
 
@@ -21,7 +26,17 @@ export interface AddToProjectRequest {
    *  vault assets that have no matching download row (hand-copied, or
    *  downloaded before ReHoarder tracked them). */
   vaultAssetDir?: string
+  /** Where the pack lands. Omitted or default (Content, no subfolder, no
+   *  rename) keeps the plain fast merge into `<project>/Content`. */
+  destination?: AddToProjectDestination
 }
+
+/** Runs the editor-backed relocation (see `projects-relocate.ts`). Injected so
+ *  this module stays free of Electron and child processes. */
+export type RelocateFn = (ctx: {
+  sourceContentDir: string
+  uprojectPath: string
+}) => Promise<AddToProjectResult>
 
 export interface AddToProjectResult {
   ok: boolean
@@ -33,6 +48,16 @@ export interface AddToProjectResult {
   filesCopied?: number
   filesSkipped?: number
   bytesCopied?: number
+  /** Relocation only: the job was cancelled by the user (nothing was copied). */
+  cancelled?: boolean
+  /** Relocation only: succeeded, but something deserves the user's attention. */
+  warning?: string
+  /** Relocation only: Unreal package path the pack now lives under. */
+  destinationPath?: string
+  /** Relocation only, on failure: tail of the editor output. */
+  output?: string
+  /** Relocation only, on failure: the generated Python script, for diagnosis. */
+  script?: string
 }
 
 /**
@@ -49,7 +74,8 @@ export interface AddToProjectResult {
  */
 export async function addToProject(
   repo: DownloadsRepo,
-  req: AddToProjectRequest
+  req: AddToProjectRequest,
+  relocate?: RelocateFn
 ): Promise<AddToProjectResult> {
   // Only enforce the guard when the asset's required engine version is
   // known. An unparsable/missing required version means we can't verify
@@ -67,6 +93,75 @@ export async function addToProject(
     }
   }
 
+  const pack = await resolvePackContentDir(repo, req)
+  if ('error' in pack) return { ok: false, error: pack.error }
+  const sourceContentDir = pack.contentDir
+
+  // Verify the project's uproject exists — guard against arbitrary directories.
+  let uprojectName: string | undefined
+  try {
+    const entries = await fsp.readdir(req.projectDir)
+    uprojectName = entries.find((e) => e.toLowerCase().endsWith('.uproject'))
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Cannot read project directory: ${err instanceof Error ? err.message : String(err)}`
+    }
+  }
+  if (!uprojectName) {
+    return {
+      ok: false,
+      error: `${req.projectDir} doesn't look like an Unreal project (no .uproject file).`
+    }
+  }
+
+  if (req.destination) {
+    const topFolders = await listTopLevelFolders(sourceContentDir)
+    if (!isDefaultDestination(req.destination, topFolders)) {
+      if (!relocate) {
+        return { ok: false, error: 'Relocating into a subfolder or plugin is not available here' }
+      }
+      return await relocate({
+        sourceContentDir,
+        uprojectPath: path.join(req.projectDir, uprojectName)
+      })
+    }
+  }
+
+  const destContentDir = path.join(req.projectDir, 'Content')
+  await fsp.mkdir(destContentDir, { recursive: true })
+
+  let filesCopied = 0
+  let filesSkipped = 0
+  let bytesCopied = 0
+  await mergeDir(sourceContentDir, destContentDir, req.conflict, (kind, bytes) => {
+    if (kind === 'copied') {
+      filesCopied += 1
+      bytesCopied += bytes
+    } else {
+      filesSkipped += 1
+    }
+  })
+
+  return {
+    ok: true,
+    sourceContentDir,
+    destContentDir,
+    filesCopied,
+    filesSkipped,
+    bytesCopied
+  }
+}
+
+/**
+ * Locate the pack's source `Content/` directory: either inside the explicit
+ * `vaultAssetDir` or inside the newest completed download matching
+ * (source, sourceId, engineVersion).
+ */
+export async function resolvePackContentDir(
+  repo: DownloadsRepo,
+  req: Pick<AddToProjectRequest, 'source' | 'sourceId' | 'engineVersion' | 'vaultAssetDir'>
+): Promise<{ contentDir: string } | { error: string }> {
   let assetDir: string
   if (req.vaultAssetDir) {
     assetDir = req.vaultAssetDir
@@ -85,7 +180,6 @@ export async function addToProject(
 
     if (candidates.length === 0) {
       return {
-        ok: false,
         error:
           `No completed download in the local vault for ${req.source}/${req.sourceId}` +
           (req.engineVersion ? ` (engine ${req.engineVersion})` : '')
@@ -103,70 +197,16 @@ export async function addToProject(
     sourceRoot = assetDir
   }
 
-  const sourceContentDir = await findContentDir(sourceRoot)
-  if (!sourceContentDir) {
+  const contentDir = await findContentDir(sourceRoot)
+  if (!contentDir) {
     return {
-      ok: false,
-      error:
-        'No Content/ folder found inside the vault payload — is this really an asset pack?'
+      error: 'No Content/ folder found inside the vault payload — is this really an asset pack?'
     }
   }
-
-  // Verify the project's uproject exists — guard against arbitrary directories.
-  let foundUproject = false
-  try {
-    const entries = await fsp.readdir(req.projectDir)
-    for (const e of entries) {
-      if (e.toLowerCase().endsWith('.uproject')) {
-        foundUproject = true
-        break
-      }
-    }
-  } catch (err) {
-    return {
-      ok: false,
-      error: `Cannot read project directory: ${err instanceof Error ? err.message : String(err)}`
-    }
-  }
-  if (!foundUproject) {
-    return {
-      ok: false,
-      error: `${req.projectDir} doesn't look like an Unreal project (no .uproject file).`
-    }
-  }
-
-  const destContentDir = path.join(req.projectDir, 'Content')
-  await fsp.mkdir(destContentDir, { recursive: true })
-
-  let filesCopied = 0
-  let filesSkipped = 0
-  let bytesCopied = 0
-  await walkAndMerge(
-    sourceContentDir,
-    sourceContentDir,
-    destContentDir,
-    req.conflict,
-    (kind, bytes) => {
-      if (kind === 'copied') {
-        filesCopied += 1
-        bytesCopied += bytes
-      } else {
-        filesSkipped += 1
-      }
-    }
-  )
-
-  return {
-    ok: true,
-    sourceContentDir,
-    destContentDir,
-    filesCopied,
-    filesSkipped,
-    bytesCopied
-  }
+  return { contentDir }
 }
 
-async function findContentDir(root: string, maxDepth = 3): Promise<string | null> {
+export async function findContentDir(root: string, maxDepth = 3): Promise<string | null> {
   async function walk(dir: string, depth: number): Promise<string | null> {
     if (depth > maxDepth) return null
     let entries
@@ -190,6 +230,20 @@ async function findContentDir(root: string, maxDepth = 3): Promise<string | null
     return null
   }
   return await walk(root, 0)
+}
+
+/**
+ * Copy every file under `sourceRoot` into `destRoot` (same relative layout),
+ * honouring the per-file conflict policy. Shared with the relocation job's
+ * copy-out step.
+ */
+export async function mergeDir(
+  sourceRoot: string,
+  destRoot: string,
+  conflict: AddToProjectConflict,
+  onFile: (kind: 'copied' | 'skipped', bytes: number) => void
+): Promise<void> {
+  await walkAndMerge(sourceRoot, sourceRoot, destRoot, conflict, onFile)
 }
 
 async function walkAndMerge(
