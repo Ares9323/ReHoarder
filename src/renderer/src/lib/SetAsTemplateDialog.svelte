@@ -155,7 +155,11 @@
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (busy) return
       if (e.key === 'Escape') onClose()
-      if (e.key === 'Enter' && (e.target as HTMLElement)?.tagName !== 'TEXTAREA') {
+      // Enter in a <select> commits its option, it must not submit the old value.
+      if (
+        e.key === 'Enter' &&
+        !['TEXTAREA', 'SELECT', 'OPTION'].includes((e.target as HTMLElement)?.tagName ?? '')
+      ) {
         void submit()
       }
     }

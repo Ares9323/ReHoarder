@@ -49,6 +49,7 @@
 
   let loading = $state(true)
   let saving = $state(false)
+  let mouseDownOnBackdrop = $state(false)
   let error = $state<string | null>(null)
   let descriptor = $state<UProjectDescriptor | null>(null)
   /** Snapshot of the descriptor as it was on disk — for dirty detection. */
@@ -191,11 +192,16 @@
 <div
   class="backdrop"
   role="presentation"
+  onmousedown={(e) => {
+    mouseDownOnBackdrop = (e.target as HTMLElement).classList.contains('backdrop')
+  }}
   onclick={(e) => {
-    // Click outside the panel closes only when not editing — guard via dirty flag.
-    if ((e.target as HTMLElement).classList.contains('backdrop') && !saving && !dirty) {
-      onClose()
-    }
+    // Click outside the panel closes only when not editing (dirty flag), and
+    // only when the press began on the backdrop: a text-selection drag that
+    // ends outside the panel fires its click there too.
+    const onBackdrop = (e.target as HTMLElement).classList.contains('backdrop')
+    if (onBackdrop && mouseDownOnBackdrop && !saving && !dirty) onClose()
+    mouseDownOnBackdrop = false
   }}
 >
   <div class="panel" role="dialog" aria-label="Edit .uproject" aria-modal="true">

@@ -117,6 +117,7 @@
 
   let actionError = $state<string | null>(null)
   let actionBusy = $state(false)
+  let mouseDownOnBackdrop = $state(false)
   let actionDone = $state<string | null>(null)
 
   async function installToEngine(engine: EngineLite, version: string): Promise<void> {
@@ -277,8 +278,15 @@
 <div
   class="backdrop"
   role="presentation"
+  onmousedown={(e) => {
+    mouseDownOnBackdrop = (e.target as HTMLElement).classList.contains('backdrop')
+  }}
   onclick={(e) => {
-    if ((e.target as HTMLElement).classList.contains('backdrop') && !actionBusy) onClose()
+    // A text-selection drag that ends outside the popup fires its click on the
+    // backdrop: close only when the press began there.
+    const onBackdrop = (e.target as HTMLElement).classList.contains('backdrop')
+    if (onBackdrop && mouseDownOnBackdrop && !actionBusy) onClose()
+    mouseDownOnBackdrop = false
   }}
 >
   <div class="popup" role="dialog" aria-modal="true" aria-label="Custom install">

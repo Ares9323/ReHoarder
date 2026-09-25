@@ -62,6 +62,7 @@
    *  "Custom folder…" — rendered as an extra option so the select shows it. */
   let customParent = $state<string | null>(null)
   let busy = $state(false)
+  let mouseDownOnBackdrop = $state(false)
   let error = $state<string | null>(null)
   let done = $state<{ projectDir: string; uprojectPath: string } | null>(null)
 
@@ -151,7 +152,11 @@
     const onKey = (e: globalThis.KeyboardEvent): void => {
       if (busy) return
       if (e.key === 'Escape') onClose()
-      if (e.key === 'Enter' && (e.target as HTMLElement)?.tagName !== 'TEXTAREA') {
+      // Enter in a <select> commits its option, it must not submit the old value.
+      if (
+        e.key === 'Enter' &&
+        !['TEXTAREA', 'SELECT', 'OPTION'].includes((e.target as HTMLElement)?.tagName ?? '')
+      ) {
         void submit()
       }
     }
@@ -163,8 +168,15 @@
 <div
   class="backdrop"
   role="presentation"
+  onmousedown={(e) => {
+    mouseDownOnBackdrop = (e.target as HTMLElement).classList.contains('backdrop')
+  }}
   onclick={(e) => {
-    if ((e.target as HTMLElement).classList.contains('backdrop') && !busy) onClose()
+    // A text-selection drag that ends outside the popup fires its click on the
+    // backdrop: close only when the press began there.
+    const onBackdrop = (e.target as HTMLElement).classList.contains('backdrop')
+    if (onBackdrop && mouseDownOnBackdrop && !busy) onClose()
+    mouseDownOnBackdrop = false
   }}
 >
   <div class="popup" role="dialog" aria-modal="true" aria-label="Create project">
