@@ -2,12 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   normalizeVaultAsset,
   normalizeFabAsset,
-  normalizeFabOtherAsset,
-  isUnrealEngineListing,
   normalizeFabEntitlement
 } from './normalize'
 import type { CatalogItem, VaultAssetSummary } from '../vault/vault-client'
-import type { FabLibraryItem, FabOtherListing } from '../fab/fab-client'
+import type { FabLibraryItem } from '../fab/fab-client'
 
 describe('normalizeVaultAsset', () => {
   it('produces an AssetRow with vault source and the catalog title/description', () => {
@@ -124,99 +122,32 @@ describe('normalizeFabAsset', () => {
     const row = normalizeFabAsset(item, 0)
     expect(row.productUrl).toBe('https://www.fab.com/listings/url-derived-id')
   })
-})
 
-describe('normalizeFabOtherAsset', () => {
-  it('produces an AssetRow with uid as sourceId and a fab.com listing URL', () => {
-    const listing: FabOtherListing = {
-      uid: 'other-uid-123',
-      title: 'My Blender Pack',
-      assetFormats: [
-        {
-          assetFormatType: { code: 'blender', name: 'Blender' },
-          technicalSpecs: { technicalDetails: 'High-poly mesh, 4K textures' }
-        }
-      ],
-      thumbnails: [
-        {
-          mediaUrl: 'https://media/preview.mp4',
-          images: [
-            { url: 'https://img/small.png', width: 256 },
-            { url: 'https://img/medium.png', width: 480 },
-            { url: 'https://img/large.png', width: 1024 }
-          ]
-        }
-      ]
-    }
-
-    const row = normalizeFabOtherAsset(listing, 1_700_000_000_000)
-
-    expect(row).toMatchObject({
-      source: 'fab',
-      sourceId: 'other-uid-123',
-      title: 'My Blender Pack',
-      description: 'High-poly mesh, 4K textures',
-      // Largest image whose width < 500
-      imageUrl: 'https://img/medium.png',
-      productUrl: 'https://www.fab.com/listings/other-uid-123',
-      ownedAt: null,
-      hidden: false,
-      syncedAt: 1_700_000_000_000
-    })
-  })
-
-  it('handles listings without thumbnails or assetFormats gracefully', () => {
-    const listing: FabOtherListing = { uid: 'bare', title: 'Bare' }
-    const row = normalizeFabOtherAsset(listing, 0)
-    expect(row.imageUrl).toBeNull()
-    expect(row.description).toBeNull()
-    expect(row.productUrl).toBe('https://www.fab.com/listings/bare')
-  })
-
-  it('falls back to the first image when no thumbnail is under 500px', () => {
-    const listing: FabOtherListing = {
-      uid: 'huge-only',
-      title: 'Only Huge Images',
-      thumbnails: [
-        {
-          images: [
-            { url: 'https://img/huge1.png', width: 2048 },
-            { url: 'https://img/huge2.png', width: 1024 }
-          ]
-        }
-      ]
-    }
-    const row = normalizeFabOtherAsset(listing, 0)
-    expect(row.imageUrl).toBe('https://img/huge1.png')
-  })
-})
-
-describe('isUnrealEngineListing', () => {
-  it('returns true when any assetFormat code is "unreal-engine"', () => {
-    expect(
-      isUnrealEngineListing({
-        uid: 'x',
-        title: 'X',
-        assetFormats: [
-          { assetFormatType: { code: 'blender', name: 'Blender' } },
-          { assetFormatType: { code: 'unreal-engine', name: 'Unreal Engine' } }
+  it('derives fabListingUid and engineVersions', () => {
+    const row = normalizeFabAsset(
+      {
+        assetId: 'fab-e',
+        title: 'Engines',
+        customAttributes: [{ ListingIdentifier: 'lid-1' }],
+        projectVersions: [
+          { artifactId: 'a', engineVersions: ['UE_5.3'] },
+          { artifactId: 'b', engineVersions: ['UE_5.4', 'UE_5.3'] }
         ]
-      })
-    ).toBe(true)
+      },
+      0
+    )
+    expect(row.fabListingUid).toBe('lid-1')
+    expect(row.engineVersions).toEqual(['5.4', '5.3'])
+    expect(row.productUrl).toBe('https://www.fab.com/listings/lid-1')
   })
 
-  it('returns false when no assetFormat is unreal-engine', () => {
-    expect(
-      isUnrealEngineListing({
-        uid: 'x',
-        title: 'X',
-        assetFormats: [{ assetFormatType: { code: 'maya', name: 'Maya' } }]
-      })
-    ).toBe(false)
-  })
-
-  it('returns false when assetFormats is absent', () => {
-    expect(isUnrealEngineListing({ uid: 'x', title: 'X' })).toBe(false)
+  it('falls back to the url tail for fabListingUid', () => {
+    const row = normalizeFabAsset(
+      { assetId: 'fab-u', title: 'U', url: 'https://www.fab.com/listings/from-url' },
+      0
+    )
+    expect(row.fabListingUid).toBe('from-url')
+    expect(row.engineVersions).toEqual([])
   })
 })
 

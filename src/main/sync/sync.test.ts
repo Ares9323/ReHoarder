@@ -14,7 +14,6 @@ let vaultClient: {
 let fabSessionClient: { establishSession: ReturnType<typeof vi.fn> }
 let fabClient: {
   listLibrary: ReturnType<typeof vi.fn>
-  listOtherLibrary: ReturnType<typeof vi.fn>
 }
 let fabWebSession: { getJson: ReturnType<typeof vi.fn> }
 
@@ -43,8 +42,7 @@ beforeEach(() => {
   }
   fabSessionClient = { establishSession: vi.fn() }
   fabClient = {
-    listLibrary: vi.fn(),
-    listOtherLibrary: vi.fn().mockImplementation(() => yieldPages([]))
+    listLibrary: vi.fn()
   }
   fabWebSession = {
     getJson: vi.fn().mockResolvedValue({ status: 200, body: { results: [], next: null } })
@@ -199,48 +197,6 @@ describe('Sync.syncAll', () => {
     expect(repo.findById('fab', 'late-1')?.title).toBe('Late discovery')
   })
 
-  it('persists Fab Other listings and skips unreal-engine duplicates', async () => {
-    vaultClient.listOwnedAssets.mockResolvedValue([])
-    vaultClient.fetchCatalogMetadata.mockResolvedValue({})
-    fabSessionClient.establishSession.mockResolvedValue({ cookieHeader: 'c' })
-    fabClient.listLibrary.mockReturnValue(yieldPages([{ results: [], cursors: { next: null } }]))
-    fabClient.listOtherLibrary.mockImplementation(() =>
-      yieldPages([
-        {
-          results: [
-            // Non-UE listing → persisted
-            {
-              listing: {
-                uid: 'other-1',
-                title: 'Blender Pack',
-                assetFormats: [{ assetFormatType: { code: 'blender', name: 'Blender' } }]
-              }
-            },
-            // UE-only listing → skipped as already in /ue/library
-            {
-              listing: {
-                uid: 'other-2',
-                title: 'UE Already Covered',
-                assetFormats: [
-                  { assetFormatType: { code: 'unreal-engine', name: 'Unreal Engine' } }
-                ]
-              }
-            },
-            // Missing uid → skipped
-            { listing: { uid: '', title: 'Broken' } }
-          ],
-          next: null
-        }
-      ])
-    )
-
-    const result = await sync.syncAll('bearer', 'acct-1', () => {})
-
-    expect(result.fab.persisted).toBe(1)
-    expect(repo.findById('fab', 'other-1')?.title).toBe('Blender Pack')
-    expect(repo.findById('fab', 'other-2')).toBeNull()
-  })
-
   it('writes sync_state rows for each source', async () => {
     vaultClient.listOwnedAssets.mockResolvedValue([])
     vaultClient.fetchCatalogMetadata.mockResolvedValue({})
@@ -330,5 +286,47 @@ describe('Sync.syncAll', () => {
     expect(log.some((l) => l.includes('WARNING entitlements unavailable') && l.includes('-1'))).toBe(
       true
     )
+  })
+  it('applies entitlements to library rows on a first sync (rows created in the same run)', async () => {
+    vaultClient.listOwnedAssets.mockResolvedValue([])
+    vaultClient.fetchCatalogMetadata.mockResolvedValue({})
+    fabSessionClient.establishSession.mockResolvedValue({ cookieHeader: 'c' })
+    fabClient.listLibrary.mockReturnValue(
+      yieldPages([
+        {
+          results: [
+            {
+              assetId: 'f-1',
+              title: 'Fab One',
+              customAttributes: [{ ListingIdentifier: 'L-1' }]
+            }
+          ],
+          cursors: { next: null }
+        }
+      ])
+    )
+    fabWebSession.getJson.mockResolvedValue({
+      status: 200,
+      body: {
+        results: [
+          {
+            createdAt: '2026-01-02T03:04:05+00:00',
+            entitlement: { licenses: [{ slug: 'personal' }] },
+            listing: { uid: 'L-1', lastUpdatedAt: '2025-12-01T00:00:00+00:00' }
+          },
+          { createdAt: '2026-01-01T00:00:00+00:00', listing: { uid: 'L-unknown' } }
+        ],
+        next: null
+      }
+    })
+
+    const log: string[] = []
+    await sync.syncAll('bearer', 'acct-1', () => {}, (l) => log.push(l))
+
+    const row = repo.findById('fab', 'f-1')
+    expect(row?.ownedAt).toBe(Date.UTC(2026, 0, 2, 3, 4, 5))
+    expect(row?.lastUpdatedAt).toBe(Date.UTC(2025, 11, 1))
+    expect(row?.licenses).toEqual(['personal'])
+    expect(log).toContain('Fab: entitlements applied to 1 assets, 1 unmatched')
   })
 })

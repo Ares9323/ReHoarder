@@ -5,6 +5,11 @@ import {
   FAB_UE_PATH_TO_LISTING_TYPE,
   slugifyCategory
 } from '../category-slug'
+import {
+  engineVersionsFromItem,
+  fabListingUidFromItem,
+  toJsonArrayOrNull
+} from '../fab/fab-listing-fields'
 
 /** Placeholder account id used to backfill pre-multi-account rows during the
  *  v3 → v4 migration. The single-account legacy data is bound to this id
@@ -120,6 +125,16 @@ function applyMigrations(db: Database.Database): void {
   migrateFabUePathListingTypes(db)
   backfillSeller(db)
   migrateAccountScoping(db)
+  // v5: columns backing the Assets sort/filter controls. Added after the v4
+  // table rebuild so a pre-v4 upgrade does not drop them.
+  tryAddColumn(db, 'assets', 'fab_listing_uid', 'TEXT')
+  tryAddColumn(db, 'assets', 'last_updated_at', 'INTEGER')
+  tryAddColumn(db, 'assets', 'licenses', 'TEXT')
+  tryAddColumn(db, 'assets', 'engine_versions', 'TEXT')
+  db.exec(
+    'CREATE INDEX IF NOT EXISTS idx_assets_fab_listing_uid ON assets (account_id, fab_listing_uid)'
+  )
+  migrateFabLibraryFilters(db)
 }
 
 /**
@@ -576,6 +591,70 @@ function backfillSeller(db: Database.Database): void {
     )
   } catch (err) {
     console.warn('[schema] seller backfill skipped:', err)
+  }
+}
+
+/**
+ * Migration v4 → v5: Fab library filters. Backfills `fab_listing_uid` and
+ * `engine_versions` on existing fab-ue rows from `raw` with the same helpers
+ * `normalizeFabAsset` uses, and deletes the Fab "Other" rows, which ReHoarder
+ * no longer syncs. Their tags are deleted explicitly because `foreign_keys`
+ * may be off on this connection.
+ */
+function migrateFabLibraryFilters(db: Database.Database): void {
+  let v: number
+  try {
+    v = db.pragma('user_version', { simple: true }) as number
+  } catch {
+    v = 0
+  }
+  if (v >= 5) return
+  try {
+    const tx = db.transaction(() => {
+      const rows = db
+        .prepare(
+          `SELECT account_id, source_id, raw FROM assets
+            WHERE source = 'fab' AND sub_source = 'fab-ue' AND raw IS NOT NULL`
+        )
+        .all() as Array<{ account_id: string; source_id: string; raw: string }>
+      const update = db.prepare(
+        `UPDATE assets SET fab_listing_uid = ?, engine_versions = ?
+          WHERE account_id = ? AND source = 'fab' AND source_id = ?`
+      )
+      let backfilled = 0
+      for (const r of rows) {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(r.raw)
+        } catch {
+          continue
+        }
+        if (!parsed || typeof parsed !== 'object') continue
+        const item = parsed as Record<string, unknown>
+        update.run(
+          fabListingUidFromItem(item),
+          toJsonArrayOrNull(engineVersionsFromItem(item)),
+          r.account_id,
+          r.source_id
+        )
+        backfilled += 1
+      }
+      db.prepare(
+        `DELETE FROM asset_tags
+          WHERE (account_id, source, source_id) IN (
+            SELECT account_id, source, source_id FROM assets WHERE sub_source = 'fab-other'
+          )`
+      ).run()
+      const deleted = db.prepare(`DELETE FROM assets WHERE sub_source = 'fab-other'`).run()
+      return { backfilled, deleted: deleted.changes }
+    })
+    const { backfilled, deleted } = tx()
+    db.pragma('user_version = 5')
+    console.warn(
+      `[schema] backfilled filter columns on ${backfilled} fab-ue rows, deleted ${deleted} fab-other rows (user_version → 5)`
+    )
+  } catch (err) {
+    console.warn('[schema] fab library filters migration skipped:', err)
   }
 }
 

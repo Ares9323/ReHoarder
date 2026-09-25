@@ -139,16 +139,6 @@ describe('AssetsRepo.list (filters)', () => {
     expect(vaultRows.map((r) => r.sourceId)).toEqual(['v1'])
   })
 
-  it('hides fab-other assets by default but surfaces them when subSource is requested', () => {
-    repo.upsert(
-      sampleAsset({ sourceId: 'o1', title: 'Blender Pack', source: 'fab', subSource: 'fab-other' })
-    )
-    const defaultRows = repo.list({})
-    expect(defaultRows.map((r) => r.sourceId)).not.toContain('o1')
-    const otherRows = repo.list({ source: 'fab', subSource: 'fab-other' })
-    expect(otherRows.map((r) => r.sourceId)).toEqual(['o1'])
-  })
-
   it('keeps fab-ue assets in the default listing', () => {
     repo.upsert(
       sampleAsset({ sourceId: 'u1', title: 'UE Pack', source: 'fab', subSource: 'fab-ue' })
@@ -156,11 +146,7 @@ describe('AssetsRepo.list (filters)', () => {
     expect(repo.list({}).map((r) => r.sourceId)).toContain('u1')
   })
 
-  /**
-   * Regression guard for the NULL-comparison trap: `sub_source != 'fab-other'`
-   * on its own evaluates to NULL for rows that have no sub_source, which would
-   * silently drop every vault and legacy asset from the results.
-   */
+  /** Regression guard: vault and legacy rows (sub_source NULL) must stay in the default listing. */
   it('does not drop rows whose sub_source is NULL', () => {
     // 'a' (hidden) / 'c' are legacy with subSource null; 'b' is fab with null too.
     expect(repo.list({}).map((r) => r.sourceId).sort()).toEqual(['b', 'c'])
@@ -266,5 +252,160 @@ describe('AssetsRepo tags', () => {
     repo.addTag('vault', 'a', 'wishlist')
     repo.addTag('fab', 'b', 'used')
     expect(repo.getAllTags().sort()).toEqual(['used', 'wishlist'])
+  })
+})
+
+describe('AssetsRepo Fab entitlements', () => {
+  const fabRow = (over: Partial<AssetRow> = {}): AssetRow =>
+    sampleAsset({
+      source: 'fab',
+      subSource: 'fab-ue',
+      sourceId: 'asset-1',
+      ownedAt: null,
+      fabListingUid: 'listing-1',
+      engineVersions: ['5.4', '5.3'],
+      ...over
+    })
+
+  it('stores and reads back fabListingUid and engineVersions', () => {
+    repo.upsert(fabRow())
+    const row = repo.findById('fab', 'asset-1')
+    expect(row?.fabListingUid).toBe('listing-1')
+    expect(row?.engineVersions).toEqual(['5.4', '5.3'])
+    expect(row?.licenses).toEqual([])
+    expect(row?.lastUpdatedAt).toBeNull()
+  })
+
+  it('applies entitlements by listing uid and reports unmatched', () => {
+    repo.upsert(fabRow())
+    const r = repo.applyFabEntitlements(
+      new Map([
+        ['listing-1', { ownedAt: 111, lastUpdatedAt: 222, licenses: ['personal'] }],
+        ['listing-missing', { ownedAt: 1, lastUpdatedAt: null, licenses: [] }]
+      ])
+    )
+    expect(r).toEqual({ matched: 1, unmatched: 1 })
+    const row = repo.findById('fab', 'asset-1')
+    expect(row?.ownedAt).toBe(111)
+    expect(row?.lastUpdatedAt).toBe(222)
+    expect(row?.licenses).toEqual(['personal'])
+  })
+
+  it('keeps entitlement data when a later library sync upserts the same row', () => {
+    repo.upsert(fabRow())
+    repo.applyFabEntitlements(
+      new Map([['listing-1', { ownedAt: 111, lastUpdatedAt: 222, licenses: ['personal'] }]])
+    )
+    repo.upsert(fabRow({ title: 'Renamed', engineVersions: ['5.5'] }))
+    const row = repo.findById('fab', 'asset-1')
+    expect(row?.title).toBe('Renamed')
+    expect(row?.engineVersions).toEqual(['5.5'])
+    expect(row?.ownedAt).toBe(111)
+    expect(row?.lastUpdatedAt).toBe(222)
+    expect(row?.licenses).toEqual(['personal'])
+  })
+
+  it('does not null out owned_at when an entitlement has no createdAt', () => {
+    repo.upsert(fabRow({ ownedAt: 50 }))
+    repo.applyFabEntitlements(
+      new Map([['listing-1', { ownedAt: null, lastUpdatedAt: null, licenses: [] }]])
+    )
+    expect(repo.findById('fab', 'asset-1')?.ownedAt).toBe(50)
+  })
+})
+
+describe('AssetsRepo.list sorting and Fab filters', () => {
+  function seed(): void {
+    const rows: Array<Partial<AssetRow>> = [
+      {
+        sourceId: 'a',
+        title: 'Alpha',
+        seller: 'Studio A',
+        fabListingUid: 'la',
+        engineVersions: ['5.4', '5.3']
+      },
+      {
+        sourceId: 'b',
+        title: 'Bravo',
+        seller: 'Studio B',
+        fabListingUid: 'lb',
+        engineVersions: ['5.10']
+      },
+      {
+        sourceId: 'c',
+        title: 'Charlie',
+        seller: 'Studio A',
+        fabListingUid: 'lc',
+        engineVersions: ['4.27']
+      },
+      { sourceId: 'd', title: 'Delta', seller: null, fabListingUid: null, engineVersions: [] }
+    ]
+    for (const r of rows) {
+      repo.upsert(sampleAsset({ source: 'fab', subSource: 'fab-ue', ownedAt: null, ...r }))
+    }
+    repo.applyFabEntitlements(
+      new Map([
+        ['la', { ownedAt: 300, lastUpdatedAt: 10, licenses: ['personal'] }],
+        ['lb', { ownedAt: 100, lastUpdatedAt: 30, licenses: ['professional', 'legacy-uem'] }],
+        ['lc', { ownedAt: 200, lastUpdatedAt: null, licenses: ['personal'] }]
+      ])
+    )
+  }
+  const titles = (rows: AssetRow[]): string[] => rows.map((r) => r.title)
+
+  it('defaults to title A-Z and supports Z-A', () => {
+    seed()
+    expect(titles(repo.list({}))).toEqual(['Alpha', 'Bravo', 'Charlie', 'Delta'])
+    expect(titles(repo.list({ sort: 'title-desc' }))).toEqual([
+      'Delta',
+      'Charlie',
+      'Bravo',
+      'Alpha'
+    ])
+  })
+
+  it('sorts by acquisition date with undated rows last in both directions', () => {
+    seed()
+    expect(titles(repo.list({ sort: 'newest' }))).toEqual(['Alpha', 'Charlie', 'Bravo', 'Delta'])
+    expect(titles(repo.list({ sort: 'oldest' }))).toEqual(['Bravo', 'Charlie', 'Alpha', 'Delta'])
+  })
+
+  it('sorts by last update with undated rows last', () => {
+    seed()
+    expect(titles(repo.list({ sort: 'last-updated' }))).toEqual([
+      'Bravo',
+      'Alpha',
+      'Charlie',
+      'Delta'
+    ])
+  })
+
+  it('falls back to title A-Z on an unknown sort value', () => {
+    seed()
+    expect(titles(repo.list({ sort: 'bogus; DROP TABLE assets' as never }))).toEqual([
+      'Alpha',
+      'Bravo',
+      'Charlie',
+      'Delta'
+    ])
+  })
+
+  it('filters by seller, license, engine version and ownedSince, alone and combined', () => {
+    seed()
+    expect(titles(repo.list({ seller: 'Studio A' }))).toEqual(['Alpha', 'Charlie'])
+    expect(titles(repo.list({ license: 'personal' }))).toEqual(['Alpha', 'Charlie'])
+    expect(titles(repo.list({ license: 'legacy-uem' }))).toEqual(['Bravo'])
+    expect(titles(repo.list({ engineVersion: '5.3' }))).toEqual(['Alpha'])
+    expect(titles(repo.list({ ownedSince: 200 }))).toEqual(['Alpha', 'Charlie'])
+    expect(
+      titles(repo.list({ seller: 'Studio A', engineVersion: '4.27', license: 'personal' }))
+    ).toEqual(['Charlie'])
+  })
+
+  it('lists sellers, licenses and engine versions for the dropdowns', () => {
+    seed()
+    expect(repo.availableSellers()).toEqual(['Studio A', 'Studio B'])
+    expect(repo.availableLicenses()).toEqual(['legacy-uem', 'personal', 'professional'])
+    expect(repo.availableEngineVersions()).toEqual(['5.10', '5.4', '5.3', '4.27'])
   })
 })

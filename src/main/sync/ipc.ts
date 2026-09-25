@@ -1,5 +1,5 @@
 import { ipcMain, session as electronSession, type BrowserWindow } from 'electron'
-import type { AssetsRepo, AssetSource } from '../db/assets-repo'
+import type { AssetsRepo, AssetSort, AssetSource } from '../db/assets-repo'
 import type { Sync, SyncProgress } from './sync'
 import type { Session } from '../auth/session'
 import type { EpicWebSessionFactory } from '../auth/epic-web-session'
@@ -21,13 +21,18 @@ import { decideAutoCheck, diffNewUids } from './auto-check'
 
 export interface LibraryQuery {
   source?: AssetSource
-  subSource?: 'fab-ue' | 'fab-other'
+  subSource?: 'fab-ue'
   listingType?: string
   category?: string
   search?: string
   includeHidden?: boolean
   onlyHidden?: boolean
   onlyBookmarked?: boolean
+  sort?: AssetSort
+  seller?: string
+  license?: string
+  engineVersion?: string
+  ownedSince?: number
 }
 
 export interface LibraryListResult {
@@ -37,6 +42,12 @@ export interface LibraryListResult {
   availableListingTypes: string[]
   /** Distinct category tags (Fab Categories), excluding listing-type slugs. */
   availableCategories: string[]
+  /** Distinct Fab sellers for the Publisher suggestions. */
+  availableSellers: string[]
+  /** Distinct owned license slugs. */
+  availableLicenses: string[]
+  /** Distinct supported engine versions, newest first. */
+  availableEngineVersions: string[]
   lastSync: Record<string, { at: number; status: string; error: string | null }>
 }
 
@@ -137,6 +148,9 @@ export function registerLibraryIpc(
       countsBySource: repo.countBySource(),
       availableListingTypes: repo.availableListingTypes(),
       availableCategories: repo.availableCategories(),
+      availableSellers: repo.availableSellers(),
+      availableLicenses: repo.availableLicenses(),
+      availableEngineVersions: repo.availableEngineVersions(),
       lastSync: sync.getLastSyncState(activeId)
     }
   })

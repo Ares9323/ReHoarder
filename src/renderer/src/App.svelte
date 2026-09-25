@@ -4,6 +4,7 @@
   import { createLibraryStore } from './stores/library.svelte'
   import { freebiesStore } from './stores/freebies.svelte'
   import { vaultStore } from './stores/vault.svelte'
+  import { downloadsStore } from './stores/downloads.svelte'
   import { fabWebStore } from './stores/fab-web.svelte'
   import LoginView from './lib/LoginView.svelte'
   import EmptyLibraryView from './lib/EmptyLibraryView.svelte'
@@ -268,6 +269,15 @@
           availableListingTypes={library.availableListingTypes}
           categoryFilter={library.categoryFilter}
           availableCategories={library.availableCategories}
+          sort={library.sort}
+          sellerFilter={library.sellerFilter}
+          availableSellers={library.availableSellers}
+          licenseFilter={library.licenseFilter}
+          availableLicenses={library.availableLicenses}
+          engineVersionFilter={library.engineVersionFilter}
+          availableEngineVersions={library.availableEngineVersions}
+          addedSinceFilter={library.addedSinceFilter}
+          hasActiveFilters={library.hasActiveFilters}
           syncBusy={library.syncBusy}
           progressText={progressText()}
           syncError={library.syncError}
@@ -280,6 +290,12 @@
           onSourceFilter={(f) => library.setSourceFilter(f)}
           onListingTypeFilter={(t) => library.setListingTypeFilter(t)}
           onCategoryFilter={(c) => library.setCategoryFilter(c)}
+          onSort={(s) => library.setSort(s)}
+          onSellerFilter={(s) => library.setSellerFilter(s)}
+          onLicenseFilter={(l) => library.setLicenseFilter(l)}
+          onEngineVersionFilter={(v) => library.setEngineVersionFilter(v)}
+          onAddedSinceFilter={(a) => library.setAddedSinceFilter(a)}
+          onClearFilters={() => library.clearFilters()}
           onSyncNow={syncNow}
           onToggleHidden={(a) => library.setHidden(a, !a.hidden)}
           onToggleBookmark={(a) => library.setBookmarked(a, !a.bookmarked)}

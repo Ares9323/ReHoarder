@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import AssetCard from './AssetCard.svelte'
   import SyncLogPanel from './SyncLogPanel.svelte'
   import CustomInstallMenu from './CustomInstallMenu.svelte'
@@ -10,13 +10,19 @@
   import { vaultStore } from '../stores/vault.svelte'
   import { clampCardWidth, zoomStep } from './grid-zoom'
   import { fabWebChip, type FabWebStatus } from './fab-web-chip'
+  import {
+    ADDED_SINCE_OPTIONS,
+    licenseLabel,
+    SORT_OPTIONS,
+    type AddedSince,
+    type AssetSort
+  } from './library-filters'
 
   type AssetSource = 'vault' | 'fab' | 'legacy'
-  type AssetSubSource = 'fab-ue' | 'fab-other' | null
+  type AssetSubSource = 'fab-ue' | null
   type SourceFilter =
     | 'all'
     | 'fab-ue'
-    | 'fab-other'
     | 'bookmarks'
     | 'hidden'
     | 'downloaded'
@@ -49,6 +55,15 @@
     availableListingTypes: string[]
     categoryFilter: string
     availableCategories: string[]
+    sort: AssetSort
+    sellerFilter: string
+    availableSellers: string[]
+    licenseFilter: string
+    availableLicenses: string[]
+    engineVersionFilter: string
+    availableEngineVersions: string[]
+    addedSinceFilter: AddedSince
+    hasActiveFilters: boolean
     syncBusy: boolean
     progressText: string | null
     syncError: string | null
@@ -63,6 +78,12 @@
     onSourceFilter: (f: SourceFilter) => void
     onListingTypeFilter: (t: string) => void
     onCategoryFilter: (c: string) => void
+    onSort: (s: AssetSort) => void
+    onSellerFilter: (s: string) => void
+    onLicenseFilter: (l: string) => void
+    onEngineVersionFilter: (v: string) => void
+    onAddedSinceFilter: (a: AddedSince) => void
+    onClearFilters: () => void
     onSyncNow: () => void
     onToggleHidden: (asset: AssetRow) => void
     onToggleBookmark: (asset: AssetRow) => void
@@ -86,6 +107,15 @@
     availableListingTypes,
     categoryFilter,
     availableCategories,
+    sort,
+    sellerFilter,
+    availableSellers,
+    licenseFilter,
+    availableLicenses,
+    engineVersionFilter,
+    availableEngineVersions,
+    addedSinceFilter,
+    hasActiveFilters,
     syncBusy,
     progressText,
     syncError,
@@ -98,11 +128,38 @@
     onSourceFilter,
     onListingTypeFilter,
     onCategoryFilter,
+    onSort,
+    onSellerFilter,
+    onLicenseFilter,
+    onEngineVersionFilter,
+    onAddedSinceFilter,
+    onClearFilters,
     onSyncNow,
     onToggleHidden,
     onToggleBookmark,
     onRefreshFromFab
   }: Props = $props()
+
+  // Free text in the Publisher box. The filter only applies when the text
+  // exactly matches a known seller, so partial typing never empties the grid.
+  // Seeded once from the current filter (e.g. when the tab is remounted);
+  // after that the box owns its text.
+  let publisherText = $state(untrack(() => sellerFilter))
+  const sellerSet = $derived(new Set(availableSellers))
+
+  function onPublisherInput(value: string): void {
+    publisherText = value
+    if (value === '' || sellerSet.has(value)) {
+      if (value !== sellerFilter) onSellerFilter(value)
+    } else if (sellerFilter !== '') {
+      onSellerFilter('')
+    }
+  }
+
+  function clearAllFilters(): void {
+    publisherText = ''
+    onClearFilters()
+  }
 
   const fabChip = $derived(fabWebChip(fabWebStatus, fabWebBusy, fabWebAttention))
 
@@ -716,7 +773,6 @@
     >
       <option value="all">All sources</option>
       <option value="fab-ue">Only Fab UE</option>
-      <option value="fab-other">Only Fab Other</option>
       <option value="downloaded">Only Downloaded</option>
       <option value="updatable">Only Updatable</option>
       <option value="bookmarks">Only Bookmarks</option>
@@ -744,7 +800,68 @@
         <option value={c}>{formatCategory(c)}</option>
       {/each}
     </select>
+    <select
+      value={engineVersionFilter}
+      onchange={(e) => onEngineVersionFilter((e.currentTarget as HTMLSelectElement).value)}
+      disabled={availableEngineVersions.length === 0}
+      title="Filter by supported engine version"
+    >
+      <option value="">All engine versions</option>
+      {#each availableEngineVersions as v (v)}
+        <option value={v}>UE {v}</option>
+      {/each}
+    </select>
+    <input
+      class="publisher-input"
+      type="search"
+      list="publisher-options"
+      placeholder="Publisher…"
+      value={publisherText}
+      oninput={(e) => onPublisherInput((e.currentTarget as HTMLInputElement).value)}
+      disabled={availableSellers.length === 0}
+      title="Filter by publisher"
+    />
+    <datalist id="publisher-options">
+      {#each availableSellers as s (s)}
+        <option value={s}></option>
+      {/each}
+    </datalist>
+    <select
+      value={licenseFilter}
+      onchange={(e) => onLicenseFilter((e.currentTarget as HTMLSelectElement).value)}
+      disabled={availableLicenses.length === 0}
+      title="Filter by owned license"
+    >
+      <option value="">All licenses</option>
+      {#each availableLicenses as l (l)}
+        <option value={l}>{licenseLabel(l)}</option>
+      {/each}
+    </select>
+    <select
+      value={addedSinceFilter}
+      onchange={(e) =>
+        onAddedSinceFilter((e.currentTarget as HTMLSelectElement).value as AddedSince)}
+      title="Filter by acquisition date"
+    >
+      {#each ADDED_SINCE_OPTIONS as o (o.value)}
+        <option value={o.value}>{o.label}</option>
+      {/each}
+    </select>
+    {#if hasActiveFilters}
+      <button type="button" class="clear-filters-btn" onclick={clearAllFilters}>
+        Clear filters
+      </button>
+    {/if}
     <div class="filters-spacer"></div>
+    <select
+      value={sort}
+      onchange={(e) => onSort((e.currentTarget as HTMLSelectElement).value as AssetSort)}
+      title="Sort assets"
+    >
+      {#each SORT_OPTIONS as o (o.value)}
+        <option value={o.value}>Sort: {o.label}</option>
+      {/each}
+    </select>
     <span class="sync-time" title="{countsBySource.fab ?? 0} Fab assets">
       Last synced {formatLastSync()}
     </span>
@@ -885,6 +1002,26 @@
     flex: 1;
   }
 
+  /* Fixed basis: the generic input[type='search'] rule would otherwise let
+     this box grow like the main search field. */
+  .publisher-input {
+    flex: 0 1 12rem;
+  }
+
+  .clear-filters-btn {
+    background: transparent;
+    border: 1px solid #3a3a3a;
+    border-radius: 4px;
+    color: #c9c9c9;
+    padding: 0.35rem 0.7rem;
+    cursor: pointer;
+  }
+
+  .clear-filters-btn:hover {
+    border-color: #c084fc;
+    color: #fff;
+  }
+
   .fab-chip {
     color: #888;
     font-size: 0.75rem;
@@ -947,6 +1084,7 @@
 
   .filters {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.75rem;
     align-items: center;
     padding: 0.75rem 1.25rem;

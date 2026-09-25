@@ -5,20 +5,6 @@ import type { FabSessionClient } from '../fab/fab-session'
 import { FabClient, type FabEntitlementPage } from '../fab/fab-client'
 import { fabNextToPath, statusFromHttp, type FabWebSession } from '../fab/fab-web-session'
 
-/**
- * TEMPORARY (0.2.0): `fab.com/i/library/search` (the Fab "Other library" — non-UE
- * assets) is returning 401 on every authenticated request we make to it, even
- * though the same session.cookieHeader works fine for `/e/accounts/.../ue/library`.
- * Suspected root cause is a missing CSRF header or a Fab API change; until we
- * confirm the fix, skip the entire Other-library sync pass so we don't waste a
- * round-trip and pollute the log with the error. The UE library is the only
- * source for ReHoarder's primary use case anyway — non-UE assets will simply
- * stop being mirrored locally until this is re-enabled.
- *
- * Flip back to `false` once the 401 is fixed (see `fab-client.ts:listOtherLibrary`).
- */
-const SKIP_FAB_OTHER_LIBRARY = true
-
 /** Acquired UE entitlements, newest first. Page size is fixed at 24 by Fab. */
 const FAB_ENTITLEMENTS_PATH =
   '/i/library/search?source=acquired&asset_formats=unreal-engine&sort_by=-createdAt'
@@ -26,10 +12,7 @@ const FAB_ENTITLEMENTS_PATH =
 import {
   normalizeVaultAsset,
   normalizeFabAsset,
-  normalizeFabOtherAsset,
-  isUnrealEngineListing,
   extractFabUeCategories,
-  extractFabOtherCategories,
   normalizeFabEntitlement
 } from './normalize'
 
@@ -283,50 +266,13 @@ export class Sync {
         onLog(`Fab: skipped ${skipped} UE items with missing assetId`)
       }
 
-      await entitlementsPromise
+      const entitlements = await entitlementsPromise
+      if (entitlements) {
+        const { matched, unmatched } = this.repo.applyFabEntitlements(entitlements)
+        onLog(`Fab: entitlements applied to ${matched} assets, ${unmatched} unmatched`)
+      }
 
-      if (SKIP_FAB_OTHER_LIBRARY) {
-        onLog('Fab: Other library sync skipped (temporarily disabled — endpoint returns 401)')
-      } else {
-      onLog('Fab: fetching Other library (non-UE assets)…')
-      let otherPageNum = 0
-      let otherSkipped = 0
-      let otherDup = 0
-      // Same reasoning as the UE library: the Other library is sorted by
-      // listing creation date, not acquisition date, so an asset claimed
-      // today might show up only on page 12 of an old freebie listing.
-      // Paginate the full thing so the local cross-reference catches it.
-      for await (const page of this.fabClient.listOtherLibrary(session.cookieHeader)) {
-        otherPageNum += 1
-        result.fab.fetched += page.results.length
-        let pageNew = 0
-        for (const { listing } of page.results) {
-          if (!listing || !listing.uid) {
-            otherSkipped += 1
-            continue
-          }
-          if (isUnrealEngineListing(listing)) {
-            otherDup += 1
-            continue
-          }
-          if (!knownFabIds.has(listing.uid)) pageNew += 1
-          this.repo.upsert(normalizeFabOtherAsset(listing, now))
-          this.repo.replaceTags('fab', listing.uid, extractFabOtherCategories(listing))
-          result.fab.persisted += 1
-        }
-        onLog(
-          `Fab: Other page ${otherPageNum} received (+${page.results.length} listings, ${pageNew} new)`
-        )
-        this.emitProgress(onProgress, 'fab', result)
-      }
-      if (otherSkipped > 0) {
-        onLog(`Fab: skipped ${otherSkipped} Other listings with missing uid`)
-      }
-      if (otherDup > 0) {
-        onLog(`Fab: skipped ${otherDup} Other listings already covered by UE library`)
-      }
       onLog(`Fab: done. ${result.fab.persisted} assets persisted.`)
-      } // close `else` branch of SKIP_FAB_OTHER_LIBRARY
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       result.fab.error = msg
@@ -438,19 +384,14 @@ export class Sync {
 
 /**
  * Derive the Fab listing UID (the canonical id used by `/i/listings/<uid>`)
- * from a Fab asset row. The library endpoint splits its rows across two
- * shapes that store the uid in different places:
- *   - `sub_source = 'fab-other'`: the listing uid IS the `sourceId` field.
- *   - `sub_source = 'fab-ue'`:    the listing uid lives in `productUrl`
- *                                  (`https://www.fab.com/listings/<uid>[/<slug>]`)
- *                                  or, when the URL is malformed, in the raw
- *                                  payload's `customAttributes.ListingIdentifier`.
+ * from a Fab UE asset row: taken from `productUrl`
+ * (`https://www.fab.com/listings/<uid>[/<slug>]`), else from the raw
+ * payload's `customAttributes.ListingIdentifier` when the URL is malformed.
  *
- * Returns `null` when nothing usable is recoverable — caller should treat
- * as "refresh unavailable for this asset" rather than retry.
+ * Returns `null` when nothing usable is recoverable; the caller should treat
+ * it as "refresh unavailable for this asset" rather than retry.
  */
 function extractFabListingUid(asset: AssetRow): string | null {
-  if (asset.subSource === 'fab-other') return asset.sourceId
   if (asset.productUrl) {
     const m = asset.productUrl.match(/\/listings\/([^/?#]+)/)
     if (m && m[1].length > 0) return m[1]

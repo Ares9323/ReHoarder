@@ -1,8 +1,13 @@
 import type Database from 'better-sqlite3'
+import {
+  compareEngineVersionsDesc,
+  parseJsonStringArray,
+  toJsonArrayOrNull
+} from '../fab/fab-listing-fields'
 
 export type AssetSource = 'vault' | 'fab' | 'legacy'
 /** Sub-bucket within `source = 'fab'`. `null` for `source = 'vault'`. */
-export type AssetSubSource = 'fab-ue' | 'fab-other' | null
+export type AssetSubSource = 'fab-ue' | null
 
 export interface AssetRow {
   source: AssetSource
@@ -17,7 +22,7 @@ export interface AssetRow {
   ownedAt: number | null
   hidden: boolean
   bookmarked: boolean
-  /** Display name of the seller / publisher / developer — `raw.seller` for Fab UE, `raw.publisher.sellerName` for Fab Other, `raw.catalog.developer` for Vault. Null when the upstream payload doesn't carry it. */
+  /** Display name of the seller / publisher / developer: `raw.seller` for Fab UE, `raw.catalog.developer` for Vault. Null when the upstream payload doesn't carry it. */
   seller: string | null
   raw: string | null
   syncedAt: number
@@ -25,6 +30,14 @@ export interface AssetRow {
    *  was refreshed. Null = never. Drives the post-sync rolling refresh
    *  queue's "oldest first" pick. */
   lastPreciseAt: number | null
+  /** Fab listing uid (`customAttributes.ListingIdentifier`), join key for the entitlements pass. Fab UE only. */
+  fabListingUid?: string | null
+  /** Supported engine versions (`5.4`, ...), newest first. Fab UE only. */
+  engineVersions?: string[]
+  /** Last listing update on Fab (epoch ms), from the entitlements pass. */
+  lastUpdatedAt?: number | null
+  /** Owned license slugs, from the entitlements pass. */
+  licenses?: string[]
 }
 
 /** Per-listing data from the Fab entitlements pass (`/i/library/search`). */
@@ -37,10 +50,21 @@ export interface FabEntitlementInfo {
   licenses: string[]
 }
 
+export type AssetSort = 'newest' | 'oldest' | 'title-asc' | 'title-desc' | 'last-updated'
+
+/** Whitelisted ORDER BY clauses. Undated rows go last under every date sort. */
+const ORDER_BY: Record<AssetSort, string> = {
+  newest: 'owned_at DESC NULLS LAST, title ASC',
+  oldest: 'owned_at ASC NULLS LAST, title ASC',
+  'title-asc': 'title ASC',
+  'title-desc': 'title DESC',
+  'last-updated': 'last_updated_at DESC NULLS LAST, title ASC'
+}
+
 export interface ListFilters {
   source?: AssetSource
-  /** When set, narrows `fab` to either `fab-ue` or `fab-other`. Ignored for other sources. */
-  subSource?: 'fab-ue' | 'fab-other'
+  /** When set, narrows `fab` to `fab-ue` rows. Ignored for other sources. */
+  subSource?: 'fab-ue'
   /** Fab listing-type slug (e.g. `3d-model`). When set, rows without that listing_type are excluded. */
   listingType?: string
   /** Fab category slug (e.g. `abandoned`). When set, only assets with that category in `asset_tags` are returned. */
@@ -52,6 +76,16 @@ export interface ListFilters {
   onlyHidden?: boolean
   /** If `true`, ONLY bookmarked rows are returned. */
   onlyBookmarked?: boolean
+  /** Result order. Unknown values fall back to `title-asc`. */
+  sort?: AssetSort
+  /** Exact seller / publisher name. */
+  seller?: string
+  /** License slug that must be among the owned licenses (`personal`, `legacy-uem`, ...). */
+  license?: string
+  /** Engine version (`5.4`) the asset must support. */
+  engineVersion?: string
+  /** Only assets acquired at or after this epoch ms. */
+  ownedSince?: number
 }
 
 interface AssetRowDb {
@@ -70,11 +104,14 @@ interface AssetRowDb {
   raw: string | null
   synced_at: number
   last_precise_at: number | null
+  fab_listing_uid: string | null
+  engine_versions: string | null
+  last_updated_at: number | null
+  licenses: string | null
 }
 
 function fromDb(r: AssetRowDb): AssetRow {
-  const sub: AssetSubSource =
-    r.sub_source === 'fab-ue' || r.sub_source === 'fab-other' ? r.sub_source : null
+  const sub: AssetSubSource = r.sub_source === 'fab-ue' ? 'fab-ue' : null
   return {
     source: r.source as AssetSource,
     sourceId: r.source_id,
@@ -90,7 +127,11 @@ function fromDb(r: AssetRowDb): AssetRow {
     seller: r.seller,
     raw: r.raw,
     syncedAt: r.synced_at,
-    lastPreciseAt: r.last_precise_at
+    lastPreciseAt: r.last_precise_at,
+    fabListingUid: r.fab_listing_uid,
+    engineVersions: parseJsonStringArray(r.engine_versions),
+    lastUpdatedAt: r.last_updated_at,
+    licenses: parseJsonStringArray(r.licenses)
   }
 }
 
@@ -123,8 +164,8 @@ export class AssetsRepo {
     // `sub_source` IS refreshed: sync derives it from the raw payload and
     // overwriting keeps it consistent with the source endpoint the row came from.
     this.upsertStmt = db.prepare(`
-      INSERT INTO assets (account_id, source, source_id, sub_source, listing_type, title, description, image_url, product_url, owned_at, hidden, bookmarked, seller, raw, synced_at)
-      VALUES (@account_id, @source, @source_id, @sub_source, @listing_type, @title, @description, @image_url, @product_url, @owned_at, @hidden, @bookmarked, @seller, @raw, @synced_at)
+      INSERT INTO assets (account_id, source, source_id, sub_source, listing_type, title, description, image_url, product_url, owned_at, hidden, bookmarked, seller, raw, synced_at, fab_listing_uid, engine_versions)
+      VALUES (@account_id, @source, @source_id, @sub_source, @listing_type, @title, @description, @image_url, @product_url, @owned_at, @hidden, @bookmarked, @seller, @raw, @synced_at, @fab_listing_uid, @engine_versions)
       ON CONFLICT(account_id, source, source_id) DO UPDATE SET
         sub_source = excluded.sub_source,
         listing_type = excluded.listing_type,
@@ -144,7 +185,9 @@ export class AssetsRepo {
         owned_at = COALESCE(excluded.owned_at, owned_at),
         seller = excluded.seller,
         raw = excluded.raw,
-        synced_at = excluded.synced_at
+        synced_at = excluded.synced_at,
+        fab_listing_uid = excluded.fab_listing_uid,
+        engine_versions = excluded.engine_versions
     `)
 
     this.findByIdStmt = db.prepare(
@@ -204,7 +247,9 @@ export class AssetsRepo {
       bookmarked: asset.bookmarked ? 1 : 0,
       seller: asset.seller,
       raw: asset.raw,
-      synced_at: asset.syncedAt
+      synced_at: asset.syncedAt,
+      fab_listing_uid: asset.fabListingUid ?? null,
+      engine_versions: toJsonArrayOrNull(asset.engineVersions ?? [])
     })
   }
 
@@ -243,19 +288,6 @@ export class AssetsRepo {
     if (filters.subSource) {
       clauses.push('sub_source = ?')
       params.push(filters.subSource)
-    } else {
-      // Same reasoning as the vault exclusion above, one library over: Fab
-      // "Other" listings (UEFN, Blender, Maya, FBX, MetaHuman, Unity, …) carry
-      // no `assetNamespace` / `projectVersions[].artifactId`, so there is
-      // nothing for the downloader to fetch — UEFN content isn't even
-      // downloadable from fab.com, it's delivered inside Unreal Editor for
-      // Fortnite. Sync keeps indexing them, but they stay out of the default
-      // view; `subSource = 'fab-other'` ("Only Fab Other") surfaces them.
-      //
-      // The `IS NULL` arm matters: `sub_source != 'fab-other'` alone evaluates
-      // to NULL (and therefore filters out) vault and legacy rows, which have
-      // no sub_source at all.
-      clauses.push("(sub_source IS NULL OR sub_source != 'fab-other')")
     }
     if (filters.listingType) {
       clauses.push('listing_type = ?')
@@ -272,6 +304,22 @@ export class AssetsRepo {
          )`
       )
       params.push(filters.category)
+    }
+    if (filters.seller) {
+      clauses.push('seller = ?')
+      params.push(filters.seller)
+    }
+    if (filters.license) {
+      clauses.push('EXISTS (SELECT 1 FROM json_each(assets.licenses) WHERE value = ?)')
+      params.push(filters.license)
+    }
+    if (filters.engineVersion) {
+      clauses.push('EXISTS (SELECT 1 FROM json_each(assets.engine_versions) WHERE value = ?)')
+      params.push(filters.engineVersion)
+    }
+    if (typeof filters.ownedSince === 'number') {
+      clauses.push('owned_at >= ?')
+      params.push(filters.ownedSince)
     }
     if (filters.search && filters.search.trim().length > 0) {
       // Tokenise on whitespace: every token must match somewhere across
@@ -294,7 +342,8 @@ export class AssetsRepo {
     }
 
     const where = `WHERE ${clauses.join(' AND ')}`
-    const sql = `SELECT * FROM assets ${where} ORDER BY title ASC`
+    const orderBy = ORDER_BY[filters.sort ?? 'title-asc'] ?? ORDER_BY['title-asc']
+    const sql = `SELECT * FROM assets ${where} ORDER BY ${orderBy}`
     const rows = this.db.prepare(sql).all(...params) as AssetRowDb[]
     return rows.map(fromDb)
   }
@@ -328,6 +377,41 @@ export class AssetsRepo {
     if (accountId === null) return false
     const r = this.updateImageUrlAndPreciseAtStmt.run(imageUrl, at, accountId, source, sourceId)
     return (r.changes ?? 0) > 0
+  }
+
+  /**
+   * Write the entitlements pass results onto the matching Fab rows in one
+   * transaction, joined on `fab_listing_uid`. `owned_at` keeps its previous
+   * value when the entitlement has no `createdAt`. Returns how many listing
+   * uids matched a row; the rest are acquisitions the UE library does not
+   * list (yet).
+   */
+  applyFabEntitlements(entitlements: Map<string, FabEntitlementInfo>): {
+    matched: number
+    unmatched: number
+  } {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return { matched: 0, unmatched: entitlements.size }
+    const stmt = this.db.prepare(
+      `UPDATE assets
+          SET owned_at = COALESCE(?, owned_at), last_updated_at = ?, licenses = ?
+        WHERE account_id = ? AND source = 'fab' AND fab_listing_uid = ?`
+    )
+    let matched = 0
+    const txn = this.db.transaction(() => {
+      for (const [listingUid, info] of entitlements) {
+        const r = stmt.run(
+          info.ownedAt,
+          info.lastUpdatedAt,
+          toJsonArrayOrNull(info.licenses),
+          accountId,
+          listingUid
+        )
+        if (r.changes > 0) matched += 1
+      }
+    })
+    txn()
+    return { matched, unmatched: entitlements.size - matched }
   }
 
   countAll(): number {
@@ -373,6 +457,50 @@ export class AssetsRepo {
       )
       .all(accountId) as Array<{ tag: string }>
     return rows.map((r) => r.tag)
+  }
+
+  /** Distinct Fab sellers, case-insensitive A-Z. Feeds the Publisher suggestions. */
+  availableSellers(): string[] {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return []
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT seller AS s
+           FROM assets
+          WHERE account_id = ? AND source = 'fab' AND seller IS NOT NULL
+          ORDER BY s COLLATE NOCASE ASC`
+      )
+      .all(accountId) as Array<{ s: string }>
+    return rows.map((r) => r.s)
+  }
+
+  /** Distinct owned license slugs across Fab assets, A-Z. */
+  availableLicenses(): string[] {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return []
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT j.value AS l
+           FROM assets, json_each(assets.licenses) AS j
+          WHERE assets.account_id = ? AND assets.source = 'fab'
+          ORDER BY l ASC`
+      )
+      .all(accountId) as Array<{ l: string }>
+    return rows.map((r) => r.l)
+  }
+
+  /** Distinct supported engine versions across Fab assets, newest first. */
+  availableEngineVersions(): string[] {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null) return []
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT j.value AS v
+           FROM assets, json_each(assets.engine_versions) AS j
+          WHERE assets.account_id = ? AND assets.source = 'fab'`
+      )
+      .all(accountId) as Array<{ v: string }>
+    return rows.map((r) => r.v).sort(compareEngineVersionsDesc)
   }
 
   /**

@@ -1,20 +1,25 @@
 import { downloadsStore } from './downloads.svelte'
 import { vaultStore } from './vault.svelte'
+import {
+  addedSinceToTimestamp,
+  parseSort,
+  type AddedSince,
+  type AssetSort
+} from '../lib/library-filters'
 
 // Local mirrors of preload types (see auth.svelte.ts for rationale).
 type AssetSource = 'vault' | 'fab' | 'legacy'
-type AssetSubSource = 'fab-ue' | 'fab-other' | null
+type AssetSubSource = 'fab-ue' | null
 
 /**
  * The Source dropdown supports a few values that aren't real `assets.source`
- * rows: `bookmarks` and `hidden` are filter shortcuts, and `fab-ue` / `fab-other`
- * narrow within `source = 'fab'`. The store maps each value to the right
+ * rows: `bookmarks` and `hidden` are filter shortcuts, and `fab-ue` narrows
+ * within `source = 'fab'`. The store maps each value to the right
  * combination of backend filter flags when calling `library:list`.
  */
 type SourceFilter =
   | 'all'
   | 'fab-ue'
-  | 'fab-other'
   | 'bookmarks'
   | 'hidden'
   | 'downloaded'
@@ -42,6 +47,9 @@ interface LibraryListResult {
   countsBySource: Record<string, number>
   availableListingTypes: string[]
   availableCategories: string[]
+  availableSellers: string[]
+  availableLicenses: string[]
+  availableEngineVersions: string[]
   lastSync: Record<string, { at: number; status: string; error: string | null }>
 }
 
@@ -67,6 +75,19 @@ export interface LibraryStore {
   readonly listingTypeFilter: string
   /** `''` = no filter; otherwise a category slug from `availableCategories`. */
   readonly categoryFilter: string
+  readonly availableSellers: string[]
+  readonly availableLicenses: string[]
+  readonly availableEngineVersions: string[]
+  readonly sort: AssetSort
+  /** `''` = no filter; otherwise an exact seller name. */
+  readonly sellerFilter: string
+  /** `''` = no filter; otherwise a license slug. */
+  readonly licenseFilter: string
+  /** `''` = no filter; otherwise an engine version like `'5.4'`. */
+  readonly engineVersionFilter: string
+  readonly addedSinceFilter: AddedSince
+  /** True when any filter (not the sort) differs from its default. */
+  readonly hasActiveFilters: boolean
   readonly syncBusy: boolean
   readonly syncProgress: SyncProgress | null
   readonly syncError: string | null
@@ -79,6 +100,13 @@ export interface LibraryStore {
   setSourceFilter(f: SourceFilter): void
   setListingTypeFilter(t: string): void
   setCategoryFilter(c: string): void
+  setSort(s: AssetSort): void
+  setSellerFilter(s: string): void
+  setLicenseFilter(l: string): void
+  setEngineVersionFilter(v: string): void
+  setAddedSinceFilter(a: AddedSince): void
+  /** Reset every filter and the search box to defaults. Keeps the sort. */
+  clearFilters(): void
   refresh(): Promise<void>
   setHidden(asset: AssetRow, hidden: boolean): Promise<void>
   setBookmarked(asset: AssetRow, bookmarked: boolean): Promise<void>
@@ -191,6 +219,32 @@ export function createLibraryStore(): LibraryStore {
   let sourceFilter = $state<SourceFilter>('all')
   let listingTypeFilter = $state('')
   let categoryFilter = $state('')
+  const SORT_KEY = 'rehoarder.assets.sort'
+  function loadSort(): AssetSort {
+    try {
+      return parseSort(window.localStorage.getItem(SORT_KEY))
+    } catch {
+      return parseSort(null)
+    }
+  }
+  let availableSellers = $state<string[]>([])
+  let availableLicenses = $state<string[]>([])
+  let availableEngineVersions = $state<string[]>([])
+  let sort = $state<AssetSort>(loadSort())
+  let sellerFilter = $state('')
+  let licenseFilter = $state('')
+  let engineVersionFilter = $state('')
+  let addedSinceFilter = $state<AddedSince>('')
+  const hasActiveFilters = $derived(
+    search.trim() !== '' ||
+      sourceFilter !== 'all' ||
+      listingTypeFilter !== '' ||
+      categoryFilter !== '' ||
+      sellerFilter !== '' ||
+      licenseFilter !== '' ||
+      engineVersionFilter !== '' ||
+      addedSinceFilter !== ''
+  )
   let syncBusy = $state(false)
   let syncProgress = $state<SyncProgress | null>(null)
   let syncError = $state<string | null>(null)
@@ -213,44 +267,55 @@ export function createLibraryStore(): LibraryStore {
     syncLog = [...syncLog, `[${ts}] ${line}`].slice(-500)
   })
 
-  /** Translate the Source dropdown selection into the backend query shape. */
+  /** Translate the filter state into the backend query shape. */
   function buildQuery(): {
     source?: AssetSource
-    subSource?: 'fab-ue' | 'fab-other'
+    subSource?: 'fab-ue'
     listingType?: string
     category?: string
     search?: string
     includeHidden?: boolean
     onlyHidden?: boolean
     onlyBookmarked?: boolean
+    sort?: AssetSort
+    seller?: string
+    license?: string
+    engineVersion?: string
+    ownedSince?: number
   } {
     const base: {
       search?: string
       listingType?: string
       category?: string
-    } = { search: search.trim() === '' ? undefined : search }
+      sort: AssetSort
+      seller?: string
+      license?: string
+      engineVersion?: string
+      ownedSince?: number
+    } = { search: search.trim() === '' ? undefined : search, sort }
     if (listingTypeFilter !== '') base.listingType = listingTypeFilter
     if (categoryFilter !== '') base.category = categoryFilter
+    if (sellerFilter !== '') base.seller = sellerFilter
+    if (licenseFilter !== '') base.license = licenseFilter
+    if (engineVersionFilter !== '') base.engineVersion = engineVersionFilter
+    const since = addedSinceToTimestamp(addedSinceFilter, Date.now())
+    if (since !== undefined) base.ownedSince = since
     switch (sourceFilter) {
       case 'all':
         return { ...base }
       case 'fab-ue':
         return { ...base, source: 'fab', subSource: 'fab-ue' }
-      case 'fab-other':
-        return { ...base, source: 'fab', subSource: 'fab-other' }
       case 'bookmarks':
         return { ...base, onlyBookmarked: true, includeHidden: true }
       case 'hidden':
         return { ...base, onlyHidden: true }
       case 'downloaded':
-        // No backend source filter — the client-side `$derived` intersects
-        // with `downloadsStore.all` to keep only assets that have a
-        // `status='done'` row. Other backend filters (listing type, category,
-        // search) still apply as usual on top of that.
+        // No backend source filter: the client-side `$derived` intersects
+        // with `downloadsStore.all`. Other backend filters still apply.
         return { ...base }
       case 'updatable':
-        // Same as 'downloaded': backend returns everything; the derived
-        // filters out anything whose recorded buildVersion still matches.
+        // Same as 'downloaded': the derived drops rows whose recorded
+        // buildVersion still matches.
         return { ...base }
     }
   }
@@ -262,6 +327,9 @@ export function createLibraryStore(): LibraryStore {
       countsBySource = result.countsBySource
       availableListingTypes = result.availableListingTypes
       availableCategories = result.availableCategories
+      availableSellers = result.availableSellers
+      availableLicenses = result.availableLicenses
+      availableEngineVersions = result.availableEngineVersions
       lastSync = result.lastSync
     } finally {
       initialLoading = false
@@ -295,6 +363,33 @@ export function createLibraryStore(): LibraryStore {
     },
     get categoryFilter() {
       return categoryFilter
+    },
+    get availableSellers() {
+      return availableSellers
+    },
+    get availableLicenses() {
+      return availableLicenses
+    },
+    get availableEngineVersions() {
+      return availableEngineVersions
+    },
+    get sort() {
+      return sort
+    },
+    get sellerFilter() {
+      return sellerFilter
+    },
+    get licenseFilter() {
+      return licenseFilter
+    },
+    get engineVersionFilter() {
+      return engineVersionFilter
+    },
+    get addedSinceFilter() {
+      return addedSinceFilter
+    },
+    get hasActiveFilters() {
+      return hasActiveFilters
     },
     get syncBusy() {
       return syncBusy
@@ -331,6 +426,46 @@ export function createLibraryStore(): LibraryStore {
     },
     setCategoryFilter(c) {
       categoryFilter = c
+      void refresh()
+    },
+    setSort(s) {
+      sort = s
+      try {
+        window.localStorage.setItem(SORT_KEY, s)
+      } catch {
+        // storage disabled: the sort just won't survive a restart
+      }
+      void refresh()
+    },
+    setSellerFilter(s) {
+      sellerFilter = s
+      void refresh()
+    },
+    setLicenseFilter(l) {
+      licenseFilter = l
+      void refresh()
+    },
+    setEngineVersionFilter(v) {
+      engineVersionFilter = v
+      void refresh()
+    },
+    setAddedSinceFilter(a) {
+      addedSinceFilter = a
+      void refresh()
+    },
+    clearFilters() {
+      if (searchDebounceTimer !== null) {
+        clearTimeout(searchDebounceTimer)
+        searchDebounceTimer = null
+      }
+      search = ''
+      sourceFilter = 'all'
+      listingTypeFilter = ''
+      categoryFilter = ''
+      sellerFilter = ''
+      licenseFilter = ''
+      engineVersionFilter = ''
+      addedSinceFilter = ''
       void refresh()
     },
     refresh,

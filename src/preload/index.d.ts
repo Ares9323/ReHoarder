@@ -48,7 +48,7 @@ export interface AccountsApi {
 }
 
 export type AssetSource = 'vault' | 'fab' | 'legacy'
-export type AssetSubSource = 'fab-ue' | 'fab-other' | null
+export type AssetSubSource = 'fab-ue' | null
 
 export interface AssetRow {
   source: AssetSource
@@ -67,15 +67,22 @@ export interface AssetRow {
   syncedAt: number
 }
 
+export type AssetSort = 'newest' | 'oldest' | 'title-asc' | 'title-desc' | 'last-updated'
+
 export interface LibraryQuery {
   source?: AssetSource
-  subSource?: 'fab-ue' | 'fab-other'
+  subSource?: 'fab-ue'
   listingType?: string
   category?: string
   search?: string
   includeHidden?: boolean
   onlyHidden?: boolean
   onlyBookmarked?: boolean
+  sort?: AssetSort
+  seller?: string
+  license?: string
+  engineVersion?: string
+  ownedSince?: number
 }
 
 export interface LibraryListResult {
@@ -83,6 +90,12 @@ export interface LibraryListResult {
   countsBySource: Record<string, number>
   availableListingTypes: string[]
   availableCategories: string[]
+  /** Distinct Fab sellers for the Publisher suggestions. */
+  availableSellers: string[]
+  /** Distinct owned license slugs. */
+  availableLicenses: string[]
+  /** Distinct supported engine versions, newest first. */
+  availableEngineVersions: string[]
   lastSync: Record<string, { at: number; status: string; error: string | null }>
 }
 

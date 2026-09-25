@@ -146,7 +146,12 @@ describe('vault:list metadata resolution order', () => {
     expect(entry.engineVersion).toBe('5.6')
 
     // Backfill: a sidecar should now exist so the next scan hits tier 1.
-    const sidecar = await readSidecar(assetDir)
+    // The backfill is fire-and-forget: poll briefly for it.
+    let sidecar = await readSidecar(assetDir)
+    for (let i = 0; i < 50 && !sidecar; i++) {
+      await new Promise((r) => setTimeout(r, 10))
+      sidecar = await readSidecar(assetDir)
+    }
     expect(sidecar).not.toBeNull()
     expect(sidecar!.source).toBe('fab')
     expect(sidecar!.sourceId).toBe('db-id')

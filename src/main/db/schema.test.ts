@@ -49,7 +49,12 @@ describe('applySchema', () => {
         'listing_type',
         'seller',
         'raw',
-        'synced_at'
+        'synced_at',
+        'last_precise_at',
+        'fab_listing_uid',
+        'last_updated_at',
+        'licenses',
+        'engine_versions'
       ].sort()
     )
     // Composite PK is (account_id, source, source_id) — the order matters for
@@ -103,5 +108,69 @@ describe('applySchema', () => {
 
   it('is idempotent (applying twice does not throw)', () => {
     expect(() => applySchema(db)).not.toThrow()
+  })
+})
+
+describe('migration v5 (Fab library filters)', () => {
+  it('adds the filter columns and bumps user_version to 5', () => {
+    const cols = (db.prepare('PRAGMA table_info(assets)').all() as Array<{ name: string }>).map(
+      (c) => c.name
+    )
+    expect(cols).toEqual(
+      expect.arrayContaining(['fab_listing_uid', 'last_updated_at', 'licenses', 'engine_versions'])
+    )
+    expect(db.pragma('user_version', { simple: true })).toBe(5)
+  })
+
+  it('backfills fab-ue rows from raw and deletes fab-other rows with their tags', () => {
+    db.pragma('user_version = 4')
+    const insert = db.prepare(
+      `INSERT INTO assets (account_id, source, source_id, sub_source, title, raw, synced_at)
+       VALUES ('acc', 'fab', ?, ?, ?, ?, 0)`
+    )
+    insert.run(
+      'ue-1',
+      'fab-ue',
+      'UE One',
+      JSON.stringify({
+        customAttributes: [{ ListingIdentifier: 'listing-1' }],
+        projectVersions: [{ engineVersions: ['UE_5.3', 'UE_5.4'] }]
+      })
+    )
+    insert.run('ue-2', 'fab-ue', 'UE Broken', '{not json')
+    insert.run('other-1', 'fab-other', 'Blender Pack', '{}')
+    db.prepare(
+      `INSERT INTO asset_tags (account_id, source, source_id, tag) VALUES ('acc', 'fab', 'other-1', 'x')`
+    ).run()
+
+    applySchema(db)
+
+    const ue1 = db
+      .prepare(`SELECT fab_listing_uid, engine_versions FROM assets WHERE source_id = 'ue-1'`)
+      .get() as { fab_listing_uid: string; engine_versions: string }
+    expect(ue1).toEqual({ fab_listing_uid: 'listing-1', engine_versions: '["5.4","5.3"]' })
+    const ue2 = db
+      .prepare(`SELECT fab_listing_uid FROM assets WHERE source_id = 'ue-2'`)
+      .get() as { fab_listing_uid: string | null }
+    expect(ue2.fab_listing_uid).toBeNull()
+    expect(
+      db.prepare(`SELECT COUNT(*) AS n FROM assets WHERE sub_source = 'fab-other'`).get()
+    ).toEqual({ n: 0 })
+    expect(
+      db.prepare(`SELECT COUNT(*) AS n FROM asset_tags WHERE source_id = 'other-1'`).get()
+    ).toEqual({ n: 0 })
+    expect(db.pragma('user_version', { simple: true })).toBe(5)
+  })
+
+  it('does not re-run once at v5', () => {
+    db.prepare(
+      `INSERT INTO assets (account_id, source, source_id, sub_source, title, raw, synced_at)
+       VALUES ('acc', 'fab', 'ue-9', 'fab-ue', 'T', '{"customAttributes":[{"ListingIdentifier":"z"}]}', 0)`
+    ).run()
+    applySchema(db)
+    const row = db.prepare(`SELECT fab_listing_uid FROM assets WHERE source_id = 'ue-9'`).get() as {
+      fab_listing_uid: string | null
+    }
+    expect(row.fab_listing_uid).toBeNull()
   })
 })
