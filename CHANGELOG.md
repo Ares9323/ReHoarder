@@ -4,6 +4,36 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-09-25
+
+Downloads now fetch chunks in parallel instead of one at a time, a real fab.com web session replaces the Fab login that had silently stopped working, and the Assets tab gains fab.com-style sorting and filters fed by it. "Add to project" can finally drop a pack into any `/Game` subfolder or a plugin's content with every reference intact, and the Local Vault shows which engine and Fab build each download is.
+
+### Added
+
+- **Sort and filters on the Assets tab**: sort by Newest, Oldest, Title A-Z / Z-A or Last Updated (the choice is remembered across restarts), and filter by Engine version, Publisher (a search box with suggestions, since libraries easily hold a thousand publishers), owned License and Added since (24 hours up to 12 months). A **Clear filters** button appears whenever a filter is active and resets everything except the sort. Acquisition dates, licenses and last-update dates come from the new entitlements pass (below); a v5 schema migration adds the columns and backfills the listing uid and engine versions from the data already on disk.
+- **Fab entitlements pass**: every sync also walks the fab.com library (`/i/library/search`, Unreal Engine formats only) alongside the UE library and applies acquisition date, licenses and last-update date to the matching assets. A failure there is logged as a warning and never fails the sync.
+- **Add to project into a subfolder or a plugin** ([#4](https://github.com/Ares9323/ReHoarder/issues/4)): the dialog gains **Where** (Content or any content plugin of the target project), an optional **Subfolder** (existing folders of the chosen mount are suggested, or type a new one) and, for packs with a single top-level folder, **Rename to**, with a live preview of the final path. Any destination other than the default runs a relocation instead of a plain copy: the pack is moved inside a throwaway scratch project by the project's own engine (`UnrealEditor-Cmd -run=pythonscript`, headless, no shader compile), so every package reference, maps included, is rewritten exactly as a Content Browser move would, and only the finished result is copied into the real project. The engine plugins the pack depends on (for example Chaos Vehicles) are detected from the packages' imports and enabled in the scratch project, Blueprints are recompiled before saving, assets Unreal refuses to rename unattended (the "may need Find/Replace" prompt) are moved by consolidation instead, left-over redirectors get a `ResavePackages -fixupredirects` pass inside the scratch project, the dialog shows each stage with elapsed time and a working Cancel, and a failure shows the Unreal output while leaving the project untouched.
+- **Version pill on Local Vault rows**: each downloaded asset shows its engine version and Fab build (for example `UE 5.7 · build 48201490`, full build string on hover). The download sidecar now records the build; older sidecars borrow it from the downloads table, and orphan folders show the inferred engine version only.
+- **Fab sign-in chip** next to Sync now: shows whether the fab.com web session is signed in and, when it isn't, opens a "Sign in to Fab" window.
+- **Per-project hide on the Projects tab**: right-click to hide a project from the list, with a Show hidden (N) toggle to bring hidden rows back, dimmed, in place.
+
+### Changed
+
+- **Chunk downloads run in parallel**: a read-ahead pool sized by the existing **Download threads** setting (default 16, previously unused) fetches chunks while files are assembled in order. Chunks are inflated off the main thread, only chunks reused later in the same download go through the disk cache, files already complete on disk are detected before anything is fetched, the progress bar moves inside large files instead of jumping when each one finishes, and every download logs its throughput. Engine installs use the same pool.
+- **Fab login now runs in a real browser window**: the scripted F1-F5 OAuth dance was landing on Fab's "Authentication error" page, so every authenticated fab.com call answered 401. A hidden fab.com page in the persistent partition now holds the signed-in session (silent sign-in first, a visible window as fallback) and runs those calls from inside the page. The session survives restarts, and sync and downloads never block on it.
+- **Fab "Other" (non-Unreal) listings are gone**: ReHoarder is Unreal-only, the sync that fetched them had been disabled, and the rows left in the database are removed by the migration together with the "Only Fab Other" source option.
+- **"Custom folder…" in Add to project is now "Browse for another project…"**, with projects picked that way tagged "(browsed)": the old label read like a destination folder picker.
+- **Listings with no downloadable Unreal build show "Get on Fab"** instead of a Download button that could only fail.
+- **Cancelling a download marks it as cancelled** instead of failed.
+
+### Fixed
+
+- **`WindowsEditorPerProjectUserSettings.ini` no longer overrides the patched engine settings**: Unreal loads it after `BaseEditorPerProjectUserSettings.ini`, so Epic's own values (Live Coding enabled, for one) silently beat the master. An override-only pass now rewrites the scalars already present in that file, with backup and restore.
+- **Switching account no longer throws in the renderer**: `App.svelte` invalidated the downloads store without importing it.
+- **Selecting text in a dialog no longer closes it**: a drag that started inside the Add to project, Create project, Custom install or `.uproject` editor popup and was released outside it counted as a click on the backdrop. Those dialogs now close only when the press also started on the backdrop, like the others already did.
+- **Enter in a project dropdown no longer submits with the previous project**: the Add to project, Create project and Set as template dialogs submitted on any Enter, including the one that confirms a keyboard pick in a `<select>`, so the job ran against the project selected before the pick.
+- **The source badge on asset cards** only appears when the visible list actually mixes sources, instead of whenever the vault had ever been synced.
+
 ## [0.4.0] — 2026-09-17
 
 Asset grid density is now adjustable on the fly with Ctrl+wheel, the whole card thumbnail opens the marketplace listing, and the Settings panel stops looking like it auto-saves: the Save button rides along in a sticky header and changing a path list refreshes the tab that scans it.
