@@ -12,6 +12,8 @@ import {
   listEnginePluginsRich,
   setEnginePluginState,
   uninstallEnginePlugin,
+  copyPluginToProject,
+  type CopyPluginToProjectResult,
   type EnginePluginRich,
   type SetPluginStateRequest,
   type SetPluginStateResult,
@@ -859,6 +861,21 @@ export function registerEnginesIpc(settings: SettingsStore): void {
         return { ok: false, error: 'Plugin path is outside the configured engine roots' }
       }
       return await uninstallEnginePlugin(upluginPath)
+    }
+  )
+
+  ipcMain.handle(
+    'engines:copy-plugin-to-project',
+    async (
+      _e,
+      upluginPath: string,
+      projectDir: string,
+      overwrite: boolean
+    ): Promise<CopyPluginToProjectResult> => {
+      if (!isInsideEngineRoots(upluginPath)) {
+        return { ok: false, error: 'Plugin path is outside the configured engine roots' }
+      }
+      return await copyPluginToProject(upluginPath, projectDir, overwrite === true)
     }
   )
 

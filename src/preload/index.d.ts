@@ -501,6 +501,8 @@ export interface EnginePluginRich {
   iconUrl: string | null
   enabledByDefault: boolean
   installed: boolean
+  docsUrl: string | null
+  marketplaceUrl: string | null
 }
 
 export interface EnginePluginsListResult {
@@ -586,6 +588,13 @@ export interface UninstallPluginResult {
   ok: boolean
   error?: string
   pluginDir?: string
+}
+
+export interface CopyPluginToProjectResult {
+  ok: boolean
+  error?: string
+  exists?: boolean
+  destDir?: string
 }
 
 export interface BuiltInPluginPresetMeta {
@@ -737,6 +746,11 @@ export interface EnginesApi {
   presetAddPlugin(engineRoot: string, entry: PluginPresetEntry): Promise<PresetMutationResult>
   presetRemovePlugin(engineRoot: string, name: string): Promise<PresetMutationResult>
   uninstallPlugin(upluginPath: string): Promise<UninstallPluginResult>
+  copyPluginToProject(
+    upluginPath: string,
+    projectDir: string,
+    overwrite: boolean
+  ): Promise<CopyPluginToProjectResult>
   openPresetFile(presetPath: string): Promise<EnginesOpenResult>
   editorSettingsInfo(engineRoot: string): Promise<EditorSettingsInfoResult>
   applyEditorSettings(engineRoot: string): Promise<ApplyEditorSettingsResult>

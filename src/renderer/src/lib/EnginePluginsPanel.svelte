@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte'
+  import { projectsStore } from '../stores/projects.svelte'
 
   /** Local mirror of the EnginePluginRich type from preload. Kept here so the
    *  renderer tsconfig doesn't have to include the main-process source.
@@ -16,6 +17,8 @@
     iconUrl: string | null
     enabledByDefault: boolean
     installed: boolean
+    docsUrl: string | null
+    marketplaceUrl: string | null
   }
 
   interface EngineInfo {
@@ -185,6 +188,90 @@
     const p = pluginContextMenu.plugin
     closePluginContextMenu()
     uninstallTarget = p
+  }
+
+  function pluginDirOf(p: EnginePluginRich): string {
+    return p.upluginPath.replace(/[/\\][^/\\]+\.uplugin$/i, '')
+  }
+
+  async function ctxOpenFolder(): Promise<void> {
+    if (!pluginContextMenu) return
+    const p = pluginContextMenu.plugin
+    closePluginContextMenu()
+    const r = await window.api.engines.openInExplorer(pluginDirOf(p))
+    if (!r.ok) error = r.error ?? 'Open failed'
+  }
+
+  function ctxOpenUrl(url: string): void {
+    closePluginContextMenu()
+    void window.open(url, '_blank', 'noreferrer')
+  }
+
+  /** Install-in-project dialog state. Non-null = open against this plugin. */
+  let installTarget = $state<EnginePluginRich | null>(null)
+  let installProjectDir = $state('')
+  let installing = $state(false)
+  let installError = $state<string | null>(null)
+  /** Set when the chosen project already has this plugin: the next click overwrites. */
+  let installExists = $state(false)
+
+  /** "5.7.4" → "5.7", to compare with a .uproject's EngineAssociation. */
+  const engineShortVersion = $derived(engine.version.split('.').slice(0, 2).join('.'))
+
+  /** Projects built on this engine first, then the rest, each group by name. */
+  const installProjects = $derived(
+    [...projectsStore.projects].sort((a, b) => {
+      const am = a.engineAssociation === engineShortVersion ? 0 : 1
+      const bm = b.engineAssociation === engineShortVersion ? 0 : 1
+      if (am !== bm) return am - bm
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+    })
+  )
+
+  async function ctxInstallInProject(): Promise<void> {
+    if (!pluginContextMenu) return
+    const p = pluginContextMenu.plugin
+    closePluginContextMenu()
+    // The Projects tab may never have been opened, so the store can be cold.
+    await projectsStore.ensureLoaded()
+    installTarget = p
+    installProjectDir = installProjects[0]?.projectDir ?? ''
+    installError = null
+    installExists = false
+  }
+
+  function closeInstall(): void {
+    if (installing) return
+    installTarget = null
+  }
+
+  async function confirmInstall(): Promise<void> {
+    if (!installTarget || !installProjectDir || installing) return
+    const p = installTarget
+    installing = true
+    installError = null
+    try {
+      const r = await window.api.engines.copyPluginToProject(
+        p.upluginPath,
+        installProjectDir,
+        installExists
+      )
+      if (r.exists) {
+        installExists = true
+        installError = `This project already has ${p.friendlyName}. Install again to replace it.`
+        return
+      }
+      if (!r.ok) {
+        installError = r.error ?? 'Install failed'
+        return
+      }
+      flashStatus(`Installed "${p.friendlyName}" in ${r.destDir ?? installProjectDir}`)
+      installTarget = null
+    } catch (err) {
+      installError = err instanceof Error ? err.message : String(err)
+    } finally {
+      installing = false
+    }
   }
 
   async function confirmUninstall(): Promise<void> {
@@ -892,7 +979,7 @@
             class="plugin-row"
             class:modified
             oncontextmenu={(e) => openPluginContextMenu(e, p)}
-            title="Right-click for preset / uninstall actions"
+            title="Right-click for folder, project install, docs, Fab and preset actions"
           >
             <td class="thumb">
               {#if p.iconUrl}
@@ -954,6 +1041,25 @@
     style:top="{cm.y}px"
     onmousedown={(e) => e.stopPropagation()}
   >
+    <button type="button" role="menuitem" onclick={() => void ctxOpenFolder()}>
+      Open plugin folder
+    </button>
+    <button type="button" role="menuitem" onclick={() => void ctxInstallInProject()}>
+      Install in project…
+    </button>
+    {#if cm.plugin.docsUrl}
+      {@const docsUrl = cm.plugin.docsUrl}
+      <button type="button" role="menuitem" title={docsUrl} onclick={() => ctxOpenUrl(docsUrl)}>
+        Open documentation
+      </button>
+    {/if}
+    {#if cm.plugin.marketplaceUrl}
+      {@const fabUrl = cm.plugin.marketplaceUrl}
+      <button type="button" role="menuitem" title={fabUrl} onclick={() => ctxOpenUrl(fabUrl)}>
+        {fabUrl.startsWith('https://www.fab.com/search') ? 'Search on Fab' : 'Open Fab page'}
+      </button>
+    {/if}
+    <div class="ctx-sep"></div>
     <button type="button" role="menuitem" onclick={() => void ctxAddToConfig()}>
       Add to config
     </button>
@@ -1005,6 +1111,64 @@
           onclick={() => void confirmUninstall()}
         >
           {uninstalling ? 'Uninstalling…' : 'Uninstall'}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if installTarget}
+  {@const it = installTarget}
+  <div
+    class="confirm-backdrop"
+    role="presentation"
+    onclick={(e) => {
+      if ((e.target as HTMLElement).classList.contains('confirm-backdrop')) closeInstall()
+    }}
+  >
+    <div class="confirm-popup" role="dialog" aria-modal="true" aria-label="Install plugin in project">
+      <h3>Install in project</h3>
+      <p>
+        Copies <strong>{it.friendlyName}</strong> into the project's
+        <code>Plugins/</code> folder (created when missing).
+      </p>
+      {#if installProjects.length === 0}
+        <p class="hint">No projects found. Add a folder under <strong>Settings → Project paths</strong>.</p>
+      {:else}
+        <select
+          class="install-select"
+          bind:value={installProjectDir}
+          disabled={installing}
+          onchange={() => {
+            installExists = false
+            installError = null
+          }}
+        >
+          {#each installProjects as proj (proj.projectDir)}
+            <option value={proj.projectDir}>
+              {proj.name} ({proj.engineAssociation ? `UE ${proj.engineAssociation}` : 'unknown engine'})
+            </option>
+          {/each}
+        </select>
+        <p class="hint">
+          <code>Intermediate/</code> and <code>Saved/</code> are skipped. A project copy of a plugin
+          takes precedence over the engine one.
+        </p>
+      {/if}
+      {#if installError}
+        <div class="install-error">{installError}</div>
+      {/if}
+      <div class="confirm-actions">
+        <button type="button" class="ghost" disabled={installing} onclick={closeInstall}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          class={installExists ? 'danger-primary' : 'primary'}
+          disabled={installing || !installProjectDir}
+          onclick={() => void confirmInstall()}
+        >
+          {installing ? 'Copying…' : installExists ? 'Replace' : 'Install'}
         </button>
       </div>
     </div>
@@ -1329,6 +1493,33 @@
   }
   .confirm-actions .danger-primary:hover:not(:disabled) {
     filter: brightness(1.08);
+  }
+  .confirm-actions .primary {
+    background: linear-gradient(135deg, #c084fc, #f472b6);
+    color: #fff;
+    font-weight: 600;
+  }
+  .confirm-actions .primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+  }
+  .install-select {
+    width: 100%;
+    margin: 0.2rem 0 0.6rem;
+    background: #232325;
+    color: #e0e0e0;
+    border: 1px solid #3a3a3a;
+    border-radius: 5px;
+    padding: 0.4rem 0.5rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+  }
+  .install-error {
+    background: #3a1f1f;
+    border: 1px solid #5a2727;
+    color: #fca5a5;
+    border-radius: 5px;
+    padding: 0.45rem 0.7rem;
+    font-size: 0.8rem;
   }
   .confirm-actions button:disabled {
     opacity: 0.45;

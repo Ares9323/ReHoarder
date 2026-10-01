@@ -229,6 +229,8 @@ export interface EnginePluginRich {
   iconUrl: string | null
   enabledByDefault: boolean
   installed: boolean
+  docsUrl: string | null
+  marketplaceUrl: string | null
 }
 
 export interface EnginePluginsListResult {
@@ -314,6 +316,13 @@ export interface UninstallPluginResult {
   ok: boolean
   error?: string
   pluginDir?: string
+}
+
+export interface CopyPluginToProjectResult {
+  ok: boolean
+  error?: string
+  exists?: boolean
+  destDir?: string
 }
 
 export interface BuiltInPluginPresetMeta {
@@ -1016,6 +1025,12 @@ const api = {
       ipcRenderer.invoke('engines:preset-remove-plugin', engineRoot, name),
     uninstallPlugin: (upluginPath: string): Promise<UninstallPluginResult> =>
       ipcRenderer.invoke('engines:uninstall-plugin', upluginPath),
+    copyPluginToProject: (
+      upluginPath: string,
+      projectDir: string,
+      overwrite: boolean
+    ): Promise<CopyPluginToProjectResult> =>
+      ipcRenderer.invoke('engines:copy-plugin-to-project', upluginPath, projectDir, overwrite),
     openPresetFile: (presetPath: string): Promise<EnginesOpenResult> =>
       ipcRenderer.invoke('engines:open-preset-file', presetPath),
     editorSettingsInfo: (engineRoot: string): Promise<EditorSettingsInfoResult> =>
