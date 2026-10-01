@@ -596,6 +596,29 @@ def main():
     def moved(data):
         return unreal.EditorAssetLibrary.does_asset_exist(target_of(data))
 
+    # Where each asset lived before the move (its object path changes with it).
+    old_paths = [(d, d.get_editor_property("asset").get_path_name()) for d in renames]
+
+    # A moved asset can come back as a second copy at its old path, rebuilt
+    # from the source package's stale linker when a referencer (a map) still
+    # resolves it there. The copy shares the moved asset's subobjects, so it
+    # can't be saved ("Illegal reference to private object") and the
+    # referencer keeps pointing at it. Consolidating it into the moved asset
+    # retargets those references and leaves a plain redirector behind.
+    def repair_ghosts():
+        for data, old_path in old_paths:
+            if not moved(data):
+                continue
+            ghost = unreal.find_object(None, old_path)
+            if ghost is None or ghost.get_class().get_name() == "ObjectRedirector":
+                continue
+            target = unreal.EditorAssetLibrary.load_asset(target_of(data))
+            if target is None or target == ghost or ghost.get_class() != target.get_class():
+                continue
+            log("stale copy left at " + old_path + ", consolidating it into " + target_of(data))
+            if not unreal.EditorAssetLibrary.consolidate_assets(target, [ghost]):
+                log("consolidation failed: " + old_path)
+
     # The rename manager is all-or-nothing: one asset it refuses (typically an
     # OK/Cancel "a native CDO references this" prompt, which unattended mode
     # answers Cancel) aborts the whole batch without touching anything. Split
@@ -605,6 +628,7 @@ def main():
         if not batch:
             return []
         asset_tools.rename_assets(batch)
+        repair_ghosts()
         left = [d for d in batch if not moved(d)]
         if len(left) < len(batch):
             # Save what moved before the next batch: the rename manager only
@@ -628,6 +652,7 @@ def main():
     held = [d for d in renames if str(d.get_editor_property("new_name")) in held_names]
     batch = [d for d in renames if str(d.get_editor_property("new_name")) not in held_names]
     asset_tools.rename_assets(batch)
+    repair_ghosts()
     if batch and not any(moved(d) for d in batch):
         if not held_names and not PLAN.get("bisect"):
             # Nothing moved, nothing changed: report it so ReHoarder can rerun

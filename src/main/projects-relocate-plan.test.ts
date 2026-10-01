@@ -313,6 +313,14 @@ describe('renderRelocateScript', () => {
     expect(script).not.toContain('"AssetTools.rename_assets reported a failure"')
   })
 
+  it('consolidates a stale copy left at an old path after every rename batch, before saving', () => {
+    const script = renderRelocateScript(plan, 'C:/r/result.json')
+    expect(script).toContain('consolidate_assets(target, [ghost])')
+    const firstRename = script.indexOf('asset_tools.rename_assets(batch)\n    repair_ghosts()')
+    expect(firstRename).toBeGreaterThan(-1)
+    expect(script).toContain('asset_tools.rename_assets(batch)\n        repair_ghosts()')
+  })
+
   it('renames one primary asset per package, never a BlueprintGeneratedClass on its own', () => {
     const script = renderRelocateScript(plan, 'C:/r/result.json')
     expect(script).toContain('GeneratedClass')
