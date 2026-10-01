@@ -39,7 +39,7 @@ import { Sync } from './sync/sync'
 import { registerLibraryIpc } from './sync/ipc'
 import { registerDebugIpc } from './download/debug-ipc'
 import { registerVaultIpc } from './vault-ipc'
-import { SettingsStore } from './settings'
+import { SettingsStore, ensureVaultDirs } from './settings'
 import { registerSettingsIpc } from './settings-ipc'
 import { registerEnginesIpc } from './engines-ipc'
 import { registerProjectsIpc } from './projects-ipc'
@@ -269,8 +269,12 @@ app.whenReady().then(async () => {
   registerEngineDownloadsIpc(session, downloadsManager, settingsStore, db.kv)
   registerDownloadsIpc(downloadsManager, settingsStore)
   registerSettingsIpc(settingsStore, {
-    onChange: () => downloadsManager.onSettingsChanged()
+    onChange: (next) => {
+      void ensureVaultDirs(next.vaultPaths)
+      downloadsManager.onSettingsChanged()
+    }
   })
+  void ensureVaultDirs(settingsStore.load().vaultPaths)
   // Bootstrap recovers interrupted rows (running → queued) eagerly so the
   // recovery happens before any renderer query. The pump itself is fired
   // AFTER `session.init()` below, because `nextQueued()` scopes by active

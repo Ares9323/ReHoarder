@@ -1,3 +1,4 @@
+import { existsSync, promises as fsp } from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { app } from 'electron'
@@ -57,7 +58,7 @@ export interface AppSettings {
   projectPaths: string[]
   /** Filesystem paths scanned for `UE_*` engine installations. */
   enginePaths: string[]
-  /** Where downloads are written. The first existing path is used; new entries are created on demand. */
+  /** Where downloads are written (always the first path). Missing folders are created at startup and on save. */
   vaultPaths: string[]
   /** Render the Projects tab with one table per configured root path instead of a single combined table. */
   separateProjectsByPath: boolean
@@ -117,7 +118,32 @@ function defaultEnginePaths(): string[] {
 }
 
 function defaultVaultPaths(): string[] {
-  return [path.join(app.getPath('userData'), 'debug-downloads')]
+  const legacy = path.join(app.getPath('userData'), 'debug-downloads')
+  if (process.platform !== 'win32') return [legacy]
+  // The Epic Games Launcher's own vault, so both apps share one download cache.
+  const programData = process.env.ProgramData || 'C:\\ProgramData'
+  const epicVault = path.join(programData, 'Epic', 'EpicGamesLauncher', 'VaultCache')
+  // Earlier versions defaulted to `<userData>/debug-downloads`: keep it listed
+  // when it exists, so downloads made there don't vanish from the Vault tab.
+  return existsSync(legacy) ? [epicVault, legacy] : [epicVault]
+}
+
+/**
+ * Create every configured vault folder that is missing, so a fresh default
+ * (or a path just typed in Settings) shows up and receives downloads.
+ * Best effort: an unreachable drive or a path without write access is
+ * skipped, never fatal.
+ */
+export async function ensureVaultDirs(vaultPaths: string[]): Promise<void> {
+  await Promise.all(
+    vaultPaths.map(async (p) => {
+      try {
+        await fsp.mkdir(p, { recursive: true })
+      } catch (err) {
+        console.warn(`[settings] could not create vault path ${p}:`, err instanceof Error ? err.message : err)
+      }
+    })
+  )
 }
 
 export function defaultSettings(): AppSettings {
