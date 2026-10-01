@@ -505,11 +505,41 @@ export interface CopyPluginToProjectResult {
 const PROJECT_COPY_SKIPPED = new Set(['intermediate', 'saved'])
 
 /**
- * Copy an engine plugin's folder into `<projectDir>/Plugins/<PluginFolder>`,
- * creating `Plugins/` when the project has none. `Intermediate/` and `Saved/`
- * are left behind. An existing destination is refused unless `overwrite`, in
- * which case it is removed first so stale files from an older version don't
- * linger next to the new ones.
+ * Find a folder directly under `pluginsDir` that holds `<pluginName>.uplugin`,
+ * whatever the folder is called (a copy made by hand, or by an older build
+ * that kept the engine's `Blockout1cfad1b9f3ddV14` folder name). Unreal
+ * refuses to load a project with the same plugin in two places, so that
+ * folder counts as the existing install. Null when there is none.
+ */
+async function findInstalledPluginDir(pluginsDir: string, pluginName: string): Promise<string | null> {
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = await fsp.readdir(pluginsDir, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  const wanted = `${pluginName}.uplugin`.toLowerCase()
+  for (const e of entries) {
+    if (!e.isDirectory()) continue
+    const dir = path.join(pluginsDir, e.name)
+    try {
+      if ((await fsp.readdir(dir)).some((f) => f.toLowerCase() === wanted)) return dir
+    } catch {
+      /* unreadable folder: not ours */
+    }
+  }
+  return null
+}
+
+/**
+ * Copy an engine plugin's folder into `<projectDir>/Plugins/<PluginName>`,
+ * creating `Plugins/` when the project has none. The folder is named after
+ * the `.uplugin` file, not after the engine folder: Marketplace installs sit
+ * in folders named after the build id (`Blockout1cfad1b9f3ddV14`).
+ * `Intermediate/` and `Saved/` are left behind. An existing install of the
+ * same plugin, under any folder name, is refused unless `overwrite`, in which
+ * case it is removed first so stale files from an older version don't linger
+ * and the project never ends up with two copies.
  */
 export async function copyPluginToProject(
   upluginPath: string,
@@ -520,6 +550,7 @@ export async function copyPluginToProject(
     return { ok: false, error: 'Source file is not a .uplugin' }
   }
   const pluginDir = path.dirname(path.resolve(upluginPath))
+  const pluginName = path.basename(upluginPath).replace(/\.uplugin$/i, '')
   const projectRoot = path.resolve(projectDir)
   let hasUproject = false
   try {
@@ -530,13 +561,16 @@ export async function copyPluginToProject(
   if (!hasUproject) {
     return { ok: false, error: `No .uproject found in ${projectRoot}` }
   }
-  const destDir = path.join(projectRoot, 'Plugins', path.basename(pluginDir))
-  const exists = await fsp.stat(destDir).then(() => true, () => false)
-  if (exists && !overwrite) {
-    return { ok: false, exists: true, destDir, error: `${destDir} already exists` }
+  const pluginsDir = path.join(projectRoot, 'Plugins')
+  const destDir = path.join(pluginsDir, pluginName)
+  const existingDir =
+    (await findInstalledPluginDir(pluginsDir, pluginName)) ??
+    (await fsp.stat(destDir).then(() => destDir, () => null))
+  if (existingDir && !overwrite) {
+    return { ok: false, exists: true, destDir: existingDir, error: `${existingDir} already exists` }
   }
   try {
-    if (exists) await fsp.rm(destDir, { recursive: true, force: true })
+    if (existingDir) await fsp.rm(existingDir, { recursive: true, force: true })
     await fsp.cp(pluginDir, destDir, {
       recursive: true,
       filter: (src) => {

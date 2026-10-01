@@ -42,7 +42,7 @@ let projectDir: string
 beforeEach(async () => {
   tmp = await fsp.mkdtemp(path.join(os.tmpdir(), 'rehoarder-engine-plugins-'))
   engineRoot = path.join(tmp, 'UE_5.7')
-  pluginDir = path.join(engineRoot, 'Engine', 'Plugins', 'Marketplace', 'MyPlugin')
+  pluginDir = path.join(engineRoot, 'Engine', 'Plugins', 'Marketplace', 'MyPlugin1cfad1b9f3ddV14')
   upluginPath = path.join(pluginDir, 'MyPlugin.uplugin')
   await fsp.mkdir(path.join(pluginDir, 'Binaries', 'Win64'), { recursive: true })
   await fsp.mkdir(path.join(pluginDir, 'Intermediate', 'Build'), { recursive: true })
@@ -75,7 +75,7 @@ describe('listEnginePluginsRich URLs', () => {
 })
 
 describe('copyPluginToProject', () => {
-  it('creates Plugins/ and copies the plugin without Intermediate/', async () => {
+  it('creates Plugins/ and copies the plugin, named after its .uplugin, without Intermediate/', async () => {
     const r = await copyPluginToProject(upluginPath, projectDir, false)
     expect(r.ok).toBe(true)
     const dest = path.join(projectDir, 'Plugins', 'MyPlugin')
@@ -98,6 +98,21 @@ describe('copyPluginToProject', () => {
     expect(replaced.ok).toBe(true)
     await expect(fsp.stat(path.join(dest, 'stale.txt'))).rejects.toThrow()
     await expect(fsp.stat(path.join(dest, 'MyPlugin.uplugin'))).resolves.toBeTruthy()
+  })
+
+  it('treats a copy kept under the engine build-id folder name as the existing install', async () => {
+    const oldDir = path.join(projectDir, 'Plugins', 'MyPlugin1cfad1b9f3ddV14')
+    await fsp.mkdir(oldDir, { recursive: true })
+    await fsp.writeFile(path.join(oldDir, 'MyPlugin.uplugin'), '{}')
+
+    const refused = await copyPluginToProject(upluginPath, projectDir, false)
+    expect(refused.exists).toBe(true)
+    expect(refused.destDir).toBe(oldDir)
+
+    const replaced = await copyPluginToProject(upluginPath, projectDir, true)
+    expect(replaced.ok).toBe(true)
+    expect(replaced.destDir).toBe(path.join(projectDir, 'Plugins', 'MyPlugin'))
+    await expect(fsp.stat(oldDir)).rejects.toThrow()
   })
 
   it('refuses a folder that is not an Unreal project', async () => {

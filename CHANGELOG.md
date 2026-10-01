@@ -4,6 +4,19 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] — 2026-10-01
+
+The engine plugin list grows a real context menu (open the folder, install the plugin into a project, jump to its docs or Fab page), finished downloads can go straight into a project from the Downloads tab, and Local Vault folders downloaded before ReHoarder tracked them finally show the asset's name instead of an Epic build id.
+
+### Added
+
+- **More actions on engine plugins** ([#7](https://github.com/Ares9323/ReHoarder/issues/7)): right-clicking a plugin in an engine's Plugins panel can now open its folder in Explorer, install it into a project, open its documentation (`DocsURL`) and open its Fab page (`MarketplaceURL`). Install in project lists the projects built on that engine first and copies the plugin into `<project>/Plugins/<PluginName>`, named after its `.uplugin` rather than the engine's build-id folder (`Blockout1cfad1b9f3ddV14`), creating `Plugins/` when it is missing and leaving `Intermediate/` and `Saved/` behind. A project that already has the plugin, under any folder name, is only overwritten after a second, explicit **Replace**, and the old folder is removed first so no stale files survive and Unreal never finds the plugin twice. Fab launcher links open the fab.com listing; old Unreal Marketplace ids, which Fab can no longer resolve, open a Fab search on the plugin name instead.
+- **Add to project in the Downloads tab** ([#9](https://github.com/Ares9323/ReHoarder/issues/9)): finished downloads that landed in the vault as an asset pack or a project get an **Add to project** button next to **Open**, opening the same dialog as the Local Vault.
+
+### Fixed
+
+- **Real names for orphan Local Vault folders** ([#8](https://github.com/Ares9323/ReHoarder/issues/8)): folders with no downloads row and no titled sidecar showed the raw build id (`ScienceF2a831178c0b7V1`). The folder name is the build's artifactId, which the synced library still carries (`projectVersions[].artifactId` on Fab, `appName` / `appId` on the legacy Vault), so the title, source and thumbnail are now recovered from it and saved into the sidecar. Sidecars already written without a title by the engine-version inference are upgraded on the next scan.
+
 ## [0.5.0] — 2026-09-25
 
 Downloads now fetch chunks in parallel instead of one at a time, a real fab.com web session replaces the Fab login that had silently stopped working, and the Assets tab gains fab.com-style sorting and filters fed by it. "Add to project" can finally drop a pack into any `/Game` subfolder or a plugin's content with every reference intact, and the Local Vault shows which engine and Fab build each download is.
