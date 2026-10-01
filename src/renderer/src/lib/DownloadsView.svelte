@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { downloadsStore } from '../stores/downloads.svelte'
+  import { vaultStore } from '../stores/vault.svelte'
+  import { projectsStore } from '../stores/projects.svelte'
+  import AddToProjectDialog from './AddToProjectDialog.svelte'
 
   type DownloadStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
@@ -34,7 +37,39 @@
 
   onMount(() => {
     void downloadsStore.ensureLoaded()
+    // The vault scan tells which finished downloads are packs or projects
+    // with a data/Content folder, i.e. which rows can offer Add to project.
+    void vaultStore.ensureLoaded()
   })
+
+  type VaultEntry = (typeof vaultStore.entries)[number]
+
+  function pathKey(p: string): string {
+    return p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase()
+  }
+
+  const vaultEntryByPath = $derived.by(() => {
+    const map = new Map<string, VaultEntry>()
+    for (const e of vaultStore.entries) map.set(pathKey(e.path), e)
+    return map
+  })
+
+  /** The vault entry a finished download landed in, when it can be added to a project. */
+  function addableEntry(row: DownloadRow): VaultEntry | null {
+    if (row.status !== 'done' || !row.destDir) return null
+    const e = vaultEntryByPath.get(pathKey(row.destDir))
+    if (!e || !e.hasData || (e.kind !== 'asset' && e.kind !== 'project')) return null
+    return e
+  }
+
+  /** Add-to-project dialog state. Non-null = open against this vault entry. */
+  let addToProjectTarget = $state<VaultEntry | null>(null)
+
+  async function openAddToProject(entry: VaultEntry): Promise<void> {
+    // The Projects tab may never have been opened, so the store can be cold.
+    await projectsStore.ensureLoaded()
+    addToProjectTarget = entry
+  }
 
   function formatBytes(n: number): string {
     if (n < 1024) return n + ' B'
@@ -232,6 +267,18 @@
             {#if row.destDir && (row.status === 'done' || row.status === 'running')}
               <button type="button" onclick={() => openFolder(row)}>Open</button>
             {/if}
+            {#if addableEntry(row)}
+              {@const entry = addableEntry(row)!}
+              <button
+                type="button"
+                onclick={() => void openAddToProject(entry)}
+                title={entry.kind === 'project'
+                  ? "Copy only this project's data/Content/ into an existing project (files outside Content/ are not copied)"
+                  : `Copy data/Content/ into an Unreal project's Content/ folder (engine ${entry.engineVersion ?? 'unknown'})`}
+              >
+                Add to project
+              </button>
+            {/if}
             {#if row.status !== 'running'}
               <button type="button" class="muted" onclick={() => remove(row)}>Remove</button>
             {/if}
@@ -241,6 +288,25 @@
     </ul>
   {/if}
 </section>
+
+{#if addToProjectTarget}
+  {@const t = addToProjectTarget}
+  <AddToProjectDialog
+    assetTitle={t.friendlyName ?? t.name}
+    assetSource={(t.source ?? '') as 'vault' | 'fab' | 'legacy'}
+    assetSourceId={t.sourceId ?? ''}
+    requiredVersion={t.engineVersion ?? null}
+    projectMode={t.kind === 'project'}
+    vaultAssetDir={t.path}
+    knownProjects={projectsStore.projects.map((p) => ({
+      name: p.name,
+      uprojectPath: p.uprojectPath,
+      projectDir: p.projectDir,
+      engineAssociation: p.engineAssociation
+    }))}
+    onClose={() => (addToProjectTarget = null)}
+  />
+{/if}
 
 <style>
   section {
