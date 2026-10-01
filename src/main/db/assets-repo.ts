@@ -260,6 +260,31 @@ export class AssetsRepo {
     return row ? fromDb(row) : null
   }
 
+  /**
+   * Find the asset whose raw payload names `artifactId` as one of its builds.
+   * The download orchestrator names vault folders after the build's
+   * artifactId (`ScienceF2a831178c0b7V1`), so this recovers the listing for a
+   * vault folder that has neither a sidecar title nor a downloads row. Fab
+   * stores it as `projectVersions[].artifactId`, the legacy Vault catalog as
+   * `appName` / `appId`. Fab rows win when both sources carry it.
+   */
+  findByArtifactId(artifactId: string): AssetRow | null {
+    const accountId = this.accountOrEmpty()
+    if (accountId === null || artifactId === '') return null
+    const literal = JSON.stringify(artifactId).replace(/[\\%_]/g, (c) => '\\' + c)
+    const patterns = ['artifactId', 'appName', 'appId'].map((k) => `%"${k}":${literal}%`)
+    const row = this.db
+      .prepare(
+        `SELECT * FROM assets
+           WHERE account_id = ?
+             AND (raw LIKE ? ESCAPE '\\' OR raw LIKE ? ESCAPE '\\' OR raw LIKE ? ESCAPE '\\')
+           ORDER BY CASE source WHEN 'fab' THEN 0 ELSE 1 END
+           LIMIT 1`
+      )
+      .get(accountId, ...patterns) as AssetRowDb | undefined
+    return row ? fromDb(row) : null
+  }
+
   list(filters: ListFilters): AssetRow[] {
     const accountId = this.accountOrEmpty()
     if (accountId === null) return []

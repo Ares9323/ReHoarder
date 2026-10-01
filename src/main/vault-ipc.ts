@@ -2,7 +2,7 @@ import { ipcMain, shell } from 'electron'
 import { promises as fsp } from 'node:fs'
 import * as path from 'node:path'
 import { listLocalVault, type LocalVaultEntry } from './vault-local'
-import { readSidecar, writeSidecar } from './vault-sidecar'
+import { readSidecar, writeSidecar, type VaultSidecar } from './vault-sidecar'
 import { resolveVaultEngineVersion } from './vault-engine-version'
 import { broadcastDownloads } from './downloads-ipc'
 import { compilePatterns, composeSkipPatterns, matchesAny } from './download/cruft-filter'
@@ -163,6 +163,24 @@ export function registerVaultIpc(
           })
         }
       }
+      const resolveByFolderName = (e: LocalVaultEntry): boolean => {
+        const asset = assetsRepo.findByArtifactId(e.name)
+        if (!asset) return false
+        e.friendlyName = asset.title
+        e.source = asset.source
+        e.sourceId = asset.sourceId
+        e.imageUrl = asset.imageUrl
+        return true
+      }
+      const sidecarFrom = (e: LocalVaultEntry): Omit<VaultSidecar, 'version' | 'type' | 'downloadedAt'> => ({
+        source: e.source,
+        sourceId: e.sourceId,
+        engineVersion: e.engineVersion,
+        buildVersion: e.buildVersion,
+        title: e.friendlyName,
+        kind: e.kind,
+        fabDistributionMethod: null
+      })
       for (const e of entries) {
         const key = path.resolve(e.path).toLowerCase()
         // Tier 1 — sidecar. When present and valid, metadata + kind come
@@ -181,6 +199,13 @@ export function registerVaultIpc(
           // otherwise a stale/wrong sidecar could permanently mask a payload
           // that changed on disk (e.g. re-downloaded as a different kind).
           if (e.kind === 'unknown') e.kind = sidecar.kind
+          // Orphan sidecar written by the tier-3 engine inference (no title,
+          // no identity): retry the folder-name lookup, since the library may
+          // have been synced since, and upgrade the sidecar on a hit.
+          if (!sidecar.title && !sidecar.sourceId && resolveByFolderName(e)) {
+            await writeSidecar(e.path, { ...sidecarFrom(e), downloadedAt: sidecar.downloadedAt })
+            continue
+          }
           if (e.source && e.sourceId) {
             const asset = assetsRepo.findById(e.source, e.sourceId)
             e.imageUrl = asset?.imageUrl ?? null
@@ -210,27 +235,19 @@ export function registerVaultIpc(
           })
           continue
         }
-        // Tier 3 — filesystem only. `kind` stays from detectKind, metadata
-        // (title/source/sourceId) stays null (only "Open" available, same as
-        // before). We can still infer `engineVersion` from the payload
-        // itself for `asset`/`project` kinds — cheap enough to run per scan,
-        // and once found it's backfilled into a sidecar so the next scan
-        // reads it straight from tier 1 instead of re-inferring.
+        // Tier 3 — no sidecar, no downloads row (a folder downloaded before
+        // the DB existed, or copied in by hand). The folder is named after the
+        // build's artifactId, which the synced library still knows: recover
+        // title / source / thumbnail from it. We can also infer
+        // `engineVersion` from the payload itself for `asset`/`project` kinds.
+        // Whatever is found is backfilled into a sidecar so the next scan
+        // reads it straight from tier 1.
+        const resolved = resolveByFolderName(e)
         if (e.engineVersion === null && e.hasData && (e.kind === 'asset' || e.kind === 'project')) {
-          const inferred = await resolveVaultEngineVersion(e.path, e.kind)
-          if (inferred) {
-            e.engineVersion = inferred
-            await writeSidecar(e.path, {
-              source: e.source,
-              sourceId: e.sourceId,
-              engineVersion: inferred,
-              buildVersion: null,
-              title: e.friendlyName,
-              kind: e.kind,
-              fabDistributionMethod: null,
-              downloadedAt: Date.now()
-            })
-          }
+          e.engineVersion = await resolveVaultEngineVersion(e.path, e.kind)
+        }
+        if (resolved || e.engineVersion) {
+          await writeSidecar(e.path, { ...sidecarFrom(e), downloadedAt: Date.now() })
         }
       }
       return { ok: true, vaultDirs: cfg.vaultPaths, entries }

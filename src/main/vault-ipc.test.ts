@@ -328,6 +328,83 @@ describe('vault:list metadata resolution order', () => {
     expect(entry.buildVersion).toBe('5.5.0-38995378+++x')
   })
 
+  it('recovers title and source of an orphan folder from the artifactId in the synced library', async () => {
+    const assetDir = await makeAssetDir('ScienceF2a831178c0b7V1')
+    assetsRepo.upsert({
+      source: 'fab',
+      sourceId: 'fab-science',
+      subSource: 'fab-ue',
+      listingType: null,
+      title: 'Science Fiction Hideout KIT',
+      description: null,
+      imageUrl: 'https://img.example/science.png',
+      productUrl: null,
+      ownedAt: null,
+      hidden: false,
+      bookmarked: false,
+      seller: null,
+      raw: JSON.stringify({ projectVersions: [{ artifactId: 'ScienceF2a831178c0b7V1' }] }),
+      syncedAt: Date.now(),
+      lastPreciseAt: null
+    })
+
+    const result = await listVault()
+    const entry = result.entries!.find((e) => e.name === 'ScienceF2a831178c0b7V1')!
+    expect(entry.friendlyName).toBe('Science Fiction Hideout KIT')
+    expect(entry.source).toBe('fab')
+    expect(entry.sourceId).toBe('fab-science')
+    expect(entry.imageUrl).toBe('https://img.example/science.png')
+
+    const sidecar = await readSidecar(assetDir)
+    expect(sidecar?.title).toBe('Science Fiction Hideout KIT')
+    expect(sidecar?.sourceId).toBe('fab-science')
+  })
+
+  it('upgrades an untitled orphan sidecar once the artifactId resolves', async () => {
+    const assetDir = await makeAssetDir('Medieval60fb855f769fV7')
+    await fsp.writeFile(
+      path.join(assetDir, '.rehoarder.json'),
+      JSON.stringify({
+        version: 1,
+        type: 'vault-asset',
+        source: null,
+        sourceId: null,
+        engineVersion: '5.1',
+        title: null,
+        kind: 'asset',
+        fabDistributionMethod: null,
+        downloadedAt: 1
+      })
+    )
+    assetsRepo.upsert({
+      source: 'vault',
+      sourceId: 'vault-medieval',
+      subSource: null,
+      listingType: null,
+      title: 'Medieval Kingdom',
+      description: null,
+      imageUrl: null,
+      productUrl: null,
+      ownedAt: null,
+      hidden: false,
+      bookmarked: false,
+      seller: null,
+      raw: JSON.stringify({ releaseInfo: [{ appId: 'Medieval60fb855f769fV7' }] }),
+      syncedAt: Date.now(),
+      lastPreciseAt: null
+    })
+
+    const result = await listVault()
+    const entry = result.entries!.find((e) => e.name === 'Medieval60fb855f769fV7')!
+    expect(entry.friendlyName).toBe('Medieval Kingdom')
+    expect(entry.engineVersion).toBe('5.1')
+
+    const sidecar = await readSidecar(assetDir)
+    expect(sidecar?.title).toBe('Medieval Kingdom')
+    expect(sidecar?.engineVersion).toBe('5.1')
+    expect(sidecar?.downloadedAt).toBe(1)
+  })
+
   it('leaves buildVersion null for an orphan folder', async () => {
     await makeAssetDir('Orphan')
     const result = await listVault()

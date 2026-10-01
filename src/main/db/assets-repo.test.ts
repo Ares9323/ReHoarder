@@ -37,6 +37,26 @@ const sampleAsset = (over: Partial<AssetRow> = {}): AssetRow => ({
   ...over
 })
 
+describe('AssetsRepo.findByArtifactId', () => {
+  it('matches a Fab projectVersions artifactId and prefers Fab over Vault', () => {
+    repo.upsert(sampleAsset({ sourceId: 'v', raw: JSON.stringify({ appName: 'Pack1V1' }) }))
+    repo.upsert(
+      sampleAsset({
+        source: 'fab',
+        sourceId: 'f',
+        raw: JSON.stringify({ projectVersions: [{ artifactId: 'Pack1V1' }] })
+      })
+    )
+    expect(repo.findByArtifactId('Pack1V1')?.sourceId).toBe('f')
+  })
+
+  it('treats LIKE wildcards in the folder name literally', () => {
+    repo.upsert(sampleAsset({ raw: JSON.stringify({ appName: 'AxZen' }) }))
+    expect(repo.findByArtifactId('A_Zen')).toBeNull()
+    expect(repo.findByArtifactId('%')).toBeNull()
+  })
+})
+
 describe('AssetsRepo.upsert', () => {
   it('inserts a new asset', () => {
     repo.upsert(sampleAsset())
