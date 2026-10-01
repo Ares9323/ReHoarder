@@ -4,6 +4,16 @@ All notable changes to ReHoarder are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] — 2026-10-02
+
+Two fixes: Add to project into a subfolder no longer fails on packs whose maps reference an asset Unreal brings back at its old path, and the default vault is now the Epic Games Launcher's own VaultCache, created when it is missing.
+
+### Fixed
+
+- **Add to project could fail with "save_dirty_packages reported a failure"**: in some packs (Science Fiction Flying Cantina Kit, for one) a moved asset came back as a second copy at its old path, rebuilt from the source package while a map still resolved it there. The copy could not be saved ("Illegal reference to private object") and the maps were saved pointing at it. After every rename batch the relocation now consolidates such a copy into the moved asset, so the maps reference the new path and only an unreferenced redirector is left, removed by the existing fixup pass.
+- **Default vault path**: on Windows it is now `C:\ProgramData\Epic\EpicGamesLauncher\VaultCache`, the folder the Epic Games Launcher uses, instead of `<userData>\debug-downloads`. Installs that already downloaded into the old default keep it listed as a second vault path, and saved settings are untouched.
+- **Missing vault folders are created**: every configured vault path that does not exist is created at startup and whenever the settings are saved. A path that can't be created (a disconnected drive, no write access) is skipped and logged.
+
 ## [0.6.0] — 2026-10-01
 
 The engine plugin list grows a real context menu (open the folder, install the plugin into a project, jump to its docs or Fab page), finished downloads can go straight into a project from the Downloads tab, and Local Vault folders downloaded before ReHoarder tracked them finally show the asset's name instead of an Epic build id.
